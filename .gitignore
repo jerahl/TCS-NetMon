@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# Virtualenvs
+.venv/
+venv/
+
+# Local runtime artifacts
+*.db
+*.sqlite
+*.sqlite3
+
+# Secrets — the real config lives at /etc/netmon/netmon.conf, never in the repo
+netmon.conf
+/etc/netmon/

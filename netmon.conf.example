@@ -1,0 +1,70 @@
+# TCS NetMon configuration — EXAMPLE ONLY.
+#
+# The real file lives at /etc/netmon/netmon.conf (root-readable, 0640,
+# owned by the netmon service user), OUTSIDE the repository. Override the
+# path with the NETMON_CONF environment variable.
+#
+# NEVER commit a real credential, token, internal hostname-with-secret, or
+# key into the repository, logs, or test fixtures (CLAUDE.md §4.6).
+#
+# This is stdlib configparser (INI) syntax. Values are read by
+# netmon/config.py, which validates required keys and fails loud on missing
+# secrets.
+
+[db]
+# SQLAlchemy URL. Production is MariaDB; a DBAPI driver decision is pending
+# (see docs/spec/01-foundation.md). Dev/test may use sqlite:///./netmon.db
+# url = mysql+pymysql://netmon:CHANGEME@db.internal/netmon
+url = sqlite:///./netmon.db
+# Apply pending migrations on app startup. Leave false in production and run
+# the migrate runner deliberately during deploys.
+auto_migrate = false
+
+[web]
+host = 127.0.0.1
+port = 8080
+# Mark the session cookie Secure and forbid the dev auth bypass. MUST be true
+# behind TLS in production.
+secure_cookies = false
+# Opaque session lifetime, seconds.
+session_ttl = 43200
+
+[auth]
+# Active Directory (ldap3). Bind is read-only; NetMon never writes to AD.
+ldap_server = ldaps://dc.example.local
+ldap_base_dn = DC=example,DC=local
+# Bind template: {username} is substituted with the login name.
+ldap_user_dn_template = {username}@example.local
+# Group DN -> role mapping. One key per role; value is the AD group DN whose
+# members receive that role. Highest role a user's groups grant wins.
+group_viewer = CN=NetMon-Viewers,OU=Groups,DC=example,DC=local
+group_operator = CN=NetMon-Operators,OU=Groups,DC=example,DC=local
+group_admin = CN=NetMon-Admins,OU=Groups,DC=example,DC=local
+# LOCAL DEVELOPMENT ONLY. When set (and secure_cookies=false), login is
+# bypassed and every request is authenticated as this user/role. Refused when
+# secure_cookies=true so it can never be enabled in production.
+# dev_bypass_user = devadmin
+# dev_bypass_role = admin
+
+[xiq]
+# ExtremeCloud IQ. Bearer token from XIQ Admin -> API Access Tokens.
+# Store the token here, not in the repo. Read-only usage (CLAUDE.md §4.1).
+enabled = false
+# api_token = REPLACE_WITH_XIQ_API_TOKEN
+base_url = https://api.extremecloudiq.com
+
+[packetfence]
+enabled = false
+# url = https://pf.internal:9999
+# user = netmon-ro
+# pass = REPLACE_WITH_PF_PASSWORD
+verify_ssl = true
+
+[smtp]
+# Alert engine notifier (Phase 6). Ships in shadow mode; sends nothing until
+# the owner flips shadow=false.
+enabled = false
+shadow = true
+# host = smtp.internal
+# port = 25
+# from_addr = netmon@example.local

@@ -1,0 +1,40 @@
+[project]
+name = "netmon"
+version = "0.1.0"
+description = "TCS NetMon — federated network/wireless/voice/surveillance monitoring platform"
+requires-python = ">=3.12"
+
+# Dependency policy (CLAUDE.md §3): stdlib-preferred; this bounded set is the
+# only third-party surface. Nothing is added here without a written reason and
+# owner approval. Pins are exact.
+dependencies = [
+    "fastapi==0.115.6",
+    "uvicorn==0.34.0",
+    "sqlalchemy==2.0.36",
+    "httpx==0.28.1",
+    "ldap3==2.9.1",
+    "apscheduler==3.11.0",
+    # NOTE: a MariaDB DBAPI driver (e.g. pymysql) is required in production but
+    # is NOT yet approved per CLAUDE.md §3. See docs/spec/01-foundation.md.
+    # Dev/test uses the stdlib sqlite3 driver (no dependency).
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+]
+
+[project.scripts]
+netmon-migrate = "netmon.migrate:main"
+netmon-seed = "netmon.seed:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["netmon*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
