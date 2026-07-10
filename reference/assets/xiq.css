@@ -1,0 +1,352 @@
+/* XIQ Wireless Status — page-specific styles.
+   Builds on styles.css + global.css; reuses sev-strip, sites-grid, hotspots, events. */
+
+/* KPI strip — 6 cells across the top */
+.xiq-kpi {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+}
+.xiq-kpi-cell {
+  padding: 14px 16px 12px;
+  border-right: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 6px;
+  position: relative;
+  min-width: 0;
+}
+.xiq-kpi-cell:last-child { border-right: 0; }
+.xiq-kpi-h { display: flex; align-items: center; gap: 6px; }
+.xiq-kpi-lbl {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.6px;
+  font-weight: 600; color: var(--fg-2); flex: 1;
+}
+.xiq-kpi-v {
+  font-family: var(--mono); font-size: 26px; font-weight: 600;
+  letter-spacing: -0.4px; line-height: 1.05;
+}
+.xiq-kpi-v .u { font-size: 11px; color: var(--muted); margin-left: 4px; font-weight: 500; letter-spacing: 0; }
+.xiq-kpi-foot {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 10.5px; color: var(--muted); font-family: var(--mono);
+}
+.xiq-kpi-bar {
+  height: 3px; background: var(--bg-2); border-radius: 2px;
+  overflow: hidden; margin-top: 2px;
+}
+.xiq-kpi-bar > div { height: 100%; }
+.xiq-kpi-cell.err   .xiq-kpi-v { color: var(--err);  }
+.xiq-kpi-cell.warn  .xiq-kpi-v { color: var(--warn); }
+.xiq-kpi-cell.ok    .xiq-kpi-v { color: var(--ok);   }
+.xiq-kpi-cell.ext   .xiq-kpi-v { color: var(--ext);  }
+
+/* Throughput 24h strip — bigger version of the trend strip but blue/teal */
+.tput-row {
+  display: grid; grid-template-columns: 1fr 200px;
+}
+.tput-bars {
+  position: relative;
+  display: grid; grid-template-columns: repeat(24, 1fr);
+  gap: 3px;
+  padding: 16px 14px 26px;
+  border-right: 1px solid var(--line);
+  height: 110px;
+}
+.tput-bar { position: relative; display: flex; align-items: flex-end; height: 100%; }
+.tput-bar-fill {
+  width: 100%; min-height: 2px;
+  background: linear-gradient(180deg, var(--ext), rgba(124,92,255,0.45));
+  border-radius: 2px 2px 0 0;
+}
+.tput-bar.now .tput-bar-fill { background: linear-gradient(180deg, var(--zbx), rgba(217,41,41,0.45)); }
+.tput-bar-tick {
+  position: absolute; bottom: -18px; left: 0;
+  font-family: var(--mono); font-size: 9px; color: var(--muted);
+}
+.tput-side {
+  padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 8px;
+  justify-content: center;
+}
+.tput-stat { display: flex; flex-direction: column; gap: 2px; }
+.tput-stat-lbl {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--muted); display: flex; align-items: center; gap: 6px;
+}
+.tput-stat-v {
+  font-family: var(--mono); font-size: 18px; font-weight: 600;
+  letter-spacing: -0.3px;
+}
+.tput-stat-v .u { font-size: 11px; color: var(--muted); margin-left: 3px; font-weight: 500; }
+
+/* Radio band card — 2.4/5/6 GHz rows */
+.band-row {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  display: grid; grid-template-columns: 64px 1fr 100px;
+  gap: 12px; align-items: center;
+}
+.band-row:last-child { border-bottom: 0; }
+.band-tag {
+  font-family: var(--mono); font-size: 11px; font-weight: 700;
+  padding: 4px 8px; border-radius: var(--r-2);
+  text-align: center;
+  letter-spacing: 0.4px;
+}
+.band-mid { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.band-h {
+  display: flex; align-items: baseline; gap: 8px; font-size: 11.5px;
+}
+.band-h .label { color: var(--fg); font-weight: 600; }
+.band-h .meta { color: var(--muted); font-family: var(--mono); font-size: 10.5px; }
+.band-h .util {
+  margin-left: auto; font-family: var(--mono); font-size: 13px; font-weight: 600;
+}
+.band-bar { height: 6px; background: var(--bg-2); border-radius: 3px; overflow: hidden; }
+.band-bar > div { height: 100%; border-radius: 3px; transition: width 0.3s; }
+.band-foot { display: flex; gap: 12px; font-size: 10.5px; color: var(--muted); font-family: var(--mono); }
+.band-spark { width: 100px; height: 30px; }
+
+/* SSID table */
+.ssid-tbl td { vertical-align: middle; }
+.ssid-name {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-family: var(--mono); font-size: 12px; color: var(--fg); font-weight: 500;
+}
+.ssid-name .bcast-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--ok);
+}
+.ssid-name.hidden .bcast-dot { background: var(--muted); }
+.ssid-bar-cell {
+  display: flex; align-items: center; gap: 8px; min-width: 100px;
+}
+.ssid-bar {
+  flex: 1; height: 4px; background: var(--bg-2); border-radius: 2px; overflow: hidden;
+}
+.ssid-bar > div { height: 100%; }
+.ssid-success {
+  font-family: var(--mono); font-size: 11px; min-width: 48px; text-align: right;
+}
+.ssid-success.warn { color: var(--warn); }
+.ssid-success.err  { color: var(--err);  }
+.ssid-success.ok   { color: var(--ok);   }
+
+/* Problem APs list — like hotspots but flavored */
+.papl { display: flex; flex-direction: column; }
+.pap-row {
+  display: grid; grid-template-columns: 1fr 60px 60px 24px;
+  gap: 12px; align-items: center;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.pap-row:last-child { border-bottom: 0; }
+.pap-row:hover { background: var(--bg-2); }
+.pap-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.pap-head { display: flex; align-items: center; gap: 8px; }
+.pap-id {
+  font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--fg);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pap-model {
+  font-family: var(--mono); font-size: 10px; color: var(--muted);
+  padding: 1px 5px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 3px;
+}
+.pap-reason {
+  font-size: 11px; color: var(--fg-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pap-mini {
+  display: grid; grid-template-rows: 1fr 1fr; gap: 2px;
+  align-items: center; justify-items: end;
+  font-family: var(--mono); font-size: 10px; color: var(--muted);
+}
+.pap-mini .v { color: var(--fg-2); }
+.pap-mini .v.warn { color: var(--warn); }
+.pap-mini .v.err  { color: var(--err); }
+.pap-age { font-family: var(--mono); font-size: 10px; color: var(--muted); text-align: right; }
+
+/* Channel utilization heat-grid */
+.chgrid {
+  display: grid; gap: 2px;
+  padding: 14px;
+}
+.chgrid-row {
+  display: grid; align-items: center; gap: 2px;
+}
+.chgrid-h {
+  font-family: var(--mono); font-size: 10px; color: var(--muted);
+  letter-spacing: 0.4px; text-align: center;
+  height: 18px; display: grid; place-items: center;
+}
+.chgrid-rowlabel {
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
+  color: var(--fg-2); text-align: right; padding-right: 8px;
+}
+.chgrid-cell {
+  height: 22px;
+  border-radius: 2px;
+  display: grid; place-items: center;
+  font-family: var(--mono); font-size: 9px;
+  color: rgba(255,255,255,0.85);
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.chgrid-cell:hover { border-color: rgba(255,255,255,0.4); }
+.chgrid-cell.empty { background: repeating-linear-gradient(135deg, var(--bg-2) 0 4px, var(--bg-1) 4px 8px); color: var(--muted); }
+.chgrid-legend {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--line);
+  font-size: 10.5px; color: var(--muted);
+}
+.chgrid-legend-scale {
+  display: flex; height: 12px; flex: 1; max-width: 220px;
+  border-radius: 3px; overflow: hidden; border: 1px solid var(--line);
+}
+.chgrid-legend-scale > div { flex: 1; height: 100%; }
+
+/* Firmware ring + version list */
+.fw-grid { display: grid; grid-template-columns: 140px 1fr; gap: 16px; padding: 14px; align-items: center; }
+.fw-list { display: flex; flex-direction: column; gap: 6px; }
+.fw-row {
+  display: grid; grid-template-columns: 84px 1fr 44px 18px;
+  gap: 8px; align-items: center;
+  font-size: 11px;
+}
+.fw-row .v { font-family: var(--mono); color: var(--fg); }
+.fw-row.target .v { color: var(--ok); font-weight: 600; }
+.fw-row.behind .v { color: var(--warn); }
+.fw-row.ahead .v  { color: var(--ext); }
+.fw-row .bar { height: 4px; background: var(--bg-2); border-radius: 2px; overflow: hidden; }
+.fw-row .bar > div { height: 100%; }
+.fw-row .count { font-family: var(--mono); font-size: 11px; color: var(--fg-2); text-align: right; }
+.fw-row .pill {
+  width: 10px; height: 10px; border-radius: 50%;
+}
+.fw-row.target .pill { background: var(--ok); }
+.fw-row.behind .pill { background: var(--warn); }
+.fw-row.ahead  .pill { background: var(--ext); }
+
+/* Client mix card */
+.mix-grid {
+  display: grid; grid-template-columns: 1fr 1fr;
+  border-top: 1px solid var(--line);
+}
+.mix-block { padding: 14px; }
+.mix-block + .mix-block { border-left: 1px solid var(--line); }
+.mix-block-h {
+  font-size: 10.5px; color: var(--muted); text-transform: uppercase;
+  letter-spacing: 0.6px; margin-bottom: 10px;
+}
+.mix-stack { display: flex; height: 18px; border-radius: 4px; overflow: hidden; }
+.mix-stack > div { height: 100%; transition: width 0.3s; }
+.mix-stack > div:hover { filter: brightness(1.15); }
+.mix-legend { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
+.mix-legend-row {
+  display: grid; grid-template-columns: 12px 1fr 60px 44px;
+  align-items: center; gap: 8px; font-size: 11px;
+}
+.mix-legend-row .sw { width: 10px; height: 10px; border-radius: 2px; }
+.mix-legend-row .l { color: var(--fg-2); }
+.mix-legend-row .c { font-family: var(--mono); color: var(--muted); text-align: right; font-size: 10.5px; }
+.mix-legend-row .p { font-family: var(--mono); color: var(--fg-2); text-align: right; }
+
+/* Roaming card */
+.roam-grid { padding: 14px; }
+.roam-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; }
+.roam-head .h {
+  font-family: var(--mono); font-size: 22px; font-weight: 600; color: var(--ok);
+  letter-spacing: -0.3px;
+}
+.roam-head .lbl { font-size: 11px; color: var(--muted); }
+.roam-stack {
+  display: flex; height: 22px; border-radius: 4px; overflow: hidden; border: 1px solid var(--line);
+}
+.roam-stack > div { height: 100%; }
+.roam-legend {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 14px;
+  margin-top: 10px;
+}
+.roam-legend-row {
+  display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--fg-2);
+}
+.roam-legend-row .sw { width: 10px; height: 10px; border-radius: 2px; }
+.roam-legend-row .c { font-family: var(--mono); margin-left: auto; color: var(--muted); }
+
+/* AP-by-site grid — same look as global, but bigger tiles + AP counts */
+.apsite-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 8px;
+}
+.apsite-tile {
+  border: 1px solid;
+  border-radius: var(--r-2);
+  padding: 10px 11px 9px;
+  display: flex; flex-direction: column; gap: 4px;
+  cursor: pointer;
+  transition: transform 0.12s;
+  min-height: 90px;
+}
+.apsite-tile:hover { transform: translateY(-1px); }
+.apsite-tile.pulse {
+  animation: site-pulse 1.6s ease-in-out infinite;
+}
+.apsite-h {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+}
+.apsite-id {
+  font-family: var(--mono); font-size: 12px; font-weight: 700; letter-spacing: 0.5px;
+}
+.apsite-aps {
+  font-family: var(--mono); font-size: 12px; font-weight: 600;
+}
+.apsite-aps .off { color: var(--err); }
+.apsite-name {
+  font-size: 10.5px; line-height: 1.25; color: var(--fg-2);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.apsite-util-row {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: auto;
+  font-size: 9.5px; color: var(--muted); font-family: var(--mono);
+}
+.apsite-util-bar {
+  flex: 1; height: 4px; background: rgba(255,255,255,0.06); border-radius: 2px; overflow: hidden;
+}
+.apsite-util-bar > div { height: 100%; }
+.apsite-clients {
+  font-family: var(--mono); font-size: 9.5px; color: var(--muted);
+}
+
+/* Auto-refresh ring (small spinner indicator in header) */
+.refresh-ring {
+  width: 12px; height: 12px; border-radius: 50%;
+  border: 1.5px solid var(--line-2);
+  border-top-color: var(--ext);
+  animation: spin 1.4s linear infinite;
+  display: inline-block;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* h-meta tag variants */
+.h-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10.5px; padding: 2px 7px; border-radius: 10px;
+  font-family: var(--mono); letter-spacing: 0.3px;
+  background: rgba(124,92,255,0.10); color: var(--ext); border: 1px solid rgba(124,92,255,0.3);
+}
+
+/* Responsive squeeze */
+@media (max-width: 1500px) {
+  .xiq-kpi { grid-template-columns: repeat(3, 1fr); }
+  .xiq-kpi-cell:nth-child(3) { border-right: 0; }
+  .xiq-kpi-cell:nth-child(-n+3) { border-bottom: 1px solid var(--line); }
+}
+@media (max-width: 1180px) {
+  .row[data-xiq-row] { grid-template-columns: 1fr !important; }
+  .apsite-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+  .mix-grid { grid-template-columns: 1fr; }
+  .mix-block + .mix-block { border-left: 0; border-top: 1px solid var(--line); }
+}

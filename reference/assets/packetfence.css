@@ -1,0 +1,286 @@
+/* PacketFence Identity pages — shared styles */
+
+/* ───────── PF banner accent ───────── */
+.pf-accent { color: var(--pf); }
+.app[data-pf="1"] .tab.active { border-bottom-color: var(--pf); }
+.app[data-pf="1"] .nav-item.active::before { background: var(--pf); }
+.app[data-pf="1"] .btn.primary { background: var(--pf); border-color: var(--pf); color: #1a1300; }
+.app[data-pf="1"] ::selection { background: rgba(245,179,0,0.35); color: #fff; }
+
+/* ───────── KPI cells (replaces sev-strip for PF) ───────── */
+.pf-kpis {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+}
+.pf-kpi {
+  padding: 16px 16px 14px;
+  border-right: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.pf-kpi:last-child { border-right: 0; }
+.pf-kpi-h { display: flex; align-items: center; gap: 6px; }
+.pf-kpi-lbl {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.6px;
+  font-weight: 600; flex: 1; color: var(--fg-2);
+}
+.pf-kpi-v {
+  font-family: var(--mono); font-size: 26px; font-weight: 600; line-height: 1.05; letter-spacing: -0.4px;
+  color: var(--fg);
+}
+.pf-kpi-v.pf  { color: var(--pf); }
+.pf-kpi-v.ok  { color: var(--ok); }
+.pf-kpi-v.warn{ color: var(--warn); }
+.pf-kpi-v.err { color: var(--err); }
+.pf-kpi-note { font-size: 10.5px; color: var(--muted); font-family: var(--mono); }
+
+@media (max-width: 1500px) {
+  .pf-kpis { grid-template-columns: repeat(3, 1fr); }
+  .pf-kpi:nth-child(3) { border-right: 0; }
+  .pf-kpi:nth-child(-n+3) { border-bottom: 1px solid var(--line); }
+}
+
+/* ───────── Filter bar above tables ───────── */
+.pf-filterbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-1);
+}
+.pf-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 3px 9px 3px 7px;
+  font-size: 11px; color: var(--fg-2);
+  cursor: pointer;
+}
+.pf-chip:hover { border-color: var(--line-2); }
+.pf-chip.active {
+  background: rgba(245,179,0,0.10);
+  border-color: rgba(245,179,0,0.45);
+  color: var(--pf);
+}
+.pf-chip .pf-chip-c {
+  font-family: var(--mono); font-size: 10px; color: var(--muted);
+}
+.pf-chip.active .pf-chip-c { color: var(--pf); }
+.pf-filter-spacer { flex: 1; }
+.pf-search-mini {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--r-2);
+  padding: 4px 8px;
+  width: 240px;
+  color: var(--muted);
+}
+.pf-search-mini input {
+  background: transparent; border: 0; outline: 0; color: var(--fg);
+  font: inherit; flex: 1; font-size: 11.5px;
+}
+
+/* ───────── Status pill (registration state) ───────── */
+.reg-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border: 1px solid;
+  border-radius: 10px;
+  font-family: var(--sans);
+  white-space: nowrap;
+}
+.reg-pill .dot { width: 5px; height: 5px; }
+.reg-pill.registered   { color: var(--ok);   border-color: rgba(52,211,153,0.4);  background: rgba(52,211,153,0.08); }
+.reg-pill.pending      { color: var(--info); border-color: rgba(95,168,211,0.4);  background: rgba(95,168,211,0.08); }
+.reg-pill.unregistered { color: var(--muted); border-color: var(--line-2); background: var(--bg-2); }
+.reg-pill.isolated     { color: var(--err);  border-color: rgba(242,95,92,0.45);  background: rgba(242,95,92,0.10); }
+.reg-pill.guest        { color: var(--pf);   border-color: rgba(245,179,0,0.4);   background: rgba(245,179,0,0.10); }
+
+/* ───────── Trend / 24h bars ───────── */
+.pf-bars24 {
+  display: grid; grid-template-columns: repeat(24, 1fr);
+  gap: 3px;
+  height: 64px;
+  padding: 12px 14px 18px;
+  position: relative;
+}
+.pf-bar { position: relative; display: flex; align-items: flex-end; height: 100%; }
+.pf-bar > div {
+  width: 100%; min-height: 2px;
+  background: var(--pf);
+  border-radius: 1px 1px 0 0;
+  opacity: 0.85;
+}
+.pf-bar > div.alt { background: var(--ext); opacity: 0.85; }
+.pf-bar > div.bad { background: var(--err); }
+.pf-bar-tick {
+  position: absolute; bottom: -14px; left: 0;
+  font-family: var(--mono); font-size: 9px; color: var(--muted);
+}
+
+/* ───────── Donut (auth method, etc.) ───────── */
+.pf-donut-wrap {
+  display: flex; align-items: center; gap: 18px;
+  padding: 14px;
+}
+.pf-donut-legend {
+  flex: 1; display: flex; flex-direction: column; gap: 6px;
+}
+.pf-leg-row {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11.5px; color: var(--fg-2);
+}
+.pf-leg-sw { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
+.pf-leg-lbl { flex: 1; }
+.pf-leg-v { font-family: var(--mono); font-size: 11px; color: var(--fg); }
+.pf-leg-pct { font-family: var(--mono); font-size: 10.5px; color: var(--muted); width: 38px; text-align: right; }
+
+/* ───────── Policy / role list ───────── */
+.pf-role-row {
+  display: grid;
+  grid-template-columns: 28px 1fr auto auto auto auto;
+  gap: 12px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+  align-items: center;
+}
+.pf-role-row:last-child { border-bottom: 0; }
+.pf-role-row:hover { background: var(--bg-2); }
+.pf-role-sw { width: 18px; height: 18px; border-radius: 4px; display: grid; place-items: center; color: #1a1300; font-family: var(--mono); font-size: 9px; font-weight: 700; }
+.pf-role-h  { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pf-role-name { font-size: 12.5px; font-weight: 600; color: var(--fg); }
+.pf-role-sub  { font-size: 10.5px; color: var(--muted); font-family: var(--mono); }
+.pf-role-kv   { display: flex; flex-direction: column; gap: 1px; text-align: right; min-width: 70px; }
+.pf-role-k    { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.pf-role-v    { font-family: var(--mono); font-size: 11.5px; color: var(--fg-2); }
+
+/* ───────── Source / authentication source items ───────── */
+.pf-source {
+  display: grid; grid-template-columns: 36px 1fr auto auto;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  align-items: center;
+}
+.pf-source:last-child { border-bottom: 0; }
+.pf-source-ico {
+  width: 32px; height: 32px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-2);
+  display: grid; place-items: center;
+  color: var(--fg-2);
+  font-family: var(--mono); font-size: 12px; font-weight: 700;
+}
+.pf-source-name { font-size: 12.5px; font-weight: 600; color: var(--fg); }
+.pf-source-sub  { font-size: 10.5px; color: var(--muted); font-family: var(--mono); margin-top: 1px; }
+.pf-source-c { font-family: var(--mono); font-size: 12px; color: var(--fg-2); text-align: right; }
+.pf-source-c .u { display: block; font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 1px; }
+
+/* ───────── Violations / quarantine list ───────── */
+.pf-violation {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: 4px 1fr auto;
+  gap: 12px;
+  align-items: flex-start;
+}
+.pf-violation:last-child { border-bottom: 0; }
+.pf-violation-rail { align-self: stretch; border-radius: 2px; }
+.pf-violation-rail.warn { background: var(--warn); }
+.pf-violation-rail.err  { background: var(--err); }
+.pf-violation-rail.info { background: var(--info); }
+.pf-violation-h { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.pf-violation-name { font-size: 12.5px; font-weight: 600; color: var(--fg); }
+.pf-violation-id { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+.pf-violation-body { font-size: 11.5px; color: var(--fg-2); margin-top: 4px; line-height: 1.45; }
+.pf-violation-meta {
+  display: flex; gap: 10px; margin-top: 6px;
+  font-size: 10.5px; color: var(--muted); font-family: var(--mono);
+}
+.pf-violation-count { font-family: var(--mono); font-size: 16px; font-weight: 600; color: var(--fg-2); white-space: nowrap; }
+.pf-violation-count .u { font-size: 9.5px; color: var(--muted); display: block; text-transform: uppercase; letter-spacing: 0.5px; }
+
+/* ───────── Status / node card (cluster status page) ───────── */
+.pf-node {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-3);
+  padding: 14px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.pf-node-h { display: flex; align-items: center; gap: 10px; }
+.pf-node-name { font-size: 14px; font-weight: 600; }
+.pf-node-role {
+  font-family: var(--mono); font-size: 9.5px; font-weight: 700;
+  letter-spacing: 0.6px; padding: 1px 6px;
+  border: 1px solid; border-radius: 3px;
+}
+.pf-node-role.primary  { color: var(--pf);  border-color: rgba(245,179,0,0.5); background: rgba(245,179,0,0.10); }
+.pf-node-role.secondary{ color: var(--fg-2);border-color: var(--line-2); background: var(--bg-2); }
+.pf-node-role.standby  { color: var(--info);border-color: rgba(95,168,211,0.45); background: rgba(95,168,211,0.08); }
+.pf-node-meta {
+  font-family: var(--mono); font-size: 11px; color: var(--muted);
+}
+.pf-node-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: var(--r-2);
+  overflow: hidden;
+}
+.pf-node-cell { background: var(--bg-1); padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; }
+.pf-node-cell .lbl { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.pf-node-cell .val { font-family: var(--mono); font-size: 14px; font-weight: 600; color: var(--fg); line-height: 1.1; }
+.pf-node-cell .val .u { font-size: 10px; color: var(--muted); margin-left: 2px; font-weight: 500; }
+.pf-node-cell .val.ok { color: var(--ok); }
+.pf-node-cell .val.warn { color: var(--warn); }
+.pf-node-cell .val.err { color: var(--err); }
+
+.pf-node-svc {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.pf-svc {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-family: var(--mono); font-size: 10.5px;
+  background: var(--bg-2); border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 2px 7px;
+  color: var(--fg-2);
+}
+.pf-svc .dot { width: 5px; height: 5px; }
+.pf-svc.err { color: var(--err); border-color: rgba(242,95,92,0.4); background: rgba(242,95,92,0.08); }
+.pf-svc.warn{ color: var(--warn); border-color: rgba(245,179,0,0.4); background: rgba(245,179,0,0.08); }
+
+/* ───────── Queue depth bars ───────── */
+.pf-queue-row {
+  display: grid;
+  grid-template-columns: 140px 1fr 80px;
+  gap: 12px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--line);
+  align-items: center;
+  font-size: 11.5px;
+}
+.pf-queue-row:last-child { border-bottom: 0; }
+.pf-queue-name { color: var(--fg); font-family: var(--mono); font-size: 11px; }
+.pf-queue-bar {
+  height: 6px; background: var(--bg-2); border-radius: 3px; overflow: hidden;
+}
+.pf-queue-bar > div { height: 100%; background: var(--pf); }
+.pf-queue-bar > div.warn { background: var(--warn); }
+.pf-queue-bar > div.err  { background: var(--err); }
+.pf-queue-val { font-family: var(--mono); font-size: 11.5px; color: var(--fg-2); text-align: right; }
+
+/* ───────── Sticky timeline (sessions duration etc) ───────── */
+.dur-bar {
+  display: inline-block;
+  height: 4px; width: 70px;
+  background: var(--bg-2);
+  border-radius: 2px;
+  overflow: hidden;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+.dur-bar > div { height: 100%; background: var(--pf); }

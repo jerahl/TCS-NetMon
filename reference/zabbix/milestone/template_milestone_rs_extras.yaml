@@ -1,0 +1,360 @@
+zabbix_export:
+  version: '7.4'
+  template_groups:
+    - uuid: ae594436d5584d85b34ddfa0b0e53a51
+      name: Templates/Video
+  templates:
+    - uuid: 8f3b1e2d7a4c4f0fa8c1b5e9c2d8e4f1
+      template: 'Milestone XProtect RS extras by HTTP'
+      name: 'Milestone XProtect RS extras by HTTP'
+      description: |
+        Adds per-Recording-Server signals the base 'Milestone XProtect
+        by HTTP' template doesn't carry yet:
+
+          * Service / running state (per /recordingServers.state)
+          * Camera count + parent-hardware count per RS
+          * Per-RS storage rollup: total capacity, used, shortest
+            retention
+          * Per-storage LLD with path / size / used / retention
+
+        Link this template alongside 'Milestone XProtect by HTTP' on
+        the same site host. The base template still owns OAuth, RS
+        discovery, and per-camera items; this one only pulls extras
+        that need the /recordingServers/{id}/storages and
+        /recordingServers/{id}/hardware endpoints.
+
+        Required external scripts (deploy to
+        /usr/lib/zabbix/externalscripts/):
+            milestone_rs_state.py
+            milestone_rs_refresh.sh
+            milestone_rs_read.sh
+
+        Required cron entry (as the zabbix user):
+          */15 * * * * /usr/lib/zabbix/externalscripts/milestone_rs_refresh.sh \
+              {$MILESTONE.HOST} {$MILESTONE.USER} 'PASSWORD' --scheme https
+      vendor:
+        name: Community
+        version: 7.4-0
+      groups:
+        - name: Templates/Video
+      items:
+        - uuid: 3a9c8d4b1e6f4a728d5b0c2e9f1a7b34
+          name: 'Milestone RS: state snapshot (master)'
+          type: EXTERNAL
+          key: 'milestone_rs_read.sh[3600]'
+          delay: 5m
+          history: '0'
+          value_type: TEXT
+          description: |
+            Reads /var/lib/zabbix/milestone_rs_state.json written by
+            milestone_rs_refresh.sh (cron, every 15 min). The snapshot
+            has top-level GUID keys per RS (for O(1) JSONPath lookup
+            by dependent items) plus $.__array / $.__storages for LLD.
+          tags:
+            - tag: component
+              value: recording-server
+          triggers:
+            - uuid: a48c25f7e9b6498b9f1c83d6027bea15
+              expression: 'find(/Milestone XProtect RS extras by HTTP/milestone_rs_read.sh[3600],,"regexp","\"error\":\"(stale|no_snapshot)\"")=1'
+              name: 'Milestone [{HOST.NAME}]: RS extras snapshot stale or missing'
+              priority: WARNING
+              description: |
+                milestone_rs_refresh.sh has not produced a fresh snapshot
+                in the last hour. Per-RS state / storage data on the
+                surveillance dashboard will be missing until this is
+                resolved. Check
+                /var/log/zabbix/milestone_rs_state.log on the Zabbix
+                server/proxy.
+      discovery_rules:
+        - uuid: 4d7e8b6a3c2f4519bf5e0c7d8a91e23f
+          name: 'Milestone RS extras: per-RS discovery'
+          type: DEPENDENT
+          key: milestone.rs.extras.discovery
+          lifetime: 2d
+          item_prototypes:
+            - uuid: 6f1a3b8c4d2e4910b7d6e3c5a92f1b48
+              name: 'RS [{#RS.NAME}]: Service state'
+              type: DEPENDENT
+              key: 'milestone.rs.state[{#RS.ID}]'
+              value_type: CHAR
+              description: |
+                Per-RS runtime state from /recordingServers.state. Maps
+                to Milestone's "Server" / "Recorder" / "Error" / etc.
+                strings; UI surfaces ok / warn / err from this value.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.state
+              master_item:
+                key: 'milestone.rs.extras.raw[{#RS.ID}]'
+              tags:
+                - tag: component
+                  value: recording-server
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+            - uuid: 7c8e2b3a9d1f4670bf3d5c1e8a04f72b
+              name: 'RS [{#RS.NAME}]: Cameras'
+              type: DEPENDENT
+              key: 'milestone.rs.cameracount[{#RS.ID}]'
+              description: |
+                Count of cameras attached to this RS via its parent
+                hardware. Tallied server-side so the dashboard does not
+                need to walk the full cameras snapshot to derive it.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.cameraCount
+              master_item:
+                key: 'milestone.rs.extras.raw[{#RS.ID}]'
+              tags:
+                - tag: component
+                  value: recording-server
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+            - uuid: 51a9c4b6e8d3479fa6c0e7d1b5f8a932
+              name: 'RS [{#RS.NAME}]: Hardware devices'
+              type: DEPENDENT
+              key: 'milestone.rs.hardwarecount[{#RS.ID}]'
+              description: |
+                Distinct parent-hardware count. Multi-channel encoders
+                count once here but contribute multiple cameras.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.hardwareCount
+              master_item:
+                key: 'milestone.rs.extras.raw[{#RS.ID}]'
+              tags:
+                - tag: component
+                  value: recording-server
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+            - uuid: 92ed5f7c1b3a4dc0a4e6b8c2d9f17150
+              name: 'RS [{#RS.NAME}]: Storage capacity (total)'
+              type: DEPENDENT
+              key: 'milestone.rs.storage.total.bytes[{#RS.ID}]'
+              units: B
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.storageTotalBytes
+              master_item:
+                key: 'milestone.rs.extras.raw[{#RS.ID}]'
+              tags:
+                - tag: component
+                  value: recording-server
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+            - uuid: bd6f8e2a1c4b495db7c5e9d0a3f24617
+              name: 'RS [{#RS.NAME}]: Storage used'
+              type: DEPENDENT
+              key: 'milestone.rs.storage.used.bytes[{#RS.ID}]'
+              units: B
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.storageUsedBytes
+              master_item:
+                key: 'milestone.rs.extras.raw[{#RS.ID}]'
+              tags:
+                - tag: component
+                  value: recording-server
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+            - uuid: c9a4e7b2f8d34c61b9f0d6c3a18e2549
+              name: 'RS [{#RS.NAME}]: Retention (shortest, minutes)'
+              type: DEPENDENT
+              key: 'milestone.rs.storage.retention.minutes[{#RS.ID}]'
+              units: m
+              description: |
+                Shortest retainMinutes across all storages on this RS.
+                Drives the "retention may roll early" warning on the
+                Surveillance NOC Sites tab.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.storageRetentionMinutesMin
+              master_item:
+                key: 'milestone.rs.extras.raw[{#RS.ID}]'
+              tags:
+                - tag: component
+                  value: recording-server
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+            - uuid: e2b0a51f4c8d4769b3e7d2f8a1059c84
+              name: 'RS [{#RS.NAME}]: Detail (per-RS dependent master)'
+              type: DEPENDENT
+              key: 'milestone.rs.extras.raw[{#RS.ID}]'
+              history: '0'
+              value_type: TEXT
+              description: |
+                Extracts this RS's record from the snapshot master via
+                JSONPath $["{#RS.ID}"]. Works because
+                milestone_rs_state.py writes the snapshot with the same
+                top-level-GUID-keys + __array shape as the cameras
+                snapshot.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$["{#RS.ID}"]'
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1h
+              master_item:
+                key: 'milestone_rs_read.sh[3600]'
+              tags:
+                - tag: component
+                  value: recording-server
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+          master_item:
+            key: 'milestone_rs_read.sh[3600]'
+          lld_macro_paths:
+            - lld_macro: '{#RS.ID}'
+              path: $.id
+            - lld_macro: '{#RS.NAME}'
+              path: $.displayName
+            - lld_macro: '{#RS.HOSTNAME}'
+              path: $.hostName
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.__array[*]'
+
+        - uuid: 7a5b9c2d3e4f48a0b1c6d8e0f1a25347
+          name: 'Milestone RS extras: per-storage discovery'
+          type: DEPENDENT
+          key: milestone.rs.storage.discovery
+          lifetime: 2d
+          description: |
+            Flat (RS, storage) LLD walking $.__storages from the
+            snapshot. Each row becomes one storage on one RS so a
+            single LLD can produce capacity / used / retention items
+            per storage without needing nested discovery.
+          item_prototypes:
+            - uuid: f06a8e3b2c1d40579e4b6c8a1d3e5921
+              name: 'Storage [{#RS.NAME} / {#STORAGE.NAME}]: Path'
+              type: DEPENDENT
+              key: 'milestone.rs.storage.path[{#RS.ID},{#STORAGE.ID}]'
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.path
+              master_item:
+                key: 'milestone.rs.storage.raw[{#RS.ID},{#STORAGE.ID}]'
+              tags:
+                - tag: component
+                  value: storage
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+                - tag: storage
+                  value: '{#STORAGE.NAME}'
+            - uuid: 81e2a5d3c7b94f06bd1e4a9c0d2f8635
+              name: 'Storage [{#RS.NAME} / {#STORAGE.NAME}]: Capacity'
+              type: DEPENDENT
+              key: 'milestone.rs.storage.size.bytes[{#RS.ID},{#STORAGE.ID}]'
+              units: B
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.sizeBytes
+              master_item:
+                key: 'milestone.rs.storage.raw[{#RS.ID},{#STORAGE.ID}]'
+              tags:
+                - tag: component
+                  value: storage
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+                - tag: storage
+                  value: '{#STORAGE.NAME}'
+            - uuid: a2b7c1d8e4f3457698ca0d1e3f5a2748
+              name: 'Storage [{#RS.NAME} / {#STORAGE.NAME}]: Used'
+              type: DEPENDENT
+              key: 'milestone.rs.storage.row.used.bytes[{#RS.ID},{#STORAGE.ID}]'
+              units: B
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.usedBytes
+              master_item:
+                key: 'milestone.rs.storage.raw[{#RS.ID},{#STORAGE.ID}]'
+              tags:
+                - tag: component
+                  value: storage
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+                - tag: storage
+                  value: '{#STORAGE.NAME}'
+            - uuid: b5d6e7c2a8f349d1a0e9c3b4f6d1e859
+              name: 'Storage [{#RS.NAME} / {#STORAGE.NAME}]: Retention (minutes)'
+              type: DEPENDENT
+              key: 'milestone.rs.storage.row.retention.minutes[{#RS.ID},{#STORAGE.ID}]'
+              units: m
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.retentionMinutes
+              master_item:
+                key: 'milestone.rs.storage.raw[{#RS.ID},{#STORAGE.ID}]'
+              tags:
+                - tag: component
+                  value: storage
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+                - tag: storage
+                  value: '{#STORAGE.NAME}'
+            - uuid: c8a4e9d6b3f2491fa708d1e2c5b6f037
+              name: 'Storage [{#RS.NAME} / {#STORAGE.NAME}]: Detail (per-storage master)'
+              type: DEPENDENT
+              key: 'milestone.rs.storage.raw[{#RS.ID},{#STORAGE.ID}]'
+              history: '0'
+              value_type: TEXT
+              description: |
+                Pulls this storage's row out of $.__storages by matching
+                rsId + id. Avoids nested LLD: we can't iterate from
+                $["{#RS.ID}"].storages[*] in the master since LLD only
+                walks one path, but every storage already carries rsId
+                in the flat __storages list.
+              preprocessing:
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var blob = JSON.parse(value);
+                      var arr = blob.__storages || [];
+                      for (var i = 0; i < arr.length; i++) {
+                        if (arr[i].rsId === '{#RS.ID}'
+                            && arr[i].id === '{#STORAGE.ID}') {
+                          return JSON.stringify(arr[i]);
+                        }
+                      }
+                      return '{}';
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1h
+              master_item:
+                key: 'milestone_rs_read.sh[3600]'
+              tags:
+                - tag: component
+                  value: storage
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+                - tag: storage
+                  value: '{#STORAGE.NAME}'
+          master_item:
+            key: 'milestone_rs_read.sh[3600]'
+          lld_macro_paths:
+            - lld_macro: '{#RS.ID}'
+              path: $.rsId
+            - lld_macro: '{#RS.NAME}'
+              path: $.rsName
+            - lld_macro: '{#STORAGE.ID}'
+              path: $.id
+            - lld_macro: '{#STORAGE.NAME}'
+              path: $.name
+            - lld_macro: '{#STORAGE.PATH}'
+              path: $.path
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.__storages[*]'

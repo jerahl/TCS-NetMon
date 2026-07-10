@@ -1,0 +1,380 @@
+/* FortiGate Firewall Dashboard — page-specific styles.
+   Builds on styles.css + global.css; reuses sev-strip, sites-grid, hotspots, events. */
+
+/* KPI strip — 6 cells (reuses xiq-kpi layout) */
+.fg-kpi {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+}
+.fg-kpi-cell {
+  padding: 14px 16px 12px;
+  border-right: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 6px;
+  position: relative;
+  min-width: 0;
+}
+.fg-kpi-cell:last-child { border-right: 0; }
+.fg-kpi-h { display: flex; align-items: center; gap: 6px; }
+.fg-kpi-lbl {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.6px;
+  font-weight: 600; color: var(--fg-2); flex: 1;
+}
+.fg-kpi-v {
+  font-family: var(--mono); font-size: 26px; font-weight: 600;
+  letter-spacing: -0.4px; line-height: 1.05;
+}
+.fg-kpi-v .u { font-size: 11px; color: var(--muted); margin-left: 4px; font-weight: 500; letter-spacing: 0; }
+.fg-kpi-foot {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 10.5px; color: var(--muted); font-family: var(--mono);
+}
+.fg-kpi-bar {
+  height: 3px; background: var(--bg-2); border-radius: 2px;
+  overflow: hidden; margin-top: 2px;
+}
+.fg-kpi-bar > div { height: 100%; }
+.fg-kpi-cell.err   .fg-kpi-v { color: var(--err);  }
+.fg-kpi-cell.warn  .fg-kpi-v { color: var(--warn); }
+.fg-kpi-cell.ok    .fg-kpi-v { color: var(--ok);   }
+.fg-kpi-cell.ext   .fg-kpi-v { color: var(--ext);  }
+.fg-kpi-cell.zbx   .fg-kpi-v { color: var(--zbx);  }
+
+/* Throughput 24h dual-axis area (ingress + egress) */
+.tput2-row {
+  display: grid; grid-template-columns: 1fr 200px;
+}
+.tput2-chart {
+  position: relative;
+  padding: 18px 14px 26px;
+  height: 200px;
+  border-right: 1px solid var(--line);
+  overflow: hidden;
+}
+.tput2-svg {
+  width: 100%; height: 100%; display: block;
+}
+.tput2-grid line { stroke: rgba(255,255,255,0.05); stroke-width: 1; }
+.tput2-grid text { font-family: var(--mono); font-size: 9px; fill: var(--muted); }
+.tput2-side {
+  padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 10px;
+  justify-content: center;
+}
+.tput2-stat { display: flex; flex-direction: column; gap: 2px; }
+.tput2-stat-lbl {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--muted); display: flex; align-items: center; gap: 6px;
+}
+.tput2-stat-v {
+  font-family: var(--mono); font-size: 17px; font-weight: 600;
+}
+.tput2-stat-v .u { font-size: 10.5px; color: var(--muted); margin-left: 3px; font-weight: 500; }
+.tput2-legend {
+  display: flex; gap: 14px; align-items: center; font-size: 11px; color: var(--muted);
+  margin-top: 4px; font-family: var(--mono);
+}
+.tput2-legend .sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; margin-right: 6px; vertical-align: middle; }
+
+/* HA cluster card */
+.ha-grid { padding: 14px; display: grid; grid-template-columns: 1fr 12px 1fr; gap: 12px; align-items: stretch; }
+.ha-node {
+  border: 1px solid var(--line);
+  border-radius: var(--r-2);
+  padding: 14px;
+  background: var(--bg-2);
+  display: flex; flex-direction: column; gap: 10px;
+  position: relative;
+}
+.ha-node.primary {
+  border-color: rgba(52,211,153,0.45);
+  box-shadow: 0 0 0 1px rgba(52,211,153,0.15);
+}
+.ha-node.secondary { border-color: var(--line-2); }
+.ha-node .role-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+  padding: 2px 8px; border-radius: 999px; text-transform: uppercase;
+  width: fit-content;
+}
+.ha-node.primary .role-pill   { background: rgba(52,211,153,0.14); color: var(--ok); border: 1px solid rgba(52,211,153,0.4); }
+.ha-node.secondary .role-pill { background: rgba(107,119,147,0.18); color: var(--fg-2); border: 1px solid var(--line-2); }
+.ha-node-name {
+  font-family: var(--mono); font-size: 14px; font-weight: 600; color: var(--fg);
+}
+.ha-node-meta { display: flex; gap: 10px; flex-wrap: wrap; font-size: 11px; color: var(--muted); font-family: var(--mono); }
+.ha-node-stats {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;
+  margin-top: 4px;
+}
+.ha-node-stat {
+  background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r-2);
+  padding: 8px 10px;
+}
+.ha-node-stat .lbl { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
+.ha-node-stat .v { font-family: var(--mono); font-size: 14px; font-weight: 600; color: var(--fg); margin-top: 2px; }
+.ha-node-stat .bar { height: 3px; background: var(--bg-2); border-radius: 2px; overflow: hidden; margin-top: 4px; }
+.ha-node-stat .bar > div { height: 100%; }
+
+.ha-link {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  padding: 0; color: var(--muted);
+}
+.ha-link-line {
+  width: 2px; flex: 1; min-height: 80px;
+  background: linear-gradient(180deg, var(--ok) 0%, var(--ok) 50%, transparent 50%, transparent 100%);
+  background-size: 2px 8px;
+  border-radius: 2px;
+  position: relative;
+  animation: ha-pulse 2.2s linear infinite;
+}
+@keyframes ha-pulse {
+  from { background-position: 0 0; }
+  to   { background-position: 0 16px; }
+}
+.ha-link-lbl { font-family: var(--mono); font-size: 9px; color: var(--ok); text-align: center; letter-spacing: 0.4px; }
+
+.ha-foot {
+  border-top: 1px solid var(--line);
+  padding: 10px 14px;
+  display: flex; flex-wrap: wrap; gap: 14px;
+  font-size: 11px; color: var(--fg-2); font-family: var(--mono);
+}
+.ha-foot .lbl { color: var(--muted); }
+.ha-foot .ok-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); display: inline-block; margin-right: 4px; }
+
+/* Session sparks (3-up: active / new / inspected) */
+.sess-grid {
+  display: grid; grid-template-rows: 1fr 1fr 1fr;
+}
+.sess-row {
+  display: grid; grid-template-columns: 100px 1fr 90px;
+  align-items: center; gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.sess-row:last-child { border-bottom: 0; }
+.sess-lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.sess-spark { width: 100%; height: 38px; }
+.sess-val { font-family: var(--mono); font-size: 17px; font-weight: 600; text-align: right; color: var(--fg); }
+.sess-val .u { font-size: 10.5px; color: var(--muted); margin-left: 4px; font-weight: 500; }
+.sess-sub { font-size: 10px; color: var(--muted); font-family: var(--mono); text-align: right; }
+
+/* Interfaces table — extra columns + traffic bar */
+.if-tbl td { vertical-align: middle; }
+.if-state {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 10px;
+}
+.if-state .dot { width: 7px; height: 7px; border-radius: 50%; }
+.if-state.up .dot   { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+.if-state.down .dot { background: var(--err); }
+.if-traffic-bar {
+  display: flex; height: 4px; background: var(--bg-2); border-radius: 2px; overflow: hidden;
+  min-width: 110px;
+}
+.if-traffic-bar .rx { background: var(--info); }
+.if-traffic-bar .tx { background: var(--ext); }
+.if-traffic-bar .free { background: transparent; }
+
+/* IPsec tunnels list — like papl */
+.ipsec-row {
+  display: grid; grid-template-columns: 1fr 70px 70px 70px 20px;
+  gap: 10px; align-items: center;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.ipsec-row:last-child { border-bottom: 0; }
+.ipsec-row:hover { background: var(--bg-2); }
+.ipsec-id { font-size: 11.5px; color: var(--fg); display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ipsec-id .peer { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+.ipsec-row .v { font-family: var(--mono); font-size: 11px; color: var(--fg-2); text-align: right; }
+.ipsec-row .lat { font-family: var(--mono); font-size: 11px; text-align: right; }
+.ipsec-row .lat.ok { color: var(--ok); }
+.ipsec-row .lat.warn { color: var(--warn); }
+.ipsec-row .lat.err { color: var(--err); }
+.ipsec-state-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+}
+.ipsec-state-dot.up   { background: var(--ok); box-shadow: 0 0 5px var(--ok); }
+.ipsec-state-dot.down { background: var(--err); animation: pulse-dot 1.2s ease-in-out infinite; }
+
+.ipsec-head, .sslvpn-head, .policy-head {
+  padding: 8px 14px 8px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--line);
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px;
+  color: var(--muted);
+  display: grid; gap: 10px;
+}
+.ipsec-head  { grid-template-columns: 1fr 70px 70px 70px 20px; }
+.sslvpn-head { grid-template-columns: 110px 80px 1fr 60px 60px 24px; }
+
+/* SSL-VPN row */
+.sslvpn-row {
+  display: grid; grid-template-columns: 110px 80px 1fr 60px 60px 24px;
+  gap: 10px; align-items: center;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 11.5px;
+}
+.sslvpn-row:last-child { border-bottom: 0; }
+.sslvpn-row:hover { background: var(--bg-2); }
+.sslvpn-user { font-family: var(--mono); font-size: 12px; color: var(--fg); }
+.sslvpn-row .ip { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+.sslvpn-row .dur { font-family: var(--mono); font-size: 11px; color: var(--fg-2); }
+.sslvpn-row .mb { font-family: var(--mono); font-size: 11px; color: var(--fg-2); text-align: right; }
+.mfa-pill {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 16px; border-radius: 3px;
+  font-family: var(--mono); font-size: 8.5px; font-weight: 700;
+}
+.mfa-pill.yes { background: rgba(52,211,153,0.12); color: var(--ok); border: 1px solid rgba(52,211,153,0.35); }
+.mfa-pill.no  { background: rgba(242,95,92,0.14); color: var(--err); border: 1px solid rgba(242,95,92,0.45); }
+
+/* SD-WAN SLA card */
+.sdwan-row {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  display: grid; grid-template-columns: 1fr; gap: 8px;
+}
+.sdwan-row:last-child { border-bottom: 0; }
+.sdwan-h { display: flex; align-items: center; gap: 10px; }
+.sdwan-link-name { font-family: var(--mono); font-size: 12px; color: var(--fg); font-weight: 600; }
+.sdwan-weight {
+  margin-left: auto; font-family: var(--mono); font-size: 10px;
+  background: var(--bg-2); border: 1px solid var(--line); padding: 1px 6px; border-radius: 3px;
+  color: var(--fg-2);
+}
+.sdwan-metrics {
+  display: grid; grid-template-columns: repeat(3, 1fr) 100px; gap: 12px; align-items: end;
+}
+.sdwan-metric .lbl { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
+.sdwan-metric .v { font-family: var(--mono); font-size: 14px; font-weight: 600; color: var(--fg); margin-top: 2px; }
+.sdwan-metric .v.warn { color: var(--warn); }
+.sdwan-metric .v.err  { color: var(--err); }
+.sdwan-spark { width: 100px; height: 32px; }
+
+.sdwan-row.preferred {
+  background: linear-gradient(90deg, rgba(52,211,153,0.05), transparent 60%);
+}
+.sdwan-row.preferred .sdwan-link-name::before {
+  content: "★ ";
+  color: var(--ok);
+}
+
+/* UTM / Threat protection breakdown */
+.utm-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+}
+.utm-cell {
+  padding: 14px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 6px;
+  min-width: 0;
+}
+.utm-cell:nth-child(3n) { border-right: 0; }
+.utm-cell:nth-last-child(-n+3) { border-bottom: 0; }
+.utm-h { display: flex; align-items: center; gap: 6px; }
+.utm-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.utm-lbl { font-size: 11px; color: var(--fg-2); font-weight: 600; }
+.utm-v { font-family: var(--mono); font-size: 20px; font-weight: 600; letter-spacing: -0.3px; line-height: 1; }
+.utm-foot { font-size: 10px; color: var(--muted); font-family: var(--mono); display: flex; gap: 8px; }
+
+/* Top threats / signatures list */
+.thr-row {
+  display: grid; grid-template-columns: 1fr 70px 50px 26px;
+  gap: 10px; align-items: center;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+.thr-row:last-child { border-bottom: 0; }
+.thr-row:hover { background: var(--bg-2); }
+.thr-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.thr-sig { color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.thr-meta { display: flex; gap: 6px; align-items: center; font-size: 10.5px; color: var(--muted); font-family: var(--mono); }
+.thr-cat {
+  display: inline-block; font-family: var(--mono); font-size: 9.5px; font-weight: 600;
+  padding: 1px 5px; border-radius: 3px;
+  background: var(--bg-2); border: 1px solid var(--line); color: var(--fg-2);
+}
+.thr-cnt { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--fg); text-align: right; }
+.thr-cc {
+  font-family: var(--mono); font-size: 9.5px; font-weight: 700; letter-spacing: 0.5px;
+  padding: 1px 4px; border-radius: 2px; text-align: center;
+  background: var(--bg-2); border: 1px solid var(--line); color: var(--fg-2);
+}
+
+/* Policies table */
+.pol-tbl td { vertical-align: middle; }
+.pol-id {
+  display: inline-block;
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
+  background: var(--bg-2); border: 1px solid var(--line);
+  border-radius: 3px; padding: 1px 5px;
+  color: var(--fg-2);
+  letter-spacing: 0.4px;
+}
+.pol-action {
+  font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+  padding: 1px 6px; border-radius: 3px; text-transform: uppercase;
+}
+.pol-action.allow { background: rgba(52,211,153,0.10); color: var(--ok); border: 1px solid rgba(52,211,153,0.4); }
+.pol-action.deny  { background: rgba(242,95,92,0.14); color: var(--err); border: 1px solid rgba(242,95,92,0.45); }
+.pol-hits {
+  font-family: var(--mono); font-size: 11.5px; color: var(--fg); font-weight: 600;
+}
+.pol-hits-bar { height: 3px; background: var(--bg-2); border-radius: 2px; overflow: hidden; margin-top: 3px; }
+.pol-hits-bar > div { height: 100%; background: var(--zbx); }
+
+/* FortiGuard status row */
+.fg-fguard {
+  display: grid; grid-template-columns: repeat(5, 1fr);
+  border-top: 1px solid var(--line);
+}
+.fguard-cell {
+  padding: 10px 14px;
+  border-right: 1px solid var(--line);
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11px;
+}
+.fguard-cell:last-child { border-right: 0; }
+.fguard-cell .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 5px var(--ok); }
+.fguard-cell .lbl { color: var(--muted); }
+.fguard-cell .v { color: var(--fg); font-family: var(--mono); }
+
+/* Health rings (CPU/Mem/Disk) reuse from styles, but in a slimmer strip */
+.fg-health-strip {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+}
+.fg-health-cell {
+  padding: 14px 14px;
+  display: flex; align-items: center; gap: 14px;
+  border-right: 1px solid var(--line);
+}
+.fg-health-cell:last-child { border-right: 0; }
+.fg-health-meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.fg-health-meta .lbl { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); }
+.fg-health-meta .sub { font-size: 10px; color: var(--muted); font-family: var(--mono); }
+
+/* Responsive squeeze */
+@media (max-width: 1500px) {
+  .fg-kpi { grid-template-columns: repeat(3, 1fr); }
+  .fg-kpi-cell:nth-child(3) { border-right: 0; }
+  .fg-kpi-cell:nth-child(-n+3) { border-bottom: 1px solid var(--line); }
+  .utm-grid { grid-template-columns: repeat(2, 1fr); }
+  .utm-cell:nth-child(3n)         { border-right: 1px solid var(--line); }
+  .utm-cell:nth-child(2n)         { border-right: 0; }
+  .utm-cell:nth-last-child(-n+2)  { border-bottom: 0; }
+  .fg-fguard { grid-template-columns: repeat(3, 1fr); }
+  .fguard-cell:nth-child(3) { border-right: 0; }
+  .fguard-cell:nth-child(-n+3) { border-bottom: 1px solid var(--line); }
+}
+@media (max-width: 1180px) {
+  .row[data-fg-row] { grid-template-columns: 1fr !important; }
+  .ha-grid { grid-template-columns: 1fr; }
+  .ha-link { display: none; }
+  .sdwan-metrics { grid-template-columns: repeat(3, 1fr); }
+  .sdwan-spark { display: none; }
+}

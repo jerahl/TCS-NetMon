@@ -1,0 +1,2606 @@
+zabbix_export:
+  version: '7.4'
+  template_groups:
+    - uuid: ae594436d5584d85b34ddfa0b0e53a51
+      name: Templates/Video
+  host_groups:
+    - uuid: 99310a006c1d46b780561689af7af80e
+      name: 'Discovered hosts/Milestone Cameras'
+  templates:
+    - uuid: 27dff836817e4ee989b7a6671092f617
+      template: 'Milestone Camera by Direct Polling'
+      name: 'Milestone Camera by Direct Polling'
+      description: |
+        Per-camera Zabbix host monitoring template. Provides ICMP reachability
+        for the camera's primary IP. Vendor-specific monitoring (SNMP, RCP+)
+        ships via linked vendor sub-templates (e.g. "Milestone Camera vendor -
+        Bosch") which are conditionally linked by the Site-template's Camera
+        LLD based on the discovered {#CAM.HW.VENDOR} macro.
+        
+        Linked automatically by the host_prototype under the Camera LLD on
+        "Milestone XProtect by HTTP". Operators don't link this template by
+        hand.
+        
+        Per AP plan G14: the ICMP-down trigger on this template is
+        INFORMATION severity only. The canonical "camera offline" operator
+        alert remains the "Combined status" calculated item on the parent
+        Site host, which folds ICMP + enabled + ESS communication state
+        into a single state.
+        
+        Required macros (defaults override at host_prototype creation time):
+        - {$MS.CAM.PING.INTERVAL} - ICMP poll interval. Default 1m.
+        
+        Required host interface:
+        - AGENT interface with the camera's IP as the primary address.
+          (The host_prototype creates this from {#CAM.HW.IP}.)
+      vendor:
+        name: Community
+        version: 7.4-0
+      groups:
+        - name: Templates/Video
+      items:
+        - uuid: b676398f785843f3a0022ec9a8488bd5
+          name: 'Cam: ICMP ping'
+          type: SIMPLE
+          key: icmpping
+          delay: '{$MS.CAM.PING.INTERVAL}'
+          description: |
+            Basic ICMP reachability check. Per G14, an INFORMATION-severity
+            "unreachable" trigger fires on three consecutive failed pings;
+            the operator-visible alarm is the Site host's Combined status
+            calc which references this item via cross-host lookup keyed on
+            the cam_id tag.
+          valuemap:
+            name: 'Service state'
+          tags:
+            - tag: component
+              value: camera-ping
+            - tag: src
+              value: zbx
+          triggers:
+            - uuid: 1aaf373fff6743ab89d60b1c956e556b
+              expression: 'max(/Milestone Camera by Direct Polling/icmpping,#3)=0'
+              name: 'Cam [{HOST.NAME}]: ICMP unreachable (3 consecutive)'
+              status: DISABLED
+              priority: INFO
+              description: |
+                Three consecutive ICMP pings failed. Severity is
+                INFORMATION by design (G14) - this is an input signal,
+                not the operator-facing alarm. The Combined status calc
+                on the parent Site host folds this + enabled + ESS state
+                into the actual offline alert.
+        - uuid: 2f760929a1144dc5aba7365b323dfbc6
+          name: 'Cam: ICMP packet loss'
+          type: SIMPLE
+          key: icmppingloss
+          delay: '{$MS.CAM.PING.INTERVAL}'
+          units: '%'
+          description: 'ICMP packet loss percentage to this camera.'
+          tags:
+            - tag: component
+              value: camera-ping
+            - tag: src
+              value: zbx
+        - uuid: a6a3f501a51a4818a81077e08b2c03bc
+          name: 'Cam: ICMP round-trip avg'
+          type: SIMPLE
+          key: icmppingsec
+          delay: '{$MS.CAM.PING.INTERVAL}'
+          value_type: FLOAT
+          units: s
+          description: 'Average ICMP round-trip time to this camera.'
+          tags:
+            - tag: component
+              value: camera-ping
+            - tag: src
+              value: zbx
+        - uuid: e9b1c3a25f8f4f37bc4e9d0612a8f5e1
+          name: 'Cam: SNMP availability'
+          type: INTERNAL
+          key: 'zabbix[host,snmp,available]'
+          description: |
+            Zabbix-internal SNMP-interface availability for this camera.
+            Returns 0 (not available), 1 (available), or 2 (unknown —
+            no SNMP items configured / not yet polled).
+            
+            Used by the parent Site host's combined-status calc as the
+            third signal (alongside Milestone enabled/ESS and ICMP).
+            Cameras whose linked vendor template doesn't define any
+            SNMP items will stay at 2 forever, which the combined-
+            status calc treats as "not penalised" — only an explicit
+            0 contributes to the SNMP-fault bit.
+          valuemap:
+            name: zabbix.host.available
+          tags:
+            - tag: component
+              value: camera-snmp
+            - tag: src
+              value: zbx
+      macros:
+        - macro: '{$MS.CAM.PING.INTERVAL}'
+          value: 1m
+          description: 'ICMP poll interval for this camera. Default 1m. Increase to 5m on sites with >500 cameras per G12.'
+      valuemaps:
+        - uuid: bb5a2699db73410b802e0c120aa17830
+          name: 'Service state'
+          mappings:
+            - value: '0'
+              newvalue: Down
+            - value: '1'
+              newvalue: Up
+        - uuid: 4c1f7b9d3a2e4d68a17e8c4b9d2f6a5e
+          name: zabbix.host.available
+          mappings:
+            - value: '0'
+              newvalue: 'not available'
+            - value: '1'
+              newvalue: available
+            - value: '2'
+              newvalue: unknown
+    - uuid: 4f919a38df614ac0b28bd8d04129bdf1
+      template: 'Milestone Camera vendor - Bosch'
+      name: 'Milestone Camera vendor - Bosch'
+      description: |
+        Bosch FLEXIDOME / DINION / AUTODOME monitoring via direct SNMP
+        polling of the camera's Bosch private MIB (.1.3.6.1.4.1.3967) plus
+        the standard MIBs (MIB-II + HOST-RESOURCES) that the camera's
+        net-snmpd exposes.
+        
+        Linked conditionally by the Site-template's Camera LLD override
+        when the discovered camera matches the Bosch vendor regex
+        (case-insensitive '^(?:bosch\s+)?(?:flexidome|dinion)').
+        
+        DESIGN NOTES (per M0_Bosch_Findings.md and
+        M0_Bosch_Fleet_Compatibility.md):
+        
+        - G28: 'sysUpTime.0' on Bosch reflects snmpd restart, not camera
+          boot. This template uses 'hrSystemUptime.0' for reboot detection.
+        - G29: Bosch net-snmpd appends trailing binary garbage to OCTET
+          STRING values. Every string item / LLD has a regex preprocessing
+          step '^([\x20-\x7E]+).*' that strips to first non-printable byte.
+        - G30: ifXTable HC counters are zero/absent on Bosch firmware.
+          Bandwidth items use the 32-bit ifInOctets/ifOutOctets columns
+          with Change per second preprocessing.
+        - G32: Bosch firmware updates renumber ifIndex and hrStorageIndex.
+          Every table-row item is LLD-discovered by name, never by
+          hardcoded integer index.
+        - Bucket A/B/C compatibility: items that depend on the Bosch
+          private branch reference 'bosch.dev.has_full_mib' in their
+          formulas / triggers so they auto-suppress on older Bosch models
+          (CPP4 generation 5000 HD, DINION 6000 HD, etc.) where the
+          private branch is absent or shape-deviant.
+        
+        REQUIRED MACROS (defaults shown, override per-host as needed):
+          {$MS.CAM.SNMP.VERSION}        '2'   (1, 2, or 3)
+          {$MS.CAM.SNMP.COMMUNITY}      ''    SECRET_TEXT (v1/v2c only)
+          {$MS.CAM.SNMP.V3.USER}        ''    (v3 only)
+          {$MS.CAM.SNMP.V3.AUTH.PROTO}  SHA
+          {$MS.CAM.SNMP.V3.AUTH.PASS}   ''    SECRET_TEXT
+          {$MS.CAM.SNMP.V3.PRIV.PROTO}  AES
+          {$MS.CAM.SNMP.V3.PRIV.PASS}   ''    SECRET_TEXT
+          {$MS.CAM.BOSCH.POLL.INTERVAL} 5m
+          {$MS.CAM.BOSCH.MOTION.POLL}   1m
+        
+        OPERATOR-SIDE PREREQUISITE: SNMP must be enabled on the camera
+        under Configuration -> Service -> SNMP. Recent Bosch firmware
+        ships with SNMPv1/v2c DISABLED by default; either enable it or
+        create a dedicated v3 read-only user (the default 'service'
+        account does NOT have SNMP access).
+      vendor:
+        name: Community
+        version: 7.4-0
+      groups:
+        - name: Templates/Video
+      items:
+        - uuid: bc906fababe24696941ccab41f5a3906
+          name: 'Cam: CPU average %'
+          type: CALCULATED
+          key: bosch.cam.cpu.avg.pct
+          delay: '{$MS.CAM.BOSCH.POLL.INTERVAL}'
+          value_type: FLOAT
+          units: '%'
+          params: 'avg(last_foreach(//bosch.cam.cpu.core.pct[*]))'
+          description: |
+            Average across all per-core CPU% items. Replaces UCD-MIB load
+            average (laTable.1.3.6.1.4.1.2021.10) which was removed from
+            net-snmpd in the firmware track that ships kernel 5.15
+            (FLEXIDOME 5100i FW 06010980 and later).
+          tags:
+            - tag: component
+              value: bosch-health
+            - tag: src
+              value: zbx
+          triggers:
+            - uuid: 138e016196c44b028771a1a804313283
+              expression: 'avg(/Milestone Camera vendor - Bosch/bosch.cam.cpu.avg.pct,15m)>90'
+              name: 'Cam [{HOST.NAME}]: CPU sustained >90% for 15m'
+              priority: WARNING
+        - uuid: 29e1cabab533475a8918a27eb1a5c450
+          name: 'Cam: Process count'
+          type: SNMP_AGENT
+          snmp_oid: 1.3.6.1.2.1.25.1.6.0
+          key: bosch.cam.process.count
+          delay: '{$MS.CAM.BOSCH.POLL.INTERVAL}'
+          description: |
+            hrSystemProcesses. Pilot baselines: 5100i ~106 (old FW) /
+            ~151 (new FW), 7000i ~99. Sub-90 means camera is half-booted
+            or has services failing.
+          tags:
+            - tag: component
+              value: bosch-health
+            - tag: src
+              value: zbx
+        - uuid: 4c018f52272a4ffbbcfae398e8d7169b
+          name: 'Cam: System uptime (kernel boot)'
+          type: SNMP_AGENT
+          snmp_oid: 1.3.6.1.2.1.25.1.1.0
+          key: bosch.cam.uptime
+          delay: '{$MS.CAM.BOSCH.POLL.INTERVAL}'
+          units: uptime
+          description: |
+            G28: uses hrSystemUptime (camera kernel uptime) NOT sysUpTime
+            (snmpd agent uptime) - the latter resets on every SNMP config
+            change and would fire false reboot alarms.
+          preprocessing:
+            - type: MULTIPLIER
+              parameters:
+                - '0.01'
+          tags:
+            - tag: component
+              value: bosch-health
+            - tag: src
+              value: zbx
+          triggers:
+            - uuid: 93d056407c3c42e2b4ca31118ea14502
+              expression: 'last(/Milestone Camera vendor - Bosch/bosch.cam.uptime)<10m'
+              name: 'Cam [{HOST.NAME}]: rebooted (uptime <10m)'
+              priority: INFO
+              description: 'Camera kernel uptime less than 10 minutes - it rebooted recently.'
+        - uuid: c6549ce0b52946f5a5c62f74d8282b0c
+          name: 'Bosch: Board fingerprint'
+          type: SNMP_AGENT
+          snmp_oid: 1.3.6.1.4.1.3967.1.1.1.6.0
+          key: bosch.dev.board.fingerprint
+          delay: 1d
+          value_type: CHAR
+          description: |
+            Per-board hardware fingerprint hex string. Stable across
+            firmware updates (validated 5100i pre/post FW flash). Useful
+            for hardware-identity audit and platform-deviation detection.
+          preprocessing:
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 7d
+          tags:
+            - tag: component
+              value: bosch-identity
+            - tag: src
+              value: zbx
+        - uuid: a2e3228f8cda45e7951a055c8fed14b4
+          name: 'Bosch: Firmware short code'
+          type: SNMP_AGENT
+          snmp_oid: 1.3.6.1.4.1.3967.1.1.1.5.0
+          key: bosch.dev.fw.short
+          delay: 1d
+          value_type: CHAR
+          description: |
+            Bosch internal firmware short code. NOT numerically sortable -
+            different model families use different numbering spaces. Surface
+            informationally only; do not put numeric comparisons on this.
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - '^([\x20-\x7E]+).*'
+                - \1
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 7d
+          tags:
+            - tag: component
+              value: bosch-identity
+            - tag: src
+              value: zbx
+        - uuid: 792181fe80b44790a3d8e2f1d65be195
+          name: 'Bosch: Has full Bosch MIB?'
+          type: CALCULATED
+          key: bosch.dev.has_full_mib
+          delay: '{$MS.CAM.BOSCH.POLL.INTERVAL}'
+          params: |
+            (length(last(//bosch.dev.vendor))>0)
+            * (length(last(//bosch.dev.model))>0)
+          description: |
+            Bucket A/B/C gate. 1 = full Bosch private MIB present (alarm
+            and encoder items will populate), 0 = identity-only or
+            minimal (those items will return errors - suppress triggers).
+            
+            Reference this in vendor-specific trigger expressions to
+            auto-disable on older Bosch generations (CPP4 5000 HD,
+            DINION 6000 HD, etc.) per M0_Bosch_Fleet_Compatibility.md.
+          tags:
+            - tag: component
+              value: bosch-identity
+            - tag: src
+              value: zbx
+        - uuid: afaf8a5fa91742cabc7ad7ea2d6a5a3d
+          name: 'Bosch: Model'
+          type: SNMP_AGENT
+          snmp_oid: 1.3.6.1.4.1.3967.1.1.5.1.0
+          key: bosch.dev.model
+          delay: 1d
+          value_type: CHAR
+          description: 'Model string (e.g. "FLEXIDOME indoor 5100i IR - 5MP"). G29 strip applied.'
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - '^([\x20-\x7E]+).*'
+                - \1
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 7d
+          tags:
+            - tag: component
+              value: bosch-identity
+            - tag: src
+              value: zbx
+        - uuid: aa89026db7e5481cafb1a8b74626d7b0
+          name: 'Bosch: Hardware platform code'
+          type: SNMP_AGENT
+          snmp_oid: 1.3.6.1.4.1.3967.1.1.1.4.0
+          key: bosch.dev.platform.code
+          delay: 1d
+          value_type: CHAR
+          description: |
+            CPP platform family code (e.g. "F000B543" = CPP7.3). NOT a
+            per-model discriminator - 5100i and 7000i share this value.
+            Useful for "which chipset generation" reporting only.
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - '^([\x20-\x7E]+).*'
+                - \1
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 7d
+          tags:
+            - tag: component
+              value: bosch-identity
+            - tag: src
+              value: zbx
+        - uuid: c451e30005e3429c9da991f1e59c5fad
+          name: 'Bosch: Vendor string'
+          type: SNMP_AGENT
+          snmp_oid: 1.3.6.1.4.1.3967.1.1.1.7.0
+          key: bosch.dev.vendor
+          delay: 1d
+          value_type: CHAR
+          description: 'Should be "Bosch". Empty/absent on bucket-C (non-Bosch-MIB) cameras.'
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - '^([\x20-\x7E]+).*'
+                - \1
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 7d
+          tags:
+            - tag: component
+              value: bosch-identity
+            - tag: src
+              value: zbx
+        - uuid: 729053b08b244bacbe4ef513a7e9a1c9
+          name: 'Bosch: VMS endpoint (camera-side record)'
+          type: SNMP_AGENT
+          snmp_oid: 1.3.6.1.4.1.3967.1.5.2.1.1.1
+          key: bosch.dev.vms.endpoint
+          delay: '{$MS.CAM.BOSCH.POLL.INTERVAL}'
+          value_type: CHAR
+          description: |
+            IP of the VMS / management server the camera believes itself
+            registered with. Cross-check against {$MILESTONE.HOST} to
+            detect cameras pointed at the wrong VMS (e.g. left over from
+            a prior install or mis-staged hardware).
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - '^([\x20-\x7E]+).*'
+                - \1
+          tags:
+            - tag: component
+              value: bosch-identity
+            - tag: src
+              value: zbx
+      discovery_rules:
+        - uuid: 50d21b1902354ad49759f8ad8160e426
+          name: 'Bosch: CPU core discovery'
+          type: SNMP_AGENT
+          snmp_oid: 'discovery[{#SNMPINDEX},1.3.6.1.2.1.25.3.3.1.2]'
+          key: bosch.cam.cpu.discovery
+          delay: 1h
+          description: |
+            Discovers per-core CPU% via hrProcessorTable. Pilot boxes
+            (both 5100i and 7000i, both firmware tracks) report 4 cores
+            at indices 196608..196611 - stable across firmware updates.
+          item_prototypes:
+            - uuid: c60acd5200294ebdb716babf994f64cf
+              name: 'Cam CPU core {#SNMPINDEX}: % busy'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.2.1.25.3.3.1.2.{#SNMPINDEX}'
+              key: 'bosch.cam.cpu.core.pct[{#SNMPINDEX}]'
+              delay: '{$MS.CAM.BOSCH.POLL.INTERVAL}'
+              units: '%'
+              tags:
+                - tag: component
+                  value: bosch-cpu
+                - tag: cpu_core
+                  value: '{#SNMPINDEX}'
+                - tag: src
+                  value: zbx
+        - uuid: 3ef0e7b64e2e4bb5a79c2ed4f0375815
+          name: 'Bosch: Filesystem discovery'
+          type: SNMP_AGENT
+          snmp_oid: 'discovery[{#SNMPINDEX},1.3.6.1.2.1.25.2.3.1.1,{#FSNAME},1.3.6.1.2.1.25.2.3.1.3,{#FSTYPE},1.3.6.1.2.1.25.2.3.1.2]'
+          key: bosch.cam.fs.discovery
+          delay: 1h
+          filter:
+            evaltype: AND
+            conditions:
+              - macro: '{#FSNAME}'
+                value: ^(/data|/var/log)$
+          description: |
+            G32: discover by name not index. Bosch firmware updates
+            renumber hrStorage indices (/data moved from idx 49 to 47
+            across the 5100i FW upgrade). Filter on hrStorageDescr =~
+            ^/ to exclude memory pseudo-rows. G29 strip on the descr.
+          item_prototypes:
+            - uuid: f5cae53300494dbdadb95ced7eaa2c69
+              name: 'Cam FS [{#SNMPINDEX}]: total (alloc units)'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.2.1.25.2.3.1.5.{#SNMPINDEX}'
+              key: 'bosch.cam.fs.total.units[{#SNMPINDEX}]'
+              delay: 1h
+              tags:
+                - tag: component
+                  value: bosch-fs
+                - tag: fs
+                  value: '{#FSNAME}'
+                - tag: src
+                  value: zbx
+            - uuid: bbc64b4a30ad4e6892f17bd68a8348f3
+              name: 'Cam FS [{#SNMPINDEX}]: used %'
+              type: CALCULATED
+              key: 'bosch.cam.fs.used.pct[{#SNMPINDEX}]'
+              delay: '{$MS.CAM.BOSCH.POLL.INTERVAL}'
+              value_type: FLOAT
+              units: '%'
+              params: 'last(//bosch.cam.fs.used.units[{#SNMPINDEX}])*100/last(//bosch.cam.fs.total.units[{#SNMPINDEX}])'
+              tags:
+                - tag: component
+                  value: bosch-fs
+                - tag: fs
+                  value: '{#FSNAME}'
+                - tag: src
+                  value: zbx
+            - uuid: e08ffcac8bd946db8967b953d0d1395e
+              name: 'Cam FS [{#SNMPINDEX}]: used (alloc units)'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.2.1.25.2.3.1.6.{#SNMPINDEX}'
+              key: 'bosch.cam.fs.used.units[{#SNMPINDEX}]'
+              delay: '{$MS.CAM.BOSCH.POLL.INTERVAL}'
+              tags:
+                - tag: component
+                  value: bosch-fs
+                - tag: fs
+                  value: '{#FSNAME}'
+                - tag: src
+                  value: zbx
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // G29 - strip trailing binary garbage from {#FSNAME}
+                  var arr = JSON.parse(value);
+                  for (var i = 0; i < arr.length; i++) {
+                    if (arr[i]['{#FSNAME}']) {
+                      arr[i]['{#FSNAME}'] = String(arr[i]['{#FSNAME}']).replace(/[^\x20-\x7E].*$/, '');
+                    }
+                  }
+                  return JSON.stringify(arr);
+        - uuid: a227943d9d7b40cea82e090986b3db74
+          name: 'Bosch: Network interface discovery'
+          type: SNMP_AGENT
+          snmp_oid: 'discovery[{#SNMPINDEX},1.3.6.1.2.1.2.2.1.1,{#IFNAME},1.3.6.1.2.1.2.2.1.2]'
+          key: bosch.cam.if.discovery
+          delay: 1h
+          filter:
+            evaltype: AND
+            conditions:
+              - macro: '{#IFNAME}'
+                value: ^eth\d+$
+          description: |
+            G32: discover by name not index. Bosch firmware updates
+            renumber ifIndex (eth0 moved from idx 2 to idx 3 across
+            5100i FW upgrade because a sit0 IPv6-in-IPv4 tunnel
+            pseudo-interface appeared). Filter on ifDescr =~ ^eth\d+$
+            to exclude lo and tunnel pseudos. G29 strip on the descr.
+          item_prototypes:
+            - uuid: cfae1d253a1f4f6e8f7856222f75a69f
+              name: 'Cam IF [{#IFNAME}]: incoming bps'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.2.1.2.2.1.10.{#SNMPINDEX}'
+              key: 'bosch.cam.if.in.bps[{#IFNAME}]'
+              delay: '{$MS.CAM.BOSCH.POLL.INTERVAL}'
+              units: bps
+              description: |
+                G30: uses 32-bit ifInOctets, NOT ifHCInOctets (HC counters
+                are absent or zero on Bosch firmware). Counter32 with
+                Change per second handles wraparound natively.
+              preprocessing:
+                - type: CHANGE_PER_SECOND
+                - type: MULTIPLIER
+                  parameters:
+                    - '8'
+              tags:
+                - tag: component
+                  value: bosch-net
+                - tag: interface
+                  value: '{#IFNAME}'
+                - tag: src
+                  value: zbx
+            - uuid: 132ed4ab28c34c7aa7924eb688ecd69a
+              name: 'Cam IF [{#IFNAME}]: oper status'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.2.1.2.2.1.8.{#SNMPINDEX}'
+              key: 'bosch.cam.if.oper.status[{#IFNAME}]'
+              valuemap:
+                name: IfOperStatus
+              tags:
+                - tag: component
+                  value: bosch-net
+                - tag: interface
+                  value: '{#IFNAME}'
+                - tag: src
+                  value: zbx
+              trigger_prototypes:
+                - uuid: e4e305e6986a4def890b2718faa09e9f
+                  expression: 'last(/Milestone Camera vendor - Bosch/bosch.cam.if.oper.status[{#IFNAME}])=2'
+                  name: 'Cam [{HOST.NAME}]: interface {#IFNAME} down'
+                  priority: WARNING
+            - uuid: c10bc9d82bb44b52b18b5d87790c13f5
+              name: 'Cam IF [{#IFNAME}]: outgoing bps'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.2.1.2.2.1.16.{#SNMPINDEX}'
+              key: 'bosch.cam.if.out.bps[{#IFNAME}]'
+              delay: '{$MS.CAM.BOSCH.POLL.INTERVAL}'
+              units: bps
+              preprocessing:
+                - type: CHANGE_PER_SECOND
+                - type: MULTIPLIER
+                  parameters:
+                    - '8'
+              tags:
+                - tag: component
+                  value: bosch-net
+                - tag: interface
+                  value: '{#IFNAME}'
+                - tag: src
+                  value: zbx
+            - uuid: 6df93e73375f4b72a9c5609a87002bfa
+              name: 'Cam IF [{#IFNAME}]: link speed'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.2.1.2.2.1.5.{#SNMPINDEX}'
+              key: 'bosch.cam.if.speed[{#IFNAME}]'
+              delay: 1d
+              units: bps
+              tags:
+                - tag: component
+                  value: bosch-net
+                - tag: interface
+                  value: '{#IFNAME}'
+                - tag: src
+                  value: zbx
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // G29 - strip trailing binary garbage from {#IFNAME}
+                  var arr = JSON.parse(value);
+                  for (var i = 0; i < arr.length; i++) {
+                    if (arr[i]['{#IFNAME}']) {
+                      arr[i]['{#IFNAME}'] = String(arr[i]['{#IFNAME}']).replace(/[^\x20-\x7E].*$/, '');
+                    }
+                  }
+                  return JSON.stringify(arr);
+        - uuid: 45e8a52573b544ee883423fb102c9d23
+          name: 'Bosch: Imager discovery'
+          type: SNMP_AGENT
+          snmp_oid: 'discovery[{#IMAGER.IDX},1.3.6.1.4.1.3967.1.1.1.3.1.1]'
+          key: bosch.imager.discovery
+          delay: 1h
+          description: |
+            Walks the per-imager name table. 1 row on single-imager
+            FLEXIDOMEs (5100i, 4000i, 3000i); 4 rows on multi-imager
+            housings (7000i multi). Returns no rows on bucket-C cameras
+            without the Bosch private branch - all per-imager items
+            then silently no-discover.
+          item_prototypes:
+            - uuid: 4c807442d7a447dfb360f7f429134d1e
+              name: 'Imager {#IMAGER.IDX}: encoder bitrate'
+              type: DEPENDENT
+              key: 'bosch.imager.encoder.bitrate.kbps[{#IMAGER.IDX}]'
+              units: kbps
+              description: |
+                Live encoded bitrate for the imager's primary stream.
+                Pilot range observed: 750 kbps idle scene to 6 Mbps
+                active scene on a FLEXIDOME 5100i-5MP. Extracted from
+                bytes 4-7 of the encoder slot 1 blob as big-endian uint32.
+              preprocessing:
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      // Bytes 4-7 of the slot blob = bitrate uint32 BE.
+                      // Input is space-separated hex like "00 00 01 2C 00 00 03 42 ..."
+                      var hex = String(value).replace(/[^0-9A-Fa-f]/g, '');
+                      if (hex.length < 16) return null;
+                      var b4 = parseInt(hex.substr(8, 2), 16);
+                      var b5 = parseInt(hex.substr(10, 2), 16);
+                      var b6 = parseInt(hex.substr(12, 2), 16);
+                      var b7 = parseInt(hex.substr(14, 2), 16);
+                      return (b4 * 16777216) + (b5 * 65536) + (b6 * 256) + b7;
+              master_item:
+                key: 'bosch.imager.encoder.slot1.raw[{#IMAGER.IDX}]'
+              tags:
+                - tag: component
+                  value: bosch-encoder
+                - tag: imager_idx
+                  value: '{#IMAGER.IDX}'
+                - tag: src
+                  value: zbx
+            - uuid: d8660e9417bc4182a21074c3eddb6419
+              name: 'Imager {#IMAGER.IDX}: encoder slot 1 raw'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.3967.1.2.2.1.1.{#IMAGER.IDX}'
+              key: 'bosch.imager.encoder.slot1.raw[{#IMAGER.IDX}]'
+              delay: '{$MS.CAM.BOSCH.POLL.INTERVAL}'
+              value_type: CHAR
+              description: |
+                Raw 44-byte encoder slot 1 blob (hex octets). Master item
+                for the dependent bitrate / width / height extracts.
+                Layout decoded from pilot 5100i-5MP (M0_Bosch_Findings.md
+                §3e): bytes 4-7 bitrate, 20-23 width, 24-27 height, 28
+                codec, 40 enabled.
+              tags:
+                - tag: component
+                  value: bosch-encoder
+                - tag: imager_idx
+                  value: '{#IMAGER.IDX}'
+                - tag: src
+                  value: zbx
+            - uuid: b70c4de61f574b768e77eb6bc0da40cd
+              name: 'Imager {#IMAGER.IDX}: VCA motion active'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.3967.1.3.2.1.1.{#IMAGER.IDX}'
+              key: 'bosch.imager.motion.active[{#IMAGER.IDX}]'
+              delay: '{$MS.CAM.BOSCH.MOTION.POLL}'
+              description: |
+                Primary VCA motion-active boolean (0 idle / 1 active).
+                Decoded from M0 pilot live motion test, May 2026.
+                Requires an enabled VCA rule on the camera (Configuration
+                -> Alarm -> VCA); without one, this stays at 0 no matter
+                what's happening in the scene.
+              valuemap:
+                name: 'Bool string'
+              tags:
+                - tag: component
+                  value: bosch-motion
+                - tag: imager_idx
+                  value: '{#IMAGER.IDX}'
+                - tag: src
+                  value: zbx
+            - uuid: 72fd24577c8740e696f8687d08666979
+              name: 'Imager {#IMAGER.IDX}: alarm detail bitmap'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.3967.1.3.3.1.1.{#IMAGER.IDX}'
+              key: 'bosch.imager.motion.detail[{#IMAGER.IDX}]'
+              delay: '{$MS.CAM.BOSCH.MOTION.POLL}'
+              value_type: CHAR
+              description: |
+                5-byte alarm-detail bitmap. Idle: "00 00 00 00 00".
+                Active example: "80 00 00 01 01" (byte 0 high bit = active
+                flag, byte 3 = alarm-type code, byte 4 = rule index).
+              tags:
+                - tag: component
+                  value: bosch-motion
+                - tag: imager_idx
+                  value: '{#IMAGER.IDX}'
+                - tag: src
+                  value: zbx
+            - uuid: ea2fad81db254bdc8b9670f7ac50e4ce
+              name: 'Imager {#IMAGER.IDX}: motion-trip indicator'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.3967.1.1.4.1.1.2.{#IMAGER.IDX}'
+              key: 'bosch.imager.motion.indicator[{#IMAGER.IDX}]'
+              delay: '{$MS.CAM.BOSCH.MOTION.POLL}'
+              description: |
+                Secondary motion flag. Pair with bosch.imager.motion.active
+                for cross-check. Semantics still TBD (boolean vs lifetime
+                counter - deferred per M0_Bosch_Findings.md §8).
+              tags:
+                - tag: component
+                  value: bosch-motion
+                - tag: imager_idx
+                  value: '{#IMAGER.IDX}'
+                - tag: src
+                  value: zbx
+          trigger_prototypes:
+            - uuid: 274870a275c14e5aac8727fe0264c4ec
+              expression: 'avg(/Milestone Camera vendor - Bosch/bosch.imager.encoder.bitrate.kbps[{#IMAGER.IDX}],15m)<100 and last(/Milestone Camera vendor - Bosch/bosch.dev.has_full_mib)=1'
+              name: 'Imager {#IMAGER.IDX} on [{HOST.NAME}]: encoder bitrate <100 kbps for 15m (may be stalled or scene fully static)'
+              priority: INFO
+              description: |
+                Gated on bosch.dev.has_full_mib=1 so this only fires on
+                bucket-A cameras where the encoder telemetry is known
+                to populate correctly.
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // G29 strip on the imager name value
+                  var arr = JSON.parse(value);
+                  for (var i = 0; i < arr.length; i++) {
+                    if (arr[i]['{#SNMPVALUE}']) {
+                      arr[i]['{#IMAGER.NAME}'] = String(arr[i]['{#SNMPVALUE}']).replace(/[^\x20-\x7E].*$/, '');
+                    }
+                  }
+                  return JSON.stringify(arr);
+      macros:
+        - macro: '{$MS.CAM.BOSCH.MOTION.POLL}'
+          value: 1m
+          description: 'Faster poll for alarm OIDs - 1m catches sub-minute VCA trips.'
+        - macro: '{$MS.CAM.BOSCH.POLL.INTERVAL}'
+          value: 5m
+          description: 'Default Bosch SNMP poll interval. Tune for fleet size per G12.'
+      valuemaps:
+        - uuid: 4cc6b33c6db54ebdb11d0fb0eb8993a4
+          name: 'Bool string'
+          mappings:
+            - value: '0'
+              newvalue: Idle
+            - value: '1'
+              newvalue: Active
+        - uuid: 42f74dbcd7fd4b3c854d41b668f62f4d
+          name: IfOperStatus
+          mappings:
+            - value: '1'
+              newvalue: up
+            - value: '2'
+              newvalue: down
+            - value: '3'
+              newvalue: testing
+            - value: '4'
+              newvalue: unknown
+            - value: '5'
+              newvalue: dormant
+            - value: '6'
+              newvalue: notPresent
+            - value: '7'
+              newvalue: lowerLayerDown
+    - uuid: 26b1f4278c4744049d0c9c6d1289d29e
+      template: 'Milestone XProtect by HTTP'
+      name: 'Milestone XProtect by HTTP'
+      description: |
+        Monitors a Milestone XProtect VMS site via the API Gateway REST API
+        (MIP VMS API, /api/rest/v1).
+        
+        Uses Script items to combine OAuth2 token acquisition and REST calls
+        in a single JavaScript invocation, avoiding the need to store the
+        token in a user macro. Discovers recording servers and cameras
+        automatically.
+        
+        Inspired by lestoilfante/zabbix-integrations MilestoneSys template
+        (Zabbix 6.0), ported and extended for Zabbix 7.4 with a template
+        dashboard and camera-level low-level discovery.
+        
+        Requirements:
+        - XProtect 2022 R1 or later with API Gateway installed and reachable
+        - An XProtect Basic user whose role can read Management Server,
+          Recording Server and device configuration
+        - Network reachability from the Zabbix server/proxy to the API
+          Gateway (TCP 443 for HTTPS, TCP 80 for HTTP)
+        
+        Required host macros:
+        - {$MILESTONE.HOST}      — FQDN/IP of the API Gateway
+        - {$MILESTONE.SCHEME}    — http or https (default: https)
+        - {$MILESTONE.USER}      — XProtect Basic user name
+        - {$MILESTONE.PASSWORD}  — XProtect Basic user password
+        - {$MILESTONE.CLIENT_ID} — OAuth client id (default GrantValidatorClient)
+        
+        External helper scripts (deploy on the Zabbix server/proxy):
+        
+          /usr/lib/zabbix/externalscripts/
+              milestone_cameras_read.sh         <- called by Zabbix item
+              milestone_cameras_refresh.sh      <- called by cron
+              milestone_cameras_state.py        <- the actual REST fetcher
+              milestone_groups_read.sh          <- called by Zabbix item
+              milestone_groups_refresh.sh       <- called by cron
+              milestone_groups_state.py         <- the actual REST fetcher
+              milestone_ess_read.sh             <- called by Zabbix item
+              milestone_ess_refresh.sh          <- called by cron
+              milestone_ess_state.py            <- the actual ESS fetcher
+        
+        Required cron entries (as the zabbix user):
+        
+          # Cameras + parent-hardware metadata: every 15 min
+          */15 * * * * /usr/lib/zabbix/externalscripts/milestone_cameras_refresh.sh \
+              {$MILESTONE.HOST} {$MILESTONE.USER} 'PASSWORD' --scheme https
+        
+          # Camera groups (Sites axis): every 15 min — groups change rarely
+          */15 * * * * /usr/lib/zabbix/externalscripts/milestone_groups_refresh.sh \
+              {$MILESTONE.HOST} {$MILESTONE.USER} 'PASSWORD' --scheme https
+        
+          # ESS state snapshot: once a day (it takes 1-2 min at 2500 cameras)
+          15 3 * * * /usr/lib/zabbix/externalscripts/milestone_ess_refresh.sh \
+              {$MILESTONE.HOST} {$MILESTONE.USER} 'PASSWORD' --scheme https
+      vendor:
+        name: Community
+        version: 7.4-0
+      templates:
+        - name: 'Milestone XProtect RS extras by HTTP'
+      groups:
+        - name: Templates/Video
+      items:
+        - uuid: 85597146e2d84e42845141a02c5d06cc
+          name: 'Milestone: License overview (master)'
+          type: SCRIPT
+          key: milestone.license.get
+          delay: 1h
+          history: '0'
+          value_type: TEXT
+          params: |
+            var p = JSON.parse(value);
+            var base = p.scheme + '://' + p.host;
+            var req = new HttpRequest();
+            req.addHeader('Content-Type: application/x-www-form-urlencoded');
+            var tokenResp = req.post(base + '/IDP/connect/token',
+              'grant_type=password'
+              + '&username=' + encodeURIComponent(p.user)
+              + '&password=' + encodeURIComponent(p.password)
+              + '&client_id=' + encodeURIComponent(p.client_id));
+            if (req.getStatus() !== 200) throw 'IDP error ' + req.getStatus();
+            var token = JSON.parse(tokenResp).access_token;
+            var req2 = new HttpRequest();
+            req2.addHeader('Authorization: Bearer ' + token);
+            req2.addHeader('Accept: application/json');
+            var r = req2.get(base + '/api/rest/v1/licenseOverviewAll');
+            if (req2.getStatus() !== 200) {
+              throw 'license error ' + req2.getStatus() + ': ' + r;
+            }
+            return r;
+          timeout: 30s
+          parameters:
+            - name: client_id
+              value: '{$MILESTONE.CLIENT_ID}'
+            - name: host
+              value: '{$MILESTONE.HOST}'
+            - name: password
+              value: '{$MILESTONE.PASSWORD}'
+            - name: scheme
+              value: '{$MILESTONE.SCHEME}'
+            - name: user
+              value: '{$MILESTONE.USER}'
+          tags:
+            - tag: component
+              value: license
+        - uuid: a306ea0d27174d7990722148465d9d0b
+          name: 'Milestone: Get all recording servers (batch master)'
+          type: SCRIPT
+          key: milestone.rs.getall
+          delay: 2m
+          history: '0'
+          value_type: TEXT
+          params: |
+            var p = JSON.parse(value);
+            var base = p.scheme + '://' + p.host;
+            var req = new HttpRequest();
+            req.addHeader('Content-Type: application/x-www-form-urlencoded');
+            var tokenResp = req.post(base + '/IDP/connect/token',
+              'grant_type=password'
+              + '&username=' + encodeURIComponent(p.user)
+              + '&password=' + encodeURIComponent(p.password)
+              + '&client_id=' + encodeURIComponent(p.client_id));
+            if (req.getStatus() !== 200) {
+              throw 'IDP error ' + req.getStatus() + ': ' + tokenResp;
+            }
+            var token = JSON.parse(tokenResp).access_token;
+            var req2 = new HttpRequest();
+            req2.addHeader('Authorization: Bearer ' + token);
+            req2.addHeader('Accept: application/json');
+            var r = req2.get(base + '/api/rest/v1/recordingServers?disabled');
+            if (req2.getStatus() !== 200) {
+              throw 'RS list error ' + req2.getStatus() + ': ' + r;
+            }
+            return r;
+          description: |
+            One API call returning every recording server's full record.
+            All per-RS items and the RS LLD rule depend on this item so
+            that scale is O(1) API calls regardless of RS count.
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // Re-key the array by id so dependents can look up in O(1)
+                  var parsed = JSON.parse(value);
+                  var arr = parsed.array || [];
+                  var out = {};
+                  for (var i = 0; i < arr.length; i++) {
+                    if (arr[i] && arr[i].id) out[arr[i].id] = arr[i];
+                  }
+                  return JSON.stringify(out);
+          timeout: 60s
+          parameters:
+            - name: client_id
+              value: '{$MILESTONE.CLIENT_ID}'
+            - name: host
+              value: '{$MILESTONE.HOST}'
+            - name: password
+              value: '{$MILESTONE.PASSWORD}'
+            - name: scheme
+              value: '{$MILESTONE.SCHEME}'
+            - name: user
+              value: '{$MILESTONE.USER}'
+          tags:
+            - tag: component
+              value: recording-server
+        - uuid: b4eb9497f6df4f7fbdd0529af283c398
+          name: 'Milestone: Seconds since last handshake'
+          type: DEPENDENT
+          key: milestone.site.handshake.age
+          units: s
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.array[0].lastStatusHandshake'
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  if (!value) return 0;
+                  var ts = Date.parse(value);
+                  if (isNaN(ts)) return 0;
+                  return Math.floor((Date.now() - ts) / 1000);
+          master_item:
+            key: milestone.sites.get
+          tags:
+            - tag: component
+              value: site
+        - uuid: 878d9bdc70314fc0a2b8b47725a06f04
+          name: 'Milestone: Last status handshake'
+          type: DEPENDENT
+          key: milestone.site.lasthandshake
+          value_type: CHAR
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.array[0].lastStatusHandshake'
+          master_item:
+            key: milestone.sites.get
+          tags:
+            - tag: component
+              value: site
+        - uuid: e77dbc8e9198488ea1ea1abcf9a957b1
+          name: 'Milestone: Site name'
+          type: DEPENDENT
+          key: milestone.site.name
+          value_type: CHAR
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.array[0].displayName'
+          master_item:
+            key: milestone.sites.get
+          tags:
+            - tag: component
+              value: site
+        - uuid: 282d2127cd9b4cc5a41e922b03ea1754
+          name: 'Milestone: Site physical memory'
+          type: DEPENDENT
+          key: milestone.site.physicalmemory
+          units: B
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.array[0].physicalMemory'
+          master_item:
+            key: milestone.sites.get
+          tags:
+            - tag: component
+              value: site
+        - uuid: e2d848b8bb9144edb9c5af94c32ebdf0
+          name: 'Milestone: Management Server version'
+          type: DEPENDENT
+          key: milestone.site.version
+          value_type: CHAR
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.array[0].version'
+          master_item:
+            key: milestone.sites.get
+          tags:
+            - tag: component
+              value: site
+        - uuid: 2994e644fffc406489465e8b055f265b
+          name: 'Milestone: Get sites (master)'
+          type: SCRIPT
+          key: milestone.sites.get
+          delay: 5m
+          history: '0'
+          value_type: TEXT
+          params: |
+            // Milestone master script — authenticate and call /sites
+            var p = JSON.parse(value);
+            var base = p.scheme + '://' + p.host;
+            
+            var req = new HttpRequest();
+            req.addHeader('Content-Type: application/x-www-form-urlencoded');
+            var body = 'grant_type=password'
+              + '&username=' + encodeURIComponent(p.user)
+              + '&password=' + encodeURIComponent(p.password)
+              + '&client_id=' + encodeURIComponent(p.client_id);
+            
+            var tokenResp = req.post(base + '/IDP/connect/token', body);
+            if (req.getStatus() !== 200) {
+              throw 'IDP error ' + req.getStatus() + ': ' + tokenResp;
+            }
+            var token = JSON.parse(tokenResp).access_token;
+            if (!token) throw 'No access_token returned';
+            
+            var req2 = new HttpRequest();
+            req2.addHeader('Authorization: Bearer ' + token);
+            req2.addHeader('Accept: application/json');
+            var r = req2.get(base + '/api/rest/v1/sites');
+            if (req2.getStatus() !== 200) {
+              throw 'sites error ' + req2.getStatus() + ': ' + r;
+            }
+            return r;
+          description: |
+            Logs into the IDP with Resource Owner Password Credentials,
+            gets an access token, and fetches the /sites collection.
+          timeout: 30s
+          parameters:
+            - name: client_id
+              value: '{$MILESTONE.CLIENT_ID}'
+            - name: host
+              value: '{$MILESTONE.HOST}'
+            - name: password
+              value: '{$MILESTONE.PASSWORD}'
+            - name: scheme
+              value: '{$MILESTONE.SCHEME}'
+            - name: user
+              value: '{$MILESTONE.USER}'
+          tags:
+            - tag: component
+              value: site
+        - uuid: f370cf5bc43140869b083d6525c3c49d
+          name: 'Milestone: Get all cameras (batch master)'
+          type: EXTERNAL
+          key: 'milestone_cameras_read.sh[3600]'
+          delay: 5m
+          history: '0'
+          value_type: TEXT
+          description: |
+            Reads the JSON snapshot written by milestone_cameras_refresh.sh
+            (run from cron). The snapshot is already in the final shape
+            consumers need — every camera GUID is a top-level key for
+            O(1) JSONPath lookup by dependent items, and a flat
+            $.__array list is included for the LLD rule to iterate.
+            No preprocessing is needed; the item just stores the file
+            content verbatim. At 2500+ cameras, doing the reshape in
+            Python rather than Zabbix's Duktape JavaScript engine
+            avoids the 10-second preprocessing timeout.
+            See /usr/lib/zabbix/externalscripts/milestone_cameras_state.py.
+          tags:
+            - tag: component
+              value: camera
+        - uuid: 0c36cd75bd4944299009e53c05e5e7c9
+          name: 'Milestone: ESS live camera state snapshot'
+          type: EXTERNAL
+          key: 'milestone_ess_read.sh[]'
+          delay: '{$MILESTONE.ESS.DELAY}'
+          history: 7d
+          value_type: TEXT
+          description: |
+            Invokes /usr/lib/zabbix/externalscripts/milestone_ess_state.py
+            which opens a WebSocket to the Milestone Event & States Service,
+            calls get_state, and returns per-camera live state. Dependent
+            items below this parse individual fields with JSONPath.
+            
+            Default delay is daily; override with {$MILESTONE.ESS.DELAY}
+            (for example, 6h or 1h for tighter cadence at cost of load).
+          timeout: 10s
+          tags:
+            - tag: component
+              value: camera-state
+          triggers:
+            - uuid: c7e3d7905e82417f8d91d5ff3f815ce7
+              expression: 'find(/Milestone XProtect by HTTP/milestone_ess_read.sh[],,"regexp","\"error\":\"(stale|no_snapshot)\"")=1'
+              name: 'Milestone [{HOST.NAME}]: ESS snapshot stale or missing'
+              priority: WARNING
+              description: |
+                The daily milestone_ess_refresh.sh cron has not produced a fresh
+                snapshot, or it has been failing. Check the log at
+                /var/log/zabbix/milestone_ess_state.log on the Zabbix server/proxy.
+        - uuid: 1f9b3d5cf2914aebaa11a2b6cf57e9d6
+          name: 'Milestone: Get all camera groups (batch master)'
+          type: EXTERNAL
+          key: 'milestone_groups_read.sh[3600]'
+          delay: 15m
+          history: '0'
+          value_type: TEXT
+          description: |
+            Reads the JSON snapshot written by milestone_groups_refresh.sh
+            (run from cron). Shape matches the cameras snapshot — every
+            group GUID is a top-level key for O(1) JSONPath lookup by
+            dependent items, and a flat $.__array list is included for
+            the Group LLD rule below.
+            
+            Groups (a.k.a. cameraGroups in the REST API) are the logical
+            folders Smart Client shows in the device tree. Per Plan
+            v1.3 they're the canonical "site" axis for the TCS
+            Surveillance dashboard, replacing the older "every Zabbix
+            host = one site" model.
+            
+            See /usr/lib/zabbix/externalscripts/milestone_groups_state.py.
+          tags:
+            - tag: component
+              value: group
+          triggers:
+            - uuid: 7a2b4c8d61ee403b89e3d6c1f4a55792
+              expression: 'find(/Milestone XProtect by HTTP/milestone_groups_read.sh[3600],,"regexp","\"error\":\"(stale|no_snapshot)\"")=1'
+              name: 'Milestone [{HOST.NAME}]: groups snapshot stale or missing'
+              priority: WARNING
+              description: |
+                milestone_groups_refresh.sh has not produced a fresh
+                snapshot in the last hour. The dashboard's Sites tab
+                will fall back to host-as-site bucketing until this is
+                resolved. Check /var/log/zabbix/milestone_groups_state.log
+                on the Zabbix server/proxy.
+        - uuid: db5fce078cdc45398bee281a2732b01d
+          name: 'Milestone: API Gateway TCP reachable'
+          type: SIMPLE
+          key: 'net.tcp.service[tcp,{$MILESTONE.HOST},443]'
+          delay: 30s
+          description: 'Basic reachability check on TCP/443.'
+          valuemap:
+            name: 'Service state'
+          tags:
+            - tag: component
+              value: api-gateway
+      discovery_rules:
+        - uuid: db6d9ff5138549cb91d48e64b78f1505
+          name: 'Milestone: Camera discovery'
+          type: DEPENDENT
+          key: milestone.cameras.discovery
+          filter:
+            evaltype: AND
+            conditions:
+              - macro: '{#CAM.NAME}'
+                value: '{$MILESTONE.CAM.NAME.MATCHES}'
+              - macro: '{#CAM.NAME}'
+                value: '{$MILESTONE.CAM.NAME.NOT_MATCHES}'
+                operator: NOT_MATCHES_REGEX
+          lifetime: 1d
+          item_prototypes:
+            - uuid: 9c4e1a82bf4b4e5b8d0a16e3f47c5928
+              name: 'Cam [{#CAM.NAME}]: IP address'
+              type: DEPENDENT
+              key: 'milestone.cam.address[{#CAM.ID}]'
+              value_type: CHAR
+              description: |
+                IP address (or hostname) of this camera's parent hardware,
+                injected into the camera record by the batch master. This is
+                the same value used for {#CAM.ADDRESS} in the ICMP ping
+                items, exposed as a dependent item so it can be displayed,
+                graphed, or alerted on (e.g. unexpected address change).
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.address
+              master_item:
+                key: 'milestone.cam.raw[{#CAM.ID}]'
+              tags:
+                - tag: camera
+                  value: '{#CAM.NAME}'
+                - tag: component
+                  value: camera
+            - uuid: 022f5ffc93344840adabdb9c18a0478d
+              name: 'Cam [{#CAM.NAME}]: Alarm'
+              type: CALCULATED
+              key: 'milestone.cam.alarm[{#CAM.ID}]'
+              delay: '{$MILESTONE.CAM.PING.INTERVAL}'
+              value_type: FLOAT
+              params: |
+                (last(//milestone.cam.enabled[{#CAM.ID}])="false")*-1
+                + (last(//milestone.cam.enabled[{#CAM.ID}])="true")*(
+                    (max(last_foreach(/*/icmpping?[tag="cam_id:{#CAM.ID}"]))=0)*2
+                    + (length(last(//milestone.cam.ess.comm.type[{#CAM.ID}]))>0
+                       and last(//milestone.cam.ess.comm.type[{#CAM.ID}])<>"{$MILESTONE.ESS.TYPE.COMMUNICATION_OK}")*1
+                    + (max(last_foreach(/*/zabbix[host,snmp,available]?[tag="cam_id:{#CAM.ID}"]))=0)*4
+                  )
+              description: |
+                Same combined health score as 'Status (combined)', except
+                values 0 (OK) and -1 (disabled) are discarded in
+                preprocessing — only fault-state values (1..7) are
+                ever recorded. Drives the dashboard Honeycomb so it
+                shows zero cells when everything is healthy.
+              valuemap:
+                name: 'Camera status'
+              preprocessing:
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var v = Number(value);
+                      if (isNaN(v) || v <= 0) return null;
+                      return v;
+              tags:
+                - tag: camera
+                  value: '{#CAM.NAME}'
+                - tag: component
+                  value: camera-status
+                - tag: view
+                  value: alarm
+            - uuid: e181e9ad996b4853b7abf142f06a1488
+              name: 'Cam [{#CAM.NAME}]: Channel'
+              type: DEPENDENT
+              key: 'milestone.cam.channel[{#CAM.ID}]'
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.channel
+              master_item:
+                key: 'milestone.cam.raw[{#CAM.ID}]'
+              tags:
+                - tag: camera
+                  value: '{#CAM.NAME}'
+                - tag: component
+                  value: camera
+            - uuid: 40685d55f7554b578c8280c412f6f4fb
+              name: 'Cam [{#CAM.NAME}]: Enabled'
+              type: DEPENDENT
+              key: 'milestone.cam.enabled[{#CAM.ID}]'
+              value_type: CHAR
+              valuemap:
+                name: 'Bool string'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.enabled
+                - type: JAVASCRIPT
+                  parameters:
+                    - 'return String(value).toLowerCase();'
+              master_item:
+                key: 'milestone.cam.raw[{#CAM.ID}]'
+              tags:
+                - tag: camera
+                  value: '{#CAM.NAME}'
+                - tag: component
+                  value: camera
+              trigger_prototypes:
+                - uuid: f113a0645289483aa14dad319f42c9f8
+                  expression: 'last(/Milestone XProtect by HTTP/milestone.cam.enabled[{#CAM.ID}])="false"'
+                  name: 'Cam [{#CAM.NAME}]: disabled in XProtect'
+                  priority: WARNING
+            - uuid: 1f390508bd76487a9a3b9608bea90870
+              name: 'Cam [{#CAM.NAME}]: Communication state last change (ESS)'
+              type: DEPENDENT
+              key: 'milestone.cam.ess.comm.time[{#CAM.ID}]'
+              value_type: CHAR
+              preprocessing:
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var grp = '{$MILESTONE.ESS.STATEGROUP.COMMUNICATION}';
+                      if (!grp) return '';
+                      var blob;
+                      try { blob = JSON.parse(value); }
+                      catch (e) { return ''; }
+                      if (blob && blob.by_group && blob.by_group[grp]) {
+                        return blob.by_group[grp].time || '';
+                      }
+                      return '';
+              master_item:
+                key: 'milestone.cam.ess.raw[{#CAM.ID}]'
+              tags:
+                - tag: camera
+                  value: '{#CAM.NAME}'
+                - tag: component
+                  value: camera-state
+            - uuid: cb57e7943d1149d0839aa7fc666630c3
+              name: 'Cam [{#CAM.NAME}]: Communication state type GUID (ESS)'
+              type: DEPENDENT
+              key: 'milestone.cam.ess.comm.type[{#CAM.ID}]'
+              value_type: CHAR
+              description: |
+                Type GUID of this camera's current state within the
+                communication state group. Compare against
+                {$MILESTONE.ESS.TYPE.COMMUNICATION_OK} in a trigger.
+              preprocessing:
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var grp = '{$MILESTONE.ESS.STATEGROUP.COMMUNICATION}';
+                      if (!grp) return '';
+                      var blob;
+                      try { blob = JSON.parse(value); }
+                      catch (e) { return ''; }
+                      if (blob && blob.by_group && blob.by_group[grp]) {
+                        return blob.by_group[grp].type || '';
+                      }
+                      return '';
+              master_item:
+                key: 'milestone.cam.ess.raw[{#CAM.ID}]'
+              tags:
+                - tag: camera
+                  value: '{#CAM.NAME}'
+                - tag: component
+                  value: camera-state
+            - uuid: fd315cb9ebfa49f3b1b3fb1afcfe7c65
+              name: 'Cam [{#CAM.NAME}]: ESS state record'
+              type: DEPENDENT
+              key: 'milestone.cam.ess.raw[{#CAM.ID}]'
+              history: '0'
+              value_type: TEXT
+              description: |
+                Full ESS state record for this camera, extracted from the
+                daily snapshot. Contains 'states' (raw array) and 'by_group'
+                (map keyed by stategroupid) for downstream items to parse.
+              preprocessing:
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var blob;
+                      try { blob = JSON.parse(value); }
+                      catch (e) { return '{}'; }
+                      if (blob && blob.cameras && blob.cameras['{#CAM.ID}']) {
+                        return JSON.stringify(blob.cameras['{#CAM.ID}']);
+                      }
+                      return '{}';
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 7d
+              master_item:
+                key: 'milestone_ess_read.sh[]'
+              tags:
+                - tag: camera
+                  value: '{#CAM.NAME}'
+                - tag: component
+                  value: camera-state
+            - uuid: 6e8b16ce151d45fea8c2e9940381dd4f
+              name: 'Cam [{#CAM.NAME}]: Recording state type GUID (ESS)'
+              type: DEPENDENT
+              key: 'milestone.cam.ess.rec.type[{#CAM.ID}]'
+              value_type: CHAR
+              description: |
+                Type GUID of this camera's current state within the
+                recording state group. Compare against
+                {$MILESTONE.ESS.TYPE.RECORDING_STARTED} in a trigger.
+              preprocessing:
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var grp = '{$MILESTONE.ESS.STATEGROUP.RECORDING}';
+                      if (!grp) return '';
+                      var blob;
+                      try { blob = JSON.parse(value); }
+                      catch (e) { return ''; }
+                      if (blob && blob.by_group && blob.by_group[grp]) {
+                        return blob.by_group[grp].type || '';
+                      }
+                      return '';
+              master_item:
+                key: 'milestone.cam.ess.raw[{#CAM.ID}]'
+              tags:
+                - tag: camera
+                  value: '{#CAM.NAME}'
+                - tag: component
+                  value: camera-state
+            - uuid: b5a0b9c1067e4203ae8f70e9cffbaabe
+              name: 'Cam [{#CAM.NAME}]: Group'
+              type: DEPENDENT
+              key: 'milestone.cam.group[{#CAM.ID}]'
+              history: 1h
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.groupName
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1h
+              master_item:
+                key: 'milestone.cam.raw[{#CAM.ID}]'
+              tags:
+                - tag: camera
+                  value: '{#CAM.NAME}'
+                - tag: component
+                  value: camera
+            - uuid: a0b71c4d5e9f4b3c8d2e6f1a7b59c43d
+              name: 'Cam [{#CAM.NAME}]: Hardware model'
+              type: DEPENDENT
+              key: 'milestone.cam.hwmodel[{#CAM.ID}]'
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.hardwareModel
+              master_item:
+                key: 'milestone.cam.raw[{#CAM.ID}]'
+              tags:
+                - tag: camera
+                  value: '{#CAM.NAME}'
+                - tag: component
+                  value: camera
+            - uuid: 5d8a2bc916774cda9b5e3f2641a89b03
+              name: 'Cam [{#CAM.NAME}]: Hardware name'
+              type: DEPENDENT
+              key: 'milestone.cam.hwname[{#CAM.ID}]'
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.hardwareName
+              master_item:
+                key: 'milestone.cam.raw[{#CAM.ID}]'
+              tags:
+                - tag: camera
+                  value: '{#CAM.NAME}'
+                - tag: component
+                  value: camera
+            - uuid: d40cb1b169664db292e0e55717b5f9a2
+              name: 'Cam [{#CAM.NAME}]: Last modified'
+              type: DEPENDENT
+              key: 'milestone.cam.lastmodified[{#CAM.ID}]'
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.lastModified
+              master_item:
+                key: 'milestone.cam.raw[{#CAM.ID}]'
+              tags:
+                - tag: camera
+                  value: '{#CAM.NAME}'
+                - tag: component
+                  value: camera
+            - uuid: 3360329a96ca4f51a0b02cb1fd54d296
+              name: 'Cam [{#CAM.NAME}]: MAC address'
+              type: DEPENDENT
+              key: 'milestone.cam.mac[{#CAM.ID}]'
+              value_type: CHAR
+              description: |
+                MAC address of this camera's parent hardware, normalised
+                to AA:BB:CC:DD:EE:FF uppercase form by the batch helper.
+                In Milestone the MAC isn't a top-level hardware property
+                but a "hardware setting" named MacAddress, so the helper
+                pulls it via includeChildren=settings (or per-hardware
+                /hardware/{id}/settings calls if the API version doesn't
+                support inline settings). An empty value means Milestone
+                has no MAC recorded for that hardware — common for ONVIF
+                devices the recording server couldn't fully probe — and
+                is safe to ignore.
+                
+                Multi-channel encoders (one hardware, multiple cameras)
+                will share a MAC across all child camera items, since
+                the MAC belongs to the encoder hardware, not the
+                logical channel.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.mac
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1h
+              master_item:
+                key: 'milestone.cam.raw[{#CAM.ID}]'
+              tags:
+                - tag: camera
+                  value: '{#CAM.NAME}'
+                - tag: component
+                  value: camera
+            - uuid: 9a3122b3739b44239aed25195e1a8a6b
+              name: 'Cam [{#CAM.NAME}]: Detail (per-camera dependent master)'
+              type: DEPENDENT
+              key: 'milestone.cam.raw[{#CAM.ID}]'
+              history: '0'
+              value_type: TEXT
+              description: |
+                Extracts this camera's record from the batch master. Per-field
+                items below depend on this. At 2500 cameras this means zero
+                additional API calls per camera — everything rides on the
+                single milestone_cameras_read.sh call.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$["{#CAM.ID}"]'
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1h
+              master_item:
+                key: 'milestone_cameras_read.sh[3600]'
+              tags:
+                - tag: camera
+                  value: '{#CAM.NAME}'
+                - tag: component
+                  value: camera
+              trigger_prototypes:
+                - uuid: 81a2135069de42b99bdae28df3595c14
+                  expression: 'nodata(/Milestone XProtect by HTTP/milestone.cam.raw[{#CAM.ID}],15m)=1'
+                  name: 'Cam [{#CAM.NAME}]: no data for 15m (API unreachable or removed)'
+                  status: DISABLED
+                  priority: AVERAGE
+                  description: |
+                    DISABLED by default — see note above. Use the dashboard's
+                    Camera Status honeycomb widget to spot cameras that have
+                    stopped reporting.
+            - uuid: 6b3d1c9a8f4242b39e0a8e0fcf317e22
+              name: 'Cam [{#CAM.NAME}]: Recording server id'
+              type: DEPENDENT
+              key: 'milestone.cam.rsid[{#CAM.ID}]'
+              value_type: CHAR
+              description: |
+                Recording-server GUID this camera lives on (the
+                grandparent of the camera in the XProtect tree:
+                ManagementServer > RecordingServer > Hardware >
+                Camera). Stamped by milestone_cameras_state.py from
+                hw.relations.parent.id. Empty if the API version
+                doesn't expose it.
+                
+                Used by the surveillance dashboard's Sites tab to
+                attribute camera groups to their hosting recording
+                server (group → cameras → RS).
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.recordingServerId
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1h
+              master_item:
+                key: 'milestone.cam.raw[{#CAM.ID}]'
+              tags:
+                - tag: camera
+                  value: '{#CAM.NAME}'
+                - tag: component
+                  value: camera
+            - uuid: 03e6a28248d94a4c9f935c7d7c2b03ed
+              name: 'Cam [{#CAM.NAME}]: Hardware id'
+              type: DEPENDENT
+              key: 'milestone.cam.rs[{#CAM.ID}]'
+              value_type: CHAR
+              description: |
+                The parent hardware GUID. Note: a camera's relations.parent
+                is the hardware object, not the recording server (which is
+                the grandparent). Per-Milestone-engineer guidance on the MIP
+                forum. Item key is kept as 'milestone.cam.rs' for
+                backward-compatibility with existing history.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.relations.parent.id
+              master_item:
+                key: 'milestone.cam.raw[{#CAM.ID}]'
+              tags:
+                - tag: camera
+                  value: '{#CAM.NAME}'
+                - tag: component
+                  value: camera
+            - uuid: 9ece2ec4ba874c549d87dcd5af519e52
+              name: 'Cam [{#CAM.NAME}]: Status (combined)'
+              type: CALCULATED
+              key: 'milestone.cam.status[{#CAM.ID}]'
+              delay: '{$MILESTONE.CAM.PING.INTERVAL}'
+              value_type: FLOAT
+              params: |
+                (last(//milestone.cam.enabled[{#CAM.ID}])="false")*-1
+                + (last(//milestone.cam.enabled[{#CAM.ID}])="true")*(
+                    (max(last_foreach(/*/icmpping?[tag="cam_id:{#CAM.ID}"]))=0)*2
+                    + (length(last(//milestone.cam.ess.comm.type[{#CAM.ID}]))>0
+                       and last(//milestone.cam.ess.comm.type[{#CAM.ID}])<>"{$MILESTONE.ESS.TYPE.COMMUNICATION_OK}")*1
+                    + (max(last_foreach(/*/zabbix[host,snmp,available]?[tag="cam_id:{#CAM.ID}"]))=0)*4
+                  )
+              description: |
+                Combined health score for honeycomb display, folding
+                three independent signals into one value:
+                
+                  bit 0 (+1)  ESS communication state != OK GUID
+                  bit 1 (+2)  ICMP unreachable
+                  bit 2 (+4)  SNMP availability = 0 (down)
+                
+                Values:
+                  -1  Disabled in XProtect
+                   0  OK (all three signals OK)
+                   1  ESS comm fault only
+                   2  ICMP unreachable, ESS still OK
+                   3  Offline (ICMP + ESS)
+                   4  SNMP fault only (ping + ESS OK)
+                   5  SNMP + ESS fault
+                   6  SNMP + ICMP fault
+                   7  Offline (all three down)
+                
+                Cross-host items are looked up via the cam_id tag the
+                host_prototype stamps on every per-camera Zabbix host
+                (G4 + G23). last() with the ?[tag="..."] selector
+                returns the value from the single matching host;
+                zabbix[host,snmp,available] there reports 0 (down),
+                1 (up), or 2 (unknown — no SNMP items configured, no
+                penalty applied).
+              valuemap:
+                name: 'Camera status'
+              tags:
+                - tag: camera
+                  value: '{#CAM.NAME}'
+                - tag: component
+                  value: camera-status
+                - tag: view
+                  value: status-all
+          trigger_prototypes:
+            - uuid: a7aeb84a29464b9eacfae1cd0ab3f199
+              expression: 'last(/Milestone XProtect by HTTP/milestone.cam.ess.comm.type[{#CAM.ID}])<>"{$MILESTONE.ESS.TYPE.COMMUNICATION_OK}" and last(/Milestone XProtect by HTTP/milestone.cam.enabled[{#CAM.ID}])="true" and length(last(/Milestone XProtect by HTTP/milestone.cam.ess.comm.type[{#CAM.ID}]))>0'
+              name: 'Cam [{#CAM.NAME}]: communication not OK (per last ESS snapshot)'
+              status: DISABLED
+              priority: HIGH
+              description: |
+                DISABLED by default — see note above. Camera is enabled in
+                XProtect but the last ESS snapshot reported a communication
+                -state type other than the "OK" GUID. Requires
+                {$MILESTONE.ESS.TYPE.COMMUNICATION_OK} and
+                {$MILESTONE.ESS.STATEGROUP.COMMUNICATION} to be set
+                on the host.
+            - uuid: dd5ec3cfb9df49ca94ade9ce299c15f6
+              expression: 'last(/Milestone XProtect by HTTP/milestone.cam.ess.rec.type[{#CAM.ID}])<>"{$MILESTONE.ESS.TYPE.RECORDING_STARTED}" and last(/Milestone XProtect by HTTP/milestone.cam.enabled[{#CAM.ID}])="true" and length(last(/Milestone XProtect by HTTP/milestone.cam.ess.rec.type[{#CAM.ID}]))>0'
+              name: 'Cam [{#CAM.NAME}]: not recording (per last ESS snapshot)'
+              status: DISABLED
+              priority: AVERAGE
+              description: |
+                DISABLED by default — see note above. Camera is enabled but
+                the last ESS snapshot reported a recording-state type other
+                than the "Started" GUID. Requires
+                {$MILESTONE.ESS.TYPE.RECORDING_STARTED} and
+                {$MILESTONE.ESS.STATEGROUP.RECORDING} to be set.
+          host_prototypes:
+            - uuid: 481d66ed2de544388bc481cd69a1679d
+              host: 'Camera-{#CAM.HW.ID}'
+              name: '{#CAM.HW.NAME} ({#CAM.HW.IP})'
+              group_links:
+                - group:
+                    name: 'Discovered hosts/Milestone Cameras'
+              templates:
+                - name: 'Milestone Camera by Direct Polling'
+              tags:
+                - tag: cam_hw_id
+                  value: '{#CAM.HW.ID}'
+                - tag: cam_id
+                  value: '{#CAM.ID}'
+                - tag: site
+                  value: '{$MILESTONE.SITE.NAME}'
+                - tag: vendor
+                  value: '{#CAM.HW.VENDOR}'
+              custom_interfaces: 'YES'
+              interfaces:
+                - type: SNMP
+                  ip: '{#CAM.HW.IP}'
+                  port: '161'
+                  details:
+                    community: '{$MS.CAM.SNMP.COMMUNITY}'
+          master_item:
+            key: 'milestone_cameras_read.sh[3600]'
+          lld_macro_paths:
+            - lld_macro: '{#CAM.ADDRESS}'
+              path: $.address
+            - lld_macro: '{#CAM.ENABLED}'
+              path: $.enabled
+            - lld_macro: '{#CAM.HW.ID}'
+              path: $.hardwareId
+            - lld_macro: '{#CAM.HW.IP}'
+              path: $.address
+            - lld_macro: '{#CAM.HW.MODEL}'
+              path: $.hardwareModel
+            - lld_macro: '{#CAM.HW.NAME}'
+              path: $.hardwareName
+            - lld_macro: '{#CAM.HW.VENDOR}'
+              path: $.vendor
+            - lld_macro: '{#CAM.ID}'
+              path: $.id
+            - lld_macro: '{#CAM.MAC}'
+              path: $.mac
+            - lld_macro: '{#CAM.NAME}'
+              path: $.displayName
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.__array[*]'
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // Synthesise per-camera 'vendor' field from hardwareModel
+                  // so the host_prototype LLD override can gate the Bosch
+                  // sub-template on it. Regex is case-insensitive and
+                  // prefix-tolerant (per M0_Bosch_Fleet_Compatibility.md
+                  // §2 — fleet model strings include 'Bosch ', 'BOSCH ',
+                  // and no-prefix variants of the same physical model).
+                  var arr = JSON.parse(value);
+                  for (var i = 0; i < arr.length; i++) {
+                    var m = String(arr[i].hardwareModel || '').toLowerCase();
+                    if (/^(?:bosch\s+)?(?:flexidome|dinion|autodome|nbn|nde|ndp|nds|ndv|nin|nbe|ntc)/.test(m)) {
+                      arr[i].vendor = 'bosch';
+                    } else if (/axis/.test(m)) {
+                      arr[i].vendor = 'axis';
+                    } else if (/hanwha|samsung/.test(m)) {
+                      arr[i].vendor = 'hanwha';
+                    } else if (/hikvision|hik\b/.test(m)) {
+                      arr[i].vendor = 'hikvision';
+                    } else if (/dahua/.test(m)) {
+                      arr[i].vendor = 'dahua';
+                    } else {
+                      arr[i].vendor = 'other';
+                    }
+                  }
+                  return JSON.stringify(arr);
+          overrides:
+            - name: 'Link Bosch sub-template for Bosch cameras'
+              step: '1'
+              filter:
+                evaltype: AND
+                conditions:
+                  - macro: '{#CAM.HW.VENDOR}'
+                    value: ^bosch$
+              operations:
+                - operationobject: HOST_PROTOTYPE
+                  operator: REGEXP
+                  value: ^Camera-
+                  templates:
+                    - name: 'Milestone Camera vendor - Bosch'
+        - uuid: 4a3e6d2c19b7402a83b1ce8d27f455a1
+          name: 'Milestone: Camera group discovery'
+          type: DEPENDENT
+          key: milestone.groups.discovery
+          filter:
+            evaltype: AND
+            conditions:
+              - macro: '{#GRP.NAME}'
+                value: '{$MILESTONE.GRP.NAME.MATCHES}'
+              - macro: '{#GRP.NAME}'
+                value: '{$MILESTONE.GRP.NAME.NOT_MATCHES}'
+                operator: NOT_MATCHES_REGEX
+          description: |
+            Discovers Milestone camera groups (the "sites" axis Smart
+            Client uses). Each group becomes a row with cameraCount /
+            hardwareCount surfaced as dependent items below.
+            
+            No host_prototype here by design (Plan v1.3, operator
+            choice) — groups are organisational, not addressable
+            hosts, so they live as LLD items only.
+          item_prototypes:
+            - uuid: c8b5e9d72143460faa9f31de8b76c104
+              name: 'Group [{#GRP.NAME}]: Camera count'
+              type: DEPENDENT
+              key: 'milestone.grp.cam.count[{#GRP.ID}]'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.cameraCount
+              master_item:
+                key: 'milestone.grp.raw[{#GRP.ID}]'
+              tags:
+                - tag: component
+                  value: group
+                - tag: group
+                  value: '{#GRP.NAME}'
+            - uuid: e7f1c8b3d2904e95a5d4e6c19b8a3f7d
+              name: 'Group [{#GRP.NAME}]: Hardware count'
+              type: DEPENDENT
+              key: 'milestone.grp.hw.count[{#GRP.ID}]'
+              description: |
+                Distinct parent-hardware count for cameras in this
+                group. Multi-channel encoders share a hardware row, so
+                hardwareCount <= cameraCount for groups that include
+                encoder channels.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.hardwareCount
+              master_item:
+                key: 'milestone.grp.raw[{#GRP.ID}]'
+              tags:
+                - tag: component
+                  value: group
+                - tag: group
+                  value: '{#GRP.NAME}'
+            - uuid: ad7e9c3b5f6a4180b1c2eafd57293ee0
+              name: 'Group [{#GRP.NAME}]: Name'
+              type: DEPENDENT
+              key: 'milestone.grp.name[{#GRP.ID}]'
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.name
+              master_item:
+                key: 'milestone.grp.raw[{#GRP.ID}]'
+              tags:
+                - tag: component
+                  value: group
+                - tag: group
+                  value: '{#GRP.NAME}'
+            - uuid: 9c52a13bf0e84217a4c8f0d6b2e3915c
+              name: 'Group [{#GRP.NAME}]: Detail (per-group dependent master)'
+              type: DEPENDENT
+              key: 'milestone.grp.raw[{#GRP.ID}]'
+              history: '0'
+              value_type: TEXT
+              description: |
+                Extracts this group's record from the batch master. Per-
+                field items below depend on this so value-cache lookups
+                stay local — same pattern as milestone.cam.raw and
+                milestone.rs.raw.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$["{#GRP.ID}"]'
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1h
+              master_item:
+                key: 'milestone_groups_read.sh[3600]'
+              tags:
+                - tag: component
+                  value: group
+                - tag: group
+                  value: '{#GRP.NAME}'
+          master_item:
+            key: 'milestone_groups_read.sh[3600]'
+          lld_macro_paths:
+            - lld_macro: '{#GRP.CAMERA_COUNT}'
+              path: $.cameraCount
+            - lld_macro: '{#GRP.HARDWARE_COUNT}'
+              path: $.hardwareCount
+            - lld_macro: '{#GRP.ID}'
+              path: $.id
+            - lld_macro: '{#GRP.NAME}'
+              path: $.name
+            - lld_macro: '{#GRP.PARENT_ID}'
+              path: $.parentGroupId
+            - lld_macro: '{#GRP.PATH}'
+              path: $.path
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.__array[*]'
+        - uuid: 3f88ab587d5048fd8698550a4f951d01
+          name: 'Milestone: Recording Server discovery'
+          type: DEPENDENT
+          key: milestone.recordingservers.discovery
+          lifetime: 2d
+          item_prototypes:
+            - uuid: 2029189a6ee14ed4825d57c2f220dd77
+              name: 'RS [{#RS.NAME}]: Enabled'
+              type: DEPENDENT
+              key: 'milestone.rs.enabled[{#RS.ID}]'
+              value_type: CHAR
+              valuemap:
+                name: 'Bool string'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.enabled
+                - type: JAVASCRIPT
+                  parameters:
+                    - 'return String(value).toLowerCase();'
+              master_item:
+                key: 'milestone.rs.raw[{#RS.ID}]'
+              tags:
+                - tag: component
+                  value: recording-server
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+              trigger_prototypes:
+                - uuid: ec5e8bfc0dfe4d379cfaef1a175fbab6
+                  expression: 'last(/Milestone XProtect by HTTP/milestone.rs.enabled[{#RS.ID}])="false"'
+                  name: 'RS [{#RS.NAME}]: disabled in XProtect'
+                  priority: WARNING
+            - uuid: de55563163be4052a1ca21e0df9498fb
+              name: 'RS [{#RS.NAME}]: Seconds since last handshake'
+              type: DEPENDENT
+              key: 'milestone.rs.handshake.age[{#RS.ID}]'
+              units: s
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.lastStatusHandshake
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      if (!value) return 0;
+                      var ts = Date.parse(value);
+                      if (isNaN(ts)) return 0;
+                      return Math.floor((Date.now() - ts) / 1000);
+              master_item:
+                key: 'milestone.rs.raw[{#RS.ID}]'
+              tags:
+                - tag: component
+                  value: recording-server
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+              trigger_prototypes:
+                - uuid: ab618965918645129964db3a3fb34de9
+                  expression: 'last(/Milestone XProtect by HTTP/milestone.rs.handshake.age[{#RS.ID}])>300'
+                  name: 'RS [{#RS.NAME}]: handshake stale (>5m)'
+                  priority: HIGH
+                  description: |
+                    The recording server has not checked in with the management
+                    server in the last 5 minutes. The server or recorder service
+                    may be down.
+            - uuid: 95686a1bc70a41aba2c69fe74560ad9a
+              name: 'RS [{#RS.NAME}]: Host name'
+              type: DEPENDENT
+              key: 'milestone.rs.hostname[{#RS.ID}]'
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.hostName
+              master_item:
+                key: 'milestone.rs.raw[{#RS.ID}]'
+              tags:
+                - tag: component
+                  value: recording-server
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+            - uuid: e3f73eb528b14aa59ad51c3a6479dac6
+              name: 'RS [{#RS.NAME}]: Last handshake'
+              type: DEPENDENT
+              key: 'milestone.rs.lasthandshake[{#RS.ID}]'
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.lastStatusHandshake
+              master_item:
+                key: 'milestone.rs.raw[{#RS.ID}]'
+              tags:
+                - tag: component
+                  value: recording-server
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+            - uuid: 6574c1c3cb684630a5f469181c7824c4
+              name: 'RS [{#RS.NAME}]: Detail (per-RS dependent master)'
+              type: DEPENDENT
+              key: 'milestone.rs.raw[{#RS.ID}]'
+              history: '0'
+              value_type: TEXT
+              description: |
+                Extracts this RS's record from the batch master. Per-field
+                items below depend on this so value-cache lookups stay local.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$["{#RS.ID}"]'
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1h
+              master_item:
+                key: milestone.rs.getall
+              tags:
+                - tag: component
+                  value: recording-server
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+              trigger_prototypes:
+                - uuid: 509f5e38e5b14063b6b1dca43003483e
+                  expression: 'nodata(/Milestone XProtect by HTTP/milestone.rs.raw[{#RS.ID}],15m)=1'
+                  name: 'RS [{#RS.NAME}]: no API data for 15m'
+                  priority: AVERAGE
+            - uuid: e985ec7b69414435bde4c0bea79c18a7
+              name: 'RS [{#RS.NAME}]: Version'
+              type: DEPENDENT
+              key: 'milestone.rs.version[{#RS.ID}]'
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.version
+              master_item:
+                key: 'milestone.rs.raw[{#RS.ID}]'
+              tags:
+                - tag: component
+                  value: recording-server
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+          master_item:
+            key: milestone.rs.getall
+          lld_macro_paths:
+            - lld_macro: '{#RS.DESCRIPTION}'
+              path: $.description
+            - lld_macro: '{#RS.ID}'
+              path: $.id
+            - lld_macro: '{#RS.NAME}'
+              path: $.displayName
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var obj = JSON.parse(value);
+                  var out = [];
+                  for (var k in obj) {
+                    if (obj.hasOwnProperty(k)) out.push(obj[k]);
+                  }
+                  return JSON.stringify(out);
+            - type: JSONPATH
+              parameters:
+                - '$.[*]'
+      macros:
+        - macro: '{$MILESTONE.CAM.NAME.MATCHES}'
+          value: '.*'
+          description: 'Regex of camera names to include (default all).'
+        - macro: '{$MILESTONE.CAM.NAME.NOT_MATCHES}'
+          value: ^$
+          description: 'Regex of camera names to exclude.'
+        - macro: '{$MILESTONE.CAM.PING.INTERVAL}'
+          value: 1m
+          description: 'ICMP ping interval for discovered cameras. Default 1m. Increase (e.g. 5m) on large sites to reduce Zabbix poller load. Valid Zabbix time suffixes: s, m, h.'
+        - macro: '{$MILESTONE.CLIENT_ID}'
+          value: GrantValidatorClient
+          description: 'OAuth client id for the built-in IDP.'
+        - macro: '{$MILESTONE.ESS.DELAY}'
+          value: 1d
+          description: 'Poll interval for the ESS live-state snapshot. Default 1 day. Valid Zabbix time suffixes: s, m, h, d. Example: 6h, 30m.'
+        - macro: '{$MILESTONE.ESS.STATEGROUP.COMMUNICATION}'
+          value: 53b40c77-cf48-42a2-a432-db65ae3afc7a
+          description: 'GUID of the communication-state group in your install. Discover with: milestone_ess_state.py ... --list-stategroups'
+        - macro: '{$MILESTONE.ESS.STATEGROUP.RECORDING}'
+          description: 'GUID of the recording-state group in your install.'
+        - macro: '{$MILESTONE.ESS.TYPE.COMMUNICATION_OK}'
+          value: dd3e6464-7dc0-405a-a92f-6150587563e8
+          description: 'GUID of the "communication is OK / camera connected" event type within the communication stategroup. Triggers compare against this GUID.'
+        - macro: '{$MILESTONE.ESS.TYPE.RECORDING_STARTED}'
+          description: 'GUID of the "recording started / ongoing" event type within the recording stategroup.'
+        - macro: '{$MILESTONE.GRP.NAME.MATCHES}'
+          value: '.*'
+          description: 'Regex of camera-group names to include (default all). Sites tab in the surveillance dashboard renders one row per group that matches this.'
+        - macro: '{$MILESTONE.GRP.NAME.NOT_MATCHES}'
+          value: ^$
+          description: 'Regex of camera-group names to exclude. Use to hide system / utility groups (e.g. ^System$).'
+        - macro: '{$MILESTONE.HOST}'
+          value: 127.0.0.1
+          description: 'API Gateway hostname or IP.'
+        - macro: '{$MILESTONE.PASSWORD}'
+          type: SECRET_TEXT
+          description: 'XProtect Basic user password.'
+        - macro: '{$MILESTONE.SCHEME}'
+          value: https
+          description: 'http or https.'
+        - macro: '{$MILESTONE.SITE.NAME}'
+          description: 'Human-readable site name. Stamped onto every per-camera host as a "site" tag (per Plan v1.2 §C7 tag schema). Set to e.g. "BryantHS" / "AustinES" per-host or globally.'
+        - macro: '{$MILESTONE.USER}'
+          description: 'XProtect Basic user name.'
+        - macro: '{$MS.CAM.SNMP.COMMUNITY}'
+          type: SECRET_TEXT
+          description: 'SNMPv1/v2c community for the per-camera host SNMP interface. Operator sets this once at the host_prototype level (template macro override on the Site host).'
+      dashboards:
+        - uuid: 698e3551a9f346029e3f312a95c20e5b
+          name: 'Milestone XProtect overview'
+          pages:
+            - name: Overview
+              widgets:
+                - type: item
+                  name: Site
+                  width: '18'
+                  height: '3'
+                  fields:
+                    - type: ITEM
+                      name: itemid.0
+                      value:
+                        host: 'Milestone XProtect by HTTP'
+                        key: milestone.site.name
+                - type: honeycomb
+                  name: 'Cameras with alarms (filterable)'
+                  'y': '3'
+                  width: '72'
+                  height: '14'
+                  fields:
+                    - type: STRING
+                      name: items.0
+                      value: 'Cam * Alarm'
+                    - type: INTEGER
+                      name: item_tags.0.operator
+                      value: '1'
+                    - type: STRING
+                      name: item_tags.0.tag
+                      value: view
+                    - type: STRING
+                      name: item_tags.0.value
+                      value: alarm
+                    - type: STRING
+                      name: primary_label
+                      value: '{{ITEM.NAME}.regsub("^Cam \[(.+)\]: Alarm$", "\1")}'
+                    - type: STRING
+                      name: reference
+                      value: HONEY
+                    - type: STRING
+                      name: secondary_label
+                      value: '{ITEM.VALUE}'
+                    - type: STRING
+                      name: thresholds.0.color
+                      value: FFD54F
+                    - type: STRING
+                      name: thresholds.0.threshold
+                      value: '1'
+                    - type: STRING
+                      name: thresholds.1.color
+                      value: FF9800
+                    - type: STRING
+                      name: thresholds.1.threshold
+                      value: '2'
+                    - type: STRING
+                      name: thresholds.2.color
+                      value: FF465C
+                    - type: STRING
+                      name: thresholds.2.threshold
+                      value: '3'
+                - type: itemnavigator
+                  name: 'Camera list (filterable)'
+                  'y': '17'
+                  width: '36'
+                  height: '8'
+                  fields:
+                    - type: INTEGER
+                      name: group_by.0.attribute
+                      value: '0'
+                    - type: STRING
+                      name: items.0
+                      value: 'Cam * Status (combined)'
+                    - type: STRING
+                      name: reference
+                      value: CAMNAV
+                - type: problems
+                  name: 'Other active problems (this host)'
+                  'y': '25'
+                  width: '72'
+                  height: '5'
+                - type: item
+                  name: 'Mgmt Server version'
+                  x: '18'
+                  width: '18'
+                  height: '3'
+                  fields:
+                    - type: ITEM
+                      name: itemid.0
+                      value:
+                        host: 'Milestone XProtect by HTTP'
+                        key: milestone.site.version
+                - type: item
+                  name: 'Physical memory'
+                  x: '36'
+                  width: '18'
+                  height: '3'
+                  fields:
+                    - type: ITEM
+                      name: itemid.0
+                      value:
+                        host: 'Milestone XProtect by HTTP'
+                        key: milestone.site.physicalmemory
+                - type: itemcard
+                  name: 'Selected camera details'
+                  x: '36'
+                  'y': '17'
+                  width: '36'
+                  height: '8'
+                  fields:
+                    - type: STRING
+                      name: itemid._reference
+                      value: CAMNAV._itemid
+                - type: item
+                  name: 'API Gateway'
+                  x: '54'
+                  width: '18'
+                  height: '3'
+                  fields:
+                    - type: ITEM
+                      name: itemid.0
+                      value:
+                        host: 'Milestone XProtect by HTTP'
+                        key: 'net.tcp.service[tcp,{$MILESTONE.HOST},443]'
+      valuemaps:
+        - uuid: 2c80feffa4fa479ab70a6e1498e03c20
+          name: 'Bool string'
+          mappings:
+            - value: 'true'
+              newvalue: Enabled
+            - value: 'false'
+              newvalue: Disabled
+        - uuid: 1cf6721e386244eb9f8da362ca949781
+          name: 'Camera status'
+          mappings:
+            - value: '-1'
+              newvalue: 'Disabled in XProtect'
+            - value: '0'
+              newvalue: OK
+            - value: '1'
+              newvalue: 'ESS comm fault'
+            - value: '2'
+              newvalue: 'Ping down'
+            - value: '3'
+              newvalue: 'Offline (ping + ESS)'
+            - value: '4'
+              newvalue: 'SNMP fault'
+            - value: '5'
+              newvalue: 'SNMP + ESS fault'
+            - value: '6'
+              newvalue: 'SNMP + Ping fault'
+            - value: '7'
+              newvalue: 'Offline (all three)'
+        - uuid: 6e0a21b3c8e64f24b1fdb6054f1ea8d2
+          name: 'Service state'
+          mappings:
+            - value: '0'
+              newvalue: Down
+            - value: '1'
+              newvalue: Up
+    - uuid: 8f3b1e2d7a4c4f0fa8c1b5e9c2d8e4f1
+      template: 'Milestone XProtect RS extras by HTTP'
+      name: 'Milestone XProtect RS extras by HTTP'
+      description: |
+        Adds per-Recording-Server signals the base 'Milestone XProtect
+        by HTTP' template doesn't carry yet:
+        
+          * Service / running state (per /recordingServers.state)
+          * Camera count + parent-hardware count per RS
+          * Per-RS storage rollup: total capacity, used, shortest
+            retention
+          * Per-storage LLD with path / size / used / retention
+        
+        Link this template alongside 'Milestone XProtect by HTTP' on
+        the same site host. The base template still owns OAuth, RS
+        discovery, and per-camera items; this one only pulls extras
+        that need the /recordingServers/{id}/storages and
+        /recordingServers/{id}/hardware endpoints.
+        
+        Required external scripts (deploy to
+        /usr/lib/zabbix/externalscripts/):
+            milestone_rs_state.py
+            milestone_rs_refresh.sh
+            milestone_rs_read.sh
+        
+        Required cron entry (as the zabbix user):
+          */15 * * * * /usr/lib/zabbix/externalscripts/milestone_rs_refresh.sh \
+              {$MILESTONE.HOST} {$MILESTONE.USER} 'PASSWORD' --scheme https
+      vendor:
+        name: Community
+        version: 7.4-0
+      groups:
+        - name: Templates/Video
+      items:
+        - uuid: 3a9c8d4b1e6f4a728d5b0c2e9f1a7b34
+          name: 'Milestone RS: state snapshot (master)'
+          type: EXTERNAL
+          key: 'milestone_rs_read.sh[3600]'
+          delay: 5m
+          history: '0'
+          value_type: TEXT
+          description: |
+            Reads /var/lib/zabbix/milestone_rs_state.json written by
+            milestone_rs_refresh.sh (cron, every 15 min). The snapshot
+            has top-level GUID keys per RS (for O(1) JSONPath lookup
+            by dependent items) plus $.__array / $.__storages for LLD.
+          tags:
+            - tag: component
+              value: recording-server
+          triggers:
+            - uuid: a48c25f7e9b6498b9f1c83d6027bea15
+              expression: 'find(/Milestone XProtect RS extras by HTTP/milestone_rs_read.sh[3600],,"regexp","\"error\":\"(stale|no_snapshot)\"")=1'
+              name: 'Milestone [{HOST.NAME}]: RS extras snapshot stale or missing'
+              priority: WARNING
+              description: |
+                milestone_rs_refresh.sh has not produced a fresh snapshot
+                in the last hour. Per-RS state / storage data on the
+                surveillance dashboard will be missing until this is
+                resolved. Check
+                /var/log/zabbix/milestone_rs_state.log on the Zabbix
+                server/proxy.
+      discovery_rules:
+        - uuid: 4d7e8b6a3c2f4519bf5e0c7d8a91e23f
+          name: 'Milestone RS extras: per-RS discovery'
+          type: DEPENDENT
+          key: milestone.rs.extras.discovery
+          lifetime: 2d
+          item_prototypes:
+            - uuid: 7c8e2b3a9d1f4670bf3d5c1e8a04f72b
+              name: 'RS [{#RS.NAME}]: Cameras'
+              type: DEPENDENT
+              key: 'milestone.rs.cameracount[{#RS.ID}]'
+              description: |
+                Count of cameras attached to this RS via its parent
+                hardware. Tallied server-side so the dashboard does not
+                need to walk the full cameras snapshot to derive it.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.cameraCount
+              master_item:
+                key: 'milestone.rs.extras.raw[{#RS.ID}]'
+              tags:
+                - tag: component
+                  value: recording-server
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+            - uuid: e2b0a51f4c8d4769b3e7d2f8a1059c84
+              name: 'RS [{#RS.NAME}]: Detail (per-RS dependent master)'
+              type: DEPENDENT
+              key: 'milestone.rs.extras.raw[{#RS.ID}]'
+              history: '0'
+              value_type: TEXT
+              description: |
+                Extracts this RS's record from the snapshot master via
+                JSONPath $["{#RS.ID}"]. Works because
+                milestone_rs_state.py writes the snapshot with the same
+                top-level-GUID-keys + __array shape as the cameras
+                snapshot.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$["{#RS.ID}"]'
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1h
+              master_item:
+                key: 'milestone_rs_read.sh[3600]'
+              tags:
+                - tag: component
+                  value: recording-server
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+            - uuid: 51a9c4b6e8d3479fa6c0e7d1b5f8a932
+              name: 'RS [{#RS.NAME}]: Hardware devices'
+              type: DEPENDENT
+              key: 'milestone.rs.hardwarecount[{#RS.ID}]'
+              description: |
+                Distinct parent-hardware count. Multi-channel encoders
+                count once here but contribute multiple cameras.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.hardwareCount
+              master_item:
+                key: 'milestone.rs.extras.raw[{#RS.ID}]'
+              tags:
+                - tag: component
+                  value: recording-server
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+            - uuid: 6f1a3b8c4d2e4910b7d6e3c5a92f1b48
+              name: 'RS [{#RS.NAME}]: Service state'
+              type: DEPENDENT
+              key: 'milestone.rs.state[{#RS.ID}]'
+              value_type: CHAR
+              description: |
+                Per-RS runtime state from /recordingServers.state. Maps
+                to Milestone's "Server" / "Recorder" / "Error" / etc.
+                strings; UI surfaces ok / warn / err from this value.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.state
+              master_item:
+                key: 'milestone.rs.extras.raw[{#RS.ID}]'
+              tags:
+                - tag: component
+                  value: recording-server
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+            - uuid: c9a4e7b2f8d34c61b9f0d6c3a18e2549
+              name: 'RS [{#RS.NAME}]: Retention (shortest, minutes)'
+              type: DEPENDENT
+              key: 'milestone.rs.storage.retention.minutes[{#RS.ID}]'
+              units: m
+              description: |
+                Shortest retainMinutes across all storages on this RS.
+                Drives the "retention may roll early" warning on the
+                Surveillance NOC Sites tab.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.storageRetentionMinutesMin
+              master_item:
+                key: 'milestone.rs.extras.raw[{#RS.ID}]'
+              tags:
+                - tag: component
+                  value: recording-server
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+            - uuid: 92ed5f7c1b3a4dc0a4e6b8c2d9f17150
+              name: 'RS [{#RS.NAME}]: Storage capacity (total)'
+              type: DEPENDENT
+              key: 'milestone.rs.storage.total.bytes[{#RS.ID}]'
+              units: B
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.storageTotalBytes
+              master_item:
+                key: 'milestone.rs.extras.raw[{#RS.ID}]'
+              tags:
+                - tag: component
+                  value: recording-server
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+            - uuid: bd6f8e2a1c4b495db7c5e9d0a3f24617
+              name: 'RS [{#RS.NAME}]: Storage used'
+              type: DEPENDENT
+              key: 'milestone.rs.storage.used.bytes[{#RS.ID}]'
+              units: B
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.storageUsedBytes
+              master_item:
+                key: 'milestone.rs.extras.raw[{#RS.ID}]'
+              tags:
+                - tag: component
+                  value: recording-server
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+          master_item:
+            key: 'milestone_rs_read.sh[3600]'
+          lld_macro_paths:
+            - lld_macro: '{#RS.HOSTNAME}'
+              path: $.hostName
+            - lld_macro: '{#RS.ID}'
+              path: $.id
+            - lld_macro: '{#RS.NAME}'
+              path: $.displayName
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.__array[*]'
+        - uuid: 7a5b9c2d3e4f48a0b1c6d8e0f1a25347
+          name: 'Milestone RS extras: per-storage discovery'
+          type: DEPENDENT
+          key: milestone.rs.storage.discovery
+          lifetime: 2d
+          description: |
+            Flat (RS, storage) LLD walking $.__storages from the
+            snapshot. Each row becomes one storage on one RS so a
+            single LLD can produce capacity / used / retention items
+            per storage without needing nested discovery.
+          item_prototypes:
+            - uuid: f06a8e3b2c1d40579e4b6c8a1d3e5921
+              name: 'Storage [{#RS.NAME} / {#STORAGE.NAME}]: Path'
+              type: DEPENDENT
+              key: 'milestone.rs.storage.path[{#RS.ID},{#STORAGE.ID}]'
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.path
+              master_item:
+                key: 'milestone.rs.storage.raw[{#RS.ID},{#STORAGE.ID}]'
+              tags:
+                - tag: component
+                  value: storage
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+                - tag: storage
+                  value: '{#STORAGE.NAME}'
+            - uuid: c8a4e9d6b3f2491fa708d1e2c5b6f037
+              name: 'Storage [{#RS.NAME} / {#STORAGE.NAME}]: Detail (per-storage master)'
+              type: DEPENDENT
+              key: 'milestone.rs.storage.raw[{#RS.ID},{#STORAGE.ID}]'
+              history: '0'
+              value_type: TEXT
+              description: |
+                Pulls this storage's row out of $.__storages by matching
+                rsId + id. Avoids nested LLD: we can't iterate from
+                $["{#RS.ID}"].storages[*] in the master since LLD only
+                walks one path, but every storage already carries rsId
+                in the flat __storages list.
+              preprocessing:
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var blob = JSON.parse(value);
+                      var arr = blob.__storages || [];
+                      for (var i = 0; i < arr.length; i++) {
+                        if (arr[i].rsId === '{#RS.ID}'
+                            && arr[i].id === '{#STORAGE.ID}') {
+                          return JSON.stringify(arr[i]);
+                        }
+                      }
+                      return '{}';
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1h
+              master_item:
+                key: 'milestone_rs_read.sh[3600]'
+              tags:
+                - tag: component
+                  value: storage
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+                - tag: storage
+                  value: '{#STORAGE.NAME}'
+            - uuid: b5d6e7c2a8f349d1a0e9c3b4f6d1e859
+              name: 'Storage [{#RS.NAME} / {#STORAGE.NAME}]: Retention (minutes)'
+              type: DEPENDENT
+              key: 'milestone.rs.storage.row.retention.minutes[{#RS.ID},{#STORAGE.ID}]'
+              units: m
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.retentionMinutes
+              master_item:
+                key: 'milestone.rs.storage.raw[{#RS.ID},{#STORAGE.ID}]'
+              tags:
+                - tag: component
+                  value: storage
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+                - tag: storage
+                  value: '{#STORAGE.NAME}'
+            - uuid: a2b7c1d8e4f3457698ca0d1e3f5a2748
+              name: 'Storage [{#RS.NAME} / {#STORAGE.NAME}]: Used'
+              type: DEPENDENT
+              key: 'milestone.rs.storage.row.used.bytes[{#RS.ID},{#STORAGE.ID}]'
+              units: B
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.usedBytes
+              master_item:
+                key: 'milestone.rs.storage.raw[{#RS.ID},{#STORAGE.ID}]'
+              tags:
+                - tag: component
+                  value: storage
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+                - tag: storage
+                  value: '{#STORAGE.NAME}'
+            - uuid: 81e2a5d3c7b94f06bd1e4a9c0d2f8635
+              name: 'Storage [{#RS.NAME} / {#STORAGE.NAME}]: Capacity'
+              type: DEPENDENT
+              key: 'milestone.rs.storage.size.bytes[{#RS.ID},{#STORAGE.ID}]'
+              units: B
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - $.sizeBytes
+              master_item:
+                key: 'milestone.rs.storage.raw[{#RS.ID},{#STORAGE.ID}]'
+              tags:
+                - tag: component
+                  value: storage
+                - tag: recording-server
+                  value: '{#RS.NAME}'
+                - tag: storage
+                  value: '{#STORAGE.NAME}'
+          master_item:
+            key: 'milestone_rs_read.sh[3600]'
+          lld_macro_paths:
+            - lld_macro: '{#RS.ID}'
+              path: $.rsId
+            - lld_macro: '{#RS.NAME}'
+              path: $.rsName
+            - lld_macro: '{#STORAGE.ID}'
+              path: $.id
+            - lld_macro: '{#STORAGE.NAME}'
+              path: $.name
+            - lld_macro: '{#STORAGE.PATH}'
+              path: $.path
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.__storages[*]'
+  triggers:
+    - uuid: cc541fa5f67e4e8e822e3b5ed1cde3b7
+      expression: 'last(/Milestone Camera vendor - Bosch/bosch.cam.process.count)<80 and last(/Milestone Camera vendor - Bosch/bosch.cam.uptime)>10m'
+      name: 'Cam [{HOST.NAME}]: process count low ({ITEM.VALUE})'
+      priority: AVERAGE
+      description: 'Process count below baseline - camera may be partly booted or services missing. Suppressed for 10m post-boot.'
