@@ -9,18 +9,16 @@ the frame: config, database, auth, and the API with `/docs`.
 - Python 3.12 on the VM, a service user `netmon`, and MariaDB reachable.
 - An AD service path for `ldap3` binds (read-only) and the three role groups
   created (`NetMon-Viewers`, `NetMon-Operators`, `NetMon-Admins`).
-- **Open decision (blocks live MariaDB):** the MariaDB DBAPI driver is not yet
-  in the approved dependency list (CLAUDE.md §3). Pick a driver (e.g.
-  `pymysql`), get owner sign-off, add it to `pyproject.toml`, and use a
-  `mysql+pymysql://` URL. Until then the app only runs against SQLite.
+- MariaDB driver: `pymysql` ships in `pyproject.toml` (owner-approved). Use a
+  `mysql+pymysql://user:pass@host/netmon?charset=utf8mb4` URL. No system
+  packages needed — PyMySQL is pure-Python.
 
 ## 1. Install
 
 ```bash
 sudo -u netmon python3.12 -m venv /opt/netmon/venv
 sudo -u netmon /opt/netmon/venv/bin/pip install /opt/netmon/src   # the repo
-# plus the approved MariaDB driver once decided, e.g.:
-# sudo -u netmon /opt/netmon/venv/bin/pip install pymysql==<pin>
+# The MariaDB driver (pymysql) installs automatically as a pinned dependency.
 ```
 
 ## 2. Configure

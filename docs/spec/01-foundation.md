@@ -63,11 +63,12 @@ task registers with the supervisor **and** is runnable standalone
 
 ## Dependency notes / open items
 
-- **MariaDB driver:** SQLAlchemy needs a DBAPI for the `mysql+pymysql://` URL.
-  `pymysql` is **not** in CLAUDE.md §3's allowed list, so it is flagged for
-  owner approval rather than silently added. Dev/test uses `sqlite://`, which
-  needs no extra driver; the DB layer is URL-driven so the prod driver is a
-  config + one-line dependency decision. **← owner decision needed.**
+- **MariaDB driver:** RESOLVED — `pymysql==1.1.1` is owner-approved (2026-07-11)
+  and pinned in `pyproject.toml` / CLAUDE.md §3. Production uses
+  `mysql+pymysql://…?charset=utf8mb4`; dev/test uses `sqlite://` (stdlib, no
+  extra driver). The DB layer is URL-driven, so the two share one code path.
+  PyMySQL is pure-Python (no C build / system libs), which suits the
+  offline-tolerant deploy.
 - The migration SQL is MariaDB-flavored (`ENGINE=InnoDB`, `AUTO_INCREMENT`).
   Tests assert its integrity textually rather than executing it against
   MariaDB; the app applies it live against the configured MariaDB.
@@ -82,8 +83,9 @@ task registers with the supervisor **and** is runnable standalone
 - [x] One-shot seed populates `devices` from XIQ + PF fixtures.
 - [x] `pytest` green.
 - [x] `docs/runbooks/deploy.md` written.
-- [ ] **Owner-side:** app boots against real MariaDB + AD (needs driver
-      decision + on-network AD). Verified during deploy, not in this session.
+- [x] MariaDB driver decision resolved (`pymysql`, owner-approved).
+- [ ] **Owner-side:** app boots against real MariaDB + AD (on-network).
+      Verified during deploy, not in this session.
 
 ## Next session
 

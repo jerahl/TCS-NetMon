@@ -37,7 +37,7 @@ NetMon also owns **alerting** (rules → dedupe → maintenance windows → SMTP
 
 - **Python 3.12**, single package `netmon`, FastAPI app served by uvicorn behind nginx.
 - **MariaDB** via **SQLAlchemy Core** (no ORM/declarative models — explicit, SQL-shaped queries). Schema via plain numbered migration scripts in `migrations/` applied by a small runner; no Alembic.
-- **Allowed third-party dependencies:** `fastapi`, `uvicorn`, `sqlalchemy`, `httpx`, `ldap3`, `apscheduler`. Pinned in a lockfile. **Do not add any other dependency without stopping and asking.** Prefer stdlib. ICMP/SNMP are subprocess calls to `fping` / `snmpget` — do not introduce a Python SNMP library.
+- **Allowed third-party dependencies:** `fastapi`, `uvicorn`, `sqlalchemy`, `httpx`, `ldap3`, `apscheduler`, `pymysql` (MariaDB DBAPI driver — owner-approved 2026-07-11; pure-Python, suits offline-tolerant deploy). Pinned in a lockfile. **Do not add any other dependency without stopping and asking.** Prefer stdlib. ICMP/SNMP are subprocess calls to `fping` / `snmpget` — do not introduce a Python SNMP library.
 - **Frontend:** React components ported from `jerahl/ZabbixCustomDashboard` (`tcs_dashboard/assets/*.jsx`), built with **esbuild** to static files served by FastAPI. No Babel-standalone, no unpkg/CDN loads, no framework migration — keep the existing component structure.
 - **Auth:** Active Directory via `ldap3`; group→role mapping; server-side session cookies. Roles: `viewer`, `operator` (can ack alerts / set maintenance), `admin` (can edit rules/registry).
 

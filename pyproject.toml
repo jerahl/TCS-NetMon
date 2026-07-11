@@ -14,9 +14,11 @@ dependencies = [
     "httpx==0.28.1",
     "ldap3==2.9.1",
     "apscheduler==3.11.0",
-    # NOTE: a MariaDB DBAPI driver (e.g. pymysql) is required in production but
-    # is NOT yet approved per CLAUDE.md §3. See docs/spec/01-foundation.md.
-    # Dev/test uses the stdlib sqlite3 driver (no dependency).
+    # MariaDB DBAPI driver for the mysql+pymysql:// URL. Owner-approved
+    # 2026-07-11 (CLAUDE.md §3). PyMySQL is pure-Python — no C build or system
+    # libs — which suits the offline-tolerant deploy (README §8/§9). Dev/test
+    # still uses the stdlib sqlite3 driver (no dependency).
+    "pymysql==1.1.1",
 ]
 
 [project.optional-dependencies]
