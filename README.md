@@ -115,6 +115,7 @@ Sized for 6–10 hrs/week; each phase ends demonstrably working and independentl
 | **6 — Alert engine, shadow mode** | Rules, dedup, maintenance, ack, SMTP; shadow log running parallel to Zabbix | 3 wks |
 | **7 — Collectors: 3CX, rConfig** | Voice status + config-backup enrichment | 2–3 wks |
 | **8 — Parallel run & cutover** | 4-week shadow comparison, gap fixes, then disable Zabbix network/wireless/voice/camera hosts (configs exported for rollback); Zabbix slims to servers only | 4+ wks |
+| **9 — Site-status map** *(enhancement)* | Geographic NOC wall view (Leaflet): sites as up/degraded/down dots rolled up from `device_state`, animated inter-site fiber links by live utilization, event feed, fullscreen NOC mode. New per-site lat/lon + fiber-link registry (via migration); current-state only. Design in `docs/design/netmon-map/`, spec in `docs/spec/09-site-map.md`. Depends on Phases 3–4; can be pulled forward | 2–3 wks |
 
 Roughly 6–8 calendar months. Phase 1 gains ~a week versus v0.1 (new web/auth construction); Phases 3–7 each shave a little (one language, shared base class, shared models). Net schedule is a wash — the single-stack payoff is maintenance and hand-off, not delivery speed.
 

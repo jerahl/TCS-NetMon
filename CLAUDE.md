@@ -140,6 +140,10 @@ Rule evaluation loop over `device_state`; dedupe per (device, rule); `min_durati
 ≥4 weeks of shadow comparison; close gaps found; owner flips `shadow=false`; Zabbix network/wireless/voice/camera hosts disabled (with exported configs as rollback); Zabbix remains for servers.
 **DoD:** owner sign-off backed by the comparison diffs — Claude Code does not perform the cutover actions.
 
+### Phase 9 — Geographic site-status map (NOC wall view) *(enhancement)*
+Begins with `docs/spec/09-site-map.md`; design source is the Claude Design handoff in `docs/design/netmon-map/` (`project/Netmon Map.dc.html`). A Leaflet map of the district: sites as up/degraded/down status dots (rolled up from `device_state` per site), animated inter-site fiber links weighted by capacity and colored by live utilization, a live event feed from `state_events`, a status-sorted side panel, and a fullscreen NOC mode. Recreate the prototype's visual output on real NetMon endpoints (new `/api/sites` roll-up); do not port its simulation loop. Introduces new data the core model lacks — per-site lat/lon + tier, and an inter-site fiber-link registry with current-state utilization — via a numbered migration. **Depends on Phases 3–4** (real state + UI/esbuild pipeline), so it can be pulled forward once those land; otherwise scheduled after cutover stabilizes. Open decisions live in the spec: map tiles/Leaflet as an external fetch vs. self-hosted offline pack (must satisfy the §3 "no CDN loads" / Phase 4 "no external fetches at runtime" rules), link-topology source, and avoiding the `trunk` (voice) dimension collision. **Scope guard:** current-state view + curated topology only — no historical utilization time-series (§2).
+**DoD:** map page renders live site + link state via FastAPI endpoints; site/link roll-up + topology come from the DB (no simulated data); NOC mode works; tile/Leaflet delivery satisfies the no-external-fetch rule (or the owner's explicit exception is recorded); migration has a rollback note; spec checklist complete.
+
 ## 8. Session protocol for Claude Code
 
 - Start each session by reading `docs/spec/` for the current phase and `git log --oneline -15`.
