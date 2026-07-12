@@ -60,19 +60,23 @@ order and deleting its `schema_migrations` row (safe — no data at 001).
 
 ## 4. Seed the device registry
 
-Export XIQ (`GET /devices?views=BASIC`) and PacketFence (`nodes/search`) to
-JSON, then:
+Export three inputs to JSON: XIQ (`GET /devices?views=BASIC`), PacketFence
+(`nodes/search`), and the Zabbix `Site/` host groups
+(`host.get` + `selectHostGroups`) that assign each device's site. Then:
 
 ```bash
 # Preview reconciliation (writes nothing):
-/opt/netmon/venv/bin/python -m netmon.seed --xiq xiq.json --pf pf.json --dry-run
+/opt/netmon/venv/bin/python -m netmon.seed \
+  --xiq xiq.json --pf pf.json --sites zbx_sites.json --dry-run
 # Apply:
 sudo -u netmon NETMON_CONF=/etc/netmon/netmon.conf \
-  /opt/netmon/venv/bin/python -m netmon.seed --xiq xiq.json --pf pf.json
+  /opt/netmon/venv/bin/python -m netmon.seed \
+  --xiq xiq.json --pf pf.json --sites zbx_sites.json
 ```
 
-Rows with `site=unknown` did not match the `<SITE>-…` hostname convention —
-review them (spec-00 reconciliation rules).
+Rows with `site=Unassigned` are in no `Site/<name>` group in the export
+(or aren't monitored by Zabbix) — review them (spec-00 reconciliation rules).
+Omitting `--sites` seeds every device as `Unassigned`.
 
 ## 5. Run the app
 

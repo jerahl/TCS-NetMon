@@ -84,9 +84,15 @@ Field mapping used by `scripts/seed_devices.py`:
 1. **Canonical `name`** is the XIQ `hostname` when a device exists in XIQ;
    otherwise the PF `computername`; otherwise a synthesized `pf-<mac>` /
    `xiq-<id>`.
-2. **Site** is derived from a hostname prefix convention
-   (`<SITE>-<role>-<n>`, e.g. `BHS-56-Hallway` → site `BHS`). When the prefix
-   is absent, site is `unknown` and the row is flagged for owner review.
+2. **Site** is assigned from a Zabbix `Site/<name>` host-group export
+   (`--sites`), matching the retiring add-on's own source of truth
+   (`reference/actions/ActionGlobalData.php::buildSites` — site =
+   membership of a group under the `{$TCS.SITE.GROUP.PREFIX}` = `Site/`
+   prefix). The seed matches export hosts to devices by `name`
+   (case-insensitive); a device in no `Site/` group becomes `Unassigned`.
+   Hostnames are **not** parsed for site (owner decision, 2026-07-12). The
+   export is a `host.get`+`selectHostGroups` dump or a plain `{host: site}`
+   map. See `tests/fixtures/zbx_sites.json`.
 3. **`device_type`** is mapped to the registry vocabulary
    (`switch|ap|camera|recording_server|trunk|pbx|other`) via
    `DEVICE_TYPE_MAP`; unknown source types fall back to `other`.
@@ -99,7 +105,8 @@ Field mapping used by `scripts/seed_devices.py`:
 ## DoD checklist
 
 - [x] `docs/spec/00-sources.md` documents API surface + reconciliation rules.
-- [x] One sanitized fixture per seed source committed (`tests/fixtures/xiq_devices.json`, `tests/fixtures/pf_nodes.json`).
+- [x] One sanitized fixture per seed source committed (`tests/fixtures/xiq_devices.json`, `tests/fixtures/pf_nodes.json`, `tests/fixtures/zbx_sites.json`).
+- [x] Site source of truth decided: Zabbix `Site/` group export (owner, 2026-07-12).
 - [ ] Live API access verified per source (owner, on-network).
 - [ ] Production rate limits + real device counts recorded.
 - [ ] 3CX v20 REST-vs-ODBC decision recorded.
@@ -108,5 +115,7 @@ Field mapping used by `scripts/seed_devices.py`:
 
 - Owner: capture sanitized real payloads for rConfig / 3CX / Milestone into
   `tests/fixtures/` so those collectors can be fixture-tested in their phases.
-- Owner: confirm the hostname→site prefix convention covers all sites, or
-  supply an explicit site map file for the seed.
+- Owner: produce the real `Site/` host-group export from Zabbix
+  (`host.get` + `selectHostGroups`) for the production seed run. Any device
+  Zabbix doesn't monitor (or that isn't in a `Site/` group) will seed as
+  `Unassigned` until enriched — review that list after the first run.

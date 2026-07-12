@@ -1,9 +1,12 @@
 """One-shot device-registry seed from XIQ + PacketFence exports.
 
 Parses fixture/export JSON into reconciled ``devices`` rows per the rules in
-``docs/spec/00-sources.md`` and upserts them. The reconciliation functions are
-pure (no DB, no network) so they are unit-tested directly; ``upsert_devices``
-and ``main`` handle the DB side.
+``docs/spec/00-sources.md`` and upserts them. ``site`` is assigned from a Zabbix
+``Site/<name>`` host-group export (``--sites``) — the same source of truth the
+retiring Zabbix add-on uses; devices in no ``Site/`` group become
+``Unassigned``. The reconciliation functions are pure (no DB, no network) so
+they are unit-tested directly; ``upsert_devices`` and ``main`` handle the DB
+side.
 
 Runnable as ``python -m netmon.seed`` or via the ``netmon-seed`` entry point.
 """
@@ -53,19 +56,63 @@ def canon_mac(mac: str) -> str:
     return ":".join(hexs[i : i + 2] for i in range(0, 12, 2))
 
 
-def site_from_name(name: str) -> str | None:
-    """Site = the hostname prefix before the first '-' (e.g. BHS-56-Hall→BHS).
+# Site is assigned from a Zabbix host-group export, matching how the retiring
+# system tracks sites (reference ActionGlobalData::buildSites): a host belongs
+# to a site because it is a member of a group named "Site/<name>". Devices in
+# no such group resolve to UNASSIGNED_SITE. The prefix mirrors the reference's
+# {$TCS.SITE.GROUP.PREFIX} macro (default "Site/").
+SITE_GROUP_PREFIX = "Site/"
+UNASSIGNED_SITE = "Unassigned"
 
-    Returns None when the convention doesn't apply; the seed flags such rows
-    (site='unknown') for owner review rather than guessing.
+
+def build_site_index(
+    rows: list[dict[str, Any]], prefix: str = SITE_GROUP_PREFIX
+) -> dict[str, str]:
+    """Map hostname → site from Zabbix ``host.get`` (``selectHostGroups``) rows.
+
+    Each row has a ``host`` name and a ``hostgroups`` (or ``groups``) list of
+    ``{"name": ...}``. The first group whose name starts with ``prefix`` wins;
+    the site is that name minus the prefix (reference behaviour). Hosts with no
+    ``Site/`` group are omitted — they resolve to ``UNASSIGNED_SITE`` at apply
+    time.
     """
-    if not name or "-" not in name:
-        return None
-    prefix = name.split("-", 1)[0].strip()
-    # A site code is short and alphanumeric; anything else is not a site.
-    if prefix and re.fullmatch(r"[A-Za-z0-9]{2,8}", prefix):
-        return prefix.upper()
-    return None
+    index: dict[str, str] = {}
+    for r in rows:
+        name = str(r.get("host") or r.get("name") or "").strip()
+        if not name:
+            continue
+        groups = r.get("hostgroups") or r.get("groups") or []
+        for g in groups:
+            gname = g.get("name") if isinstance(g, dict) else str(g)
+            if gname and gname.startswith(prefix):
+                site = gname[len(prefix):].strip()
+                if site:
+                    index[name] = site
+                break
+    return index
+
+
+def load_site_index(path: str | Path, prefix: str = SITE_GROUP_PREFIX) -> dict[str, str]:
+    """Load a site index from a Zabbix export or a plain ``{host: site}`` map."""
+    data = json.loads(Path(path).read_text())
+    if isinstance(data, dict):
+        # A plain {hostname: site} map (ignore metadata keys like "_note").
+        strvals = {k: v for k, v in data.items() if not k.startswith("_") and isinstance(v, str)}
+        if strvals:
+            return {str(k): v for k, v in strvals.items() if v}
+        data = data.get("result") or data.get("data") or data.get("items") or []
+    return build_site_index(list(data), prefix)
+
+
+def assign_sites(devices: list[Device], index: dict[str, str]) -> list[Device]:
+    """Set ``site`` on each device from the index (case-insensitive on name).
+
+    Devices absent from the index become ``UNASSIGNED_SITE`` — never guessed.
+    """
+    lower = {k.lower(): v for k, v in index.items()}
+    for d in devices:
+        d.site = index.get(d.name) or lower.get(d.name.lower()) or UNASSIGNED_SITE
+    return devices
 
 
 def _map_type(raw: str | None) -> DeviceType:
@@ -87,7 +134,7 @@ def normalize_xiq(rows: list[dict[str, Any]]) -> list[Device]:
         out.append(
             Device(
                 name=name,
-                site=site_from_name(hostname) or "unknown",
+                # site is assigned later from the Zabbix Site/ group export.
                 device_type=dtype,
                 mgmt_ip=(str(r.get("ip_address")).strip() or None) if r.get("ip_address") else None,
                 snmp_capable=dtype == DeviceType.switch,
@@ -111,7 +158,7 @@ def normalize_pf(rows: list[dict[str, Any]]) -> list[Device]:
         out.append(
             Device(
                 name=name,
-                site=site_from_name(host) or "unknown",
+                # site is assigned later from the Zabbix Site/ group export.
                 device_type=dtype,
                 mgmt_ip=(str(ip).strip() or None) if ip else None,
                 snmp_capable=dtype == DeviceType.switch,
@@ -198,6 +245,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--xiq", help="path to XIQ /devices export JSON")
     parser.add_argument("--pf", help="path to PacketFence nodes export JSON")
     parser.add_argument(
+        "--sites", help="path to Zabbix Site/ host-group export JSON (host.get)"
+    )
+    parser.add_argument(
         "--dry-run", action="store_true", help="print reconciled devices, write nothing"
     )
     args = parser.parse_args(argv)
@@ -206,9 +256,14 @@ def main(argv: list[str] | None = None) -> int:
     pf_rows = normalize_pf(load_fixture(args.pf)) if args.pf else []
     devices = reconcile(xiq_rows, pf_rows)
 
-    unknown = sum(1 for d in devices if d.site == "unknown")
+    site_index = load_site_index(args.sites) if args.sites else {}
+    assign_sites(devices, site_index)
+
+    unassigned = sum(1 for d in devices if d.site == UNASSIGNED_SITE)
+    if not args.sites:
+        print("NOTE: no --sites export given; every device is Unassigned.")
     print(f"reconciled {len(devices)} device(s) "
-          f"({len(xiq_rows)} XIQ, {len(pf_rows)} PF; {unknown} with unknown site)")
+          f"({len(xiq_rows)} XIQ, {len(pf_rows)} PF; {unassigned} unassigned)")
 
     if args.dry_run:
         for d in devices:
