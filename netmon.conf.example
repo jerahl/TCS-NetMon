@@ -114,11 +114,15 @@ interval_s = 120
 # Live Events/State WebSocket wiring needs the `websockets` dependency
 # (owner approval pending); the Config-API poll above provides state until then.
 
-[smtp]
-# Alert engine notifier (Phase 6). Ships in shadow mode; sends nothing until
-# the owner flips shadow=false.
+[engine]
+# Alert engine (Phase 6). Evaluates alert_rules against device_state.
+# Disabled by default (per-step reversibility). Ships in SHADOW mode: logs
+# would-be notifications to the notifications table, sends nothing, until the
+# owner flips shadow=false at cutover (Phase 8).
 enabled = false
+interval_s = 30
 shadow = true
-# host = smtp.internal
-# port = 25
-# from_addr = netmon@example.local
+# smtp_host = smtp.internal
+# smtp_port = 25
+# smtp_from = netmon@tuscaloosacityschools.com
+# default_target = noc@tuscaloosacityschools.com

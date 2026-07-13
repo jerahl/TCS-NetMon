@@ -71,8 +71,59 @@ CREATE TABLE collector_health (
 """
 
 
+ALERT_RULES_DDL_SQLITE = """
+CREATE TABLE alert_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    dimension TEXT NOT NULL,
+    `condition` TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT 'warn',
+    min_duration_s INTEGER NOT NULL DEFAULT 0,
+    target TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1
+)
+"""
+
+ALERTS_DDL_SQLITE = """
+CREATE TABLE alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id INTEGER NOT NULL,
+    rule_id INTEGER NOT NULL,
+    opened_at TIMESTAMP,
+    last_seen_at TIMESTAMP,
+    closed_at TIMESTAMP,
+    acked_by TEXT,
+    acked_at TIMESTAMP
+)
+"""
+
+NOTIFICATIONS_DDL_SQLITE = """
+CREATE TABLE notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_id INTEGER NOT NULL,
+    channel TEXT NOT NULL DEFAULT 'email',
+    target TEXT,
+    sent_at TIMESTAMP,
+    shadow INTEGER NOT NULL DEFAULT 1,
+    payload_summary TEXT
+)
+"""
+
+MAINTENANCE_DDL_SQLITE = """
+CREATE TABLE maintenance_windows (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope_type TEXT NOT NULL,
+    scope_value TEXT NOT NULL,
+    starts_at TIMESTAMP NOT NULL,
+    ends_at TIMESTAMP NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at TIMESTAMP
+)
+"""
+
+
 def create_core_tables(engine) -> None:
-    """Create the Phase 1/2 tables the poller + status API touch (SQLite)."""
+    """Create the tables the poller / collectors / engine / API touch (SQLite)."""
     from sqlalchemy import text
     with engine.begin() as conn:
         for ddl in (
@@ -80,6 +131,10 @@ def create_core_tables(engine) -> None:
             DEVICE_STATE_DDL_SQLITE,
             STATE_EVENTS_DDL_SQLITE,
             COLLECTOR_HEALTH_DDL_SQLITE,
+            ALERT_RULES_DDL_SQLITE,
+            ALERTS_DDL_SQLITE,
+            NOTIFICATIONS_DDL_SQLITE,
+            MAINTENANCE_DDL_SQLITE,
         ):
             conn.execute(text(ddl))
 

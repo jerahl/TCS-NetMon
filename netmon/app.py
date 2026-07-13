@@ -23,8 +23,9 @@ from fastapi.staticfiles import StaticFiles
 WEB_DIR = Path(__file__).resolve().parent / "web"
 
 from netmon import __version__, db, migrate
-from netmon.api import auth_routes, devices, health, nac, status
+from netmon.api import alerts, auth_routes, devices, health, nac, status
 from netmon.auth.sessions import SessionStore
+from netmon.engine.engine import AlertEngine
 from netmon.collectors.milestone import MilestoneCollector, MilestoneError
 from netmon.collectors.packetfence import PfCollector
 from netmon.collectors.pf_client import PfError
@@ -86,6 +87,12 @@ def register_tasks(app: FastAPI, cfg: Config, engine) -> None:
             supervisor.register("milestone", ms.run_guarded, interval_s=ms.interval_s, timeout_s=ms.timeout_s)
             log.info("Milestone collector enabled: %ss", ms.interval_s)
 
+    if cfg.engine.enabled:
+        alert_engine = AlertEngine(engine, cfg.engine)
+        supervisor.register("engine", alert_engine.run_guarded,
+                            interval_s=alert_engine.interval_s, timeout_s=alert_engine.timeout_s)
+        log.info("alert engine enabled: %ss, shadow=%s", cfg.engine.interval_s, cfg.engine.shadow)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -136,6 +143,7 @@ def create_app(
     app.include_router(devices.router)
     app.include_router(status.router)
     app.include_router(nac.router)
+    app.include_router(alerts.router)
 
     # Static React UI (Phase 4), if built. Guarded so the app still boots when
     # the bundle is absent (fresh clone / API-only dev). Build with

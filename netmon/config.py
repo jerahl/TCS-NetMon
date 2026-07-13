@@ -87,6 +87,17 @@ class PollerConfig:
 
 
 @dataclass(frozen=True)
+class EngineConfig:
+    enabled: bool = False
+    interval_s: int = 30
+    shadow: bool = True  # log would-be notifications, send nothing
+    smtp_host: str = ""
+    smtp_port: int = 25
+    smtp_from: str = ""
+    default_target: str = ""
+
+
+@dataclass(frozen=True)
 class SourceToggle:
     """Generic per-source enable flag + opaque settings bag.
 
@@ -105,6 +116,7 @@ class Config:
     web: WebConfig
     auth: AuthConfig
     poller: PollerConfig
+    engine: EngineConfig
     sources: dict[str, SourceToggle]
     path: str
 
@@ -239,6 +251,17 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
     if poller.enabled and poller.ok_threshold < 1:
         raise ConfigError("[poller] ok_threshold must be >= 1")
 
+    # --- [engine] ---
+    engine = EngineConfig(
+        enabled=_as_bool(parser.get("engine", "enabled", fallback="false")),
+        interval_s=parser.getint("engine", "interval_s", fallback=30),
+        shadow=_as_bool(parser.get("engine", "shadow", fallback="true")),
+        smtp_host=parser.get("engine", "smtp_host", fallback="").strip(),
+        smtp_port=parser.getint("engine", "smtp_port", fallback=25),
+        smtp_from=parser.get("engine", "smtp_from", fallback="").strip(),
+        default_target=parser.get("engine", "default_target", fallback="").strip(),
+    )
+
     # --- per-source toggles ---
     sources: dict[str, SourceToggle] = {}
     for name in ("xiq", "packetfence", "milestone", "threecx", "rconfig"):
@@ -251,4 +274,5 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         else:
             sources[name] = SourceToggle(enabled=False)
 
-    return Config(db=db, web=web, auth=auth, poller=poller, sources=sources, path=conf_path)
+    return Config(db=db, web=web, auth=auth, poller=poller, engine=engine,
+                  sources=sources, path=conf_path)

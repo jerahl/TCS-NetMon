@@ -92,3 +92,9 @@ table.grid.kv td:first-child { color: var(--dim); width: 160px; }
 }
 .msg { color: var(--dim); padding: 8px 2px; }
 .msg.error { color: #e5484d; }
+.btn {
+  font: 600 11px system-ui; padding: 4px 10px; border-radius: 5px;
+  border: 1px solid var(--accent); background: transparent; color: var(--accent); cursor: pointer;
+}
+.btn:hover { background: var(--panel2); }
+.btn:disabled { opacity: .5; cursor: default; }
