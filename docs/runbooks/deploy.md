@@ -16,7 +16,7 @@ cd /opt/netmon/src
 
 sudo ./scripts/deploy.sh install --dry-run   # preview every action, change nothing
 sudo ./scripts/deploy.sh install             # full setup + hardening
-# ...edit /etc/netmon/netmon.conf (DB url + AD), then:
+# ...edit /etc/netmon/netmon.conf (DB url + ClassLink SAML), then:
 sudo ./scripts/deploy.sh update              # pull, reinstall, migrate, restart, health-check
 
 sudo ./scripts/deploy.sh status              # service + /healthz
@@ -62,8 +62,12 @@ below document what the script does under the hood.
 ## 0. Prerequisites
 
 - Python 3.12 on the VM, a service user `netmon`, and MariaDB reachable.
-- An AD service path for `ldap3` binds (read-only) and the three role groups
-  created (`NetMon-Viewers`, `NetMon-Operators`, `NetMon-Admins`).
+- SSO via **ClassLink (SAML)**: a NetMon SAML application registered in the
+  ClassLink admin console, the IdP metadata/entity-id + signing cert, NetMon's
+  SP entity-id + ACS URL (`https://<host>/auth/saml/acs`), an SP signing
+  key/cert, and ClassLink configured to release the role/group claim that maps
+  to `viewer`/`operator`/`admin`. *(SAML SP is planned, not yet implemented —
+  the interim build uses `ldap3`; see `docs/spec/01-foundation.md`.)*
 - MariaDB driver: `pymysql` ships in `pyproject.toml` (owner-approved). Use a
   `mysql+pymysql://user:pass@host/netmon?charset=utf8mb4` URL. No system
   packages needed — PyMySQL is pure-Python.

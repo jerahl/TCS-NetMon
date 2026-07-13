@@ -27,8 +27,8 @@ NetMon must own in v1: unified data model, dashboards, and **alerting/notificati
 - **Runtime:** Python 3.12, `uvicorn` behind nginx (or systemd socket activation), on a dedicated VM.
 - **Framework:** FastAPI — async-native (right shape for collectors that are 95% waiting on remote APIs), Pydantic models double as the API contract and the collector-output validation layer, and `/docs` gives a free, always-current API reference — a bus-factor asset in itself.
 - **Database:** MariaDB (existing TCS infra, backups, and habits) via SQLAlchemy Core — explicit SQL-shaped queries, no ORM magic. Schema managed by plain, numbered migration scripts.
-- **Dependency policy:** the stdlib-preferred rule bends here because a web framework is the project. The concession is bounded: `fastapi`, `uvicorn`, `sqlalchemy`, `httpx`, `ldap3`, `apscheduler` — pinned in a lockfile, reviewed before every bump, nothing added without a written reason in the repo. ICMP/SNMP via subprocess to `fping`/`snmpget` rather than a Python SNMP stack.
-- **Auth:** AD via `ldap3`, group-mapped roles, session cookies. Read-only v1 — no write paths to any source platform.
+- **Dependency policy:** the stdlib-preferred rule bends here because a web framework is the project. The concession is bounded: `fastapi`, `uvicorn`, `sqlalchemy`, `httpx`, `ldap3`, `apscheduler`, `pymysql` — pinned in a lockfile, reviewed before every bump, nothing added without a written reason in the repo. ICMP/SNMP via subprocess to `fping`/`snmpget` rather than a Python SNMP stack. (SSO adds a SAML SP library, pending an owner decision — see CLAUDE.md §3; `ldap3` may be retired once ClassLink assertions are confirmed to carry role claims.)
+- **Auth:** single sign-on — NetMon is a SAML 2.0 Service Provider with **ClassLink** as the IdP (federating the district directory); assertion claims map to roles and NetMon issues its own session cookie (no password handling, no direct AD bind). Read-only v1 — no write paths to any source platform.
 - **Frontend:** the React assets from ZabbixCustomDashboard (`global-nav.jsx`, switches port-grid, surveillance NOC, tweaks panel) extracted from the Zabbix module shell, converted to a real esbuild pipeline (dropping Babel-standalone/unpkg per the repo's own README), output served as static files by FastAPI.
 
 ### How collectors run in a single-language stack
@@ -55,7 +55,7 @@ One codebase, two execution modes — this preserves per-collector reversibility
 │  engine/     alert rules → dedupe → maintenance → notify   │
 │  api/        JSON endpoints (Pydantic-typed)               │
 │  web/        static React build (esbuild)                  │
-│  auth/       AD via ldap3, role mapping                    │
+│  auth/       SAML SP (ClassLink IdP), role mapping         │
 └──────────────────────────┬─────────────────────────────────┘
                            ▼
                  MariaDB: devices · device_state ·
@@ -107,7 +107,7 @@ Sized for 6–10 hrs/week; each phase ends demonstrably working and independentl
 | Phase | Deliverable | Est. |
 |---|---|---|
 | **0 — Spec & recon** | Finalized spec; API access verified for all five sources (tokens, rate limits, 3CX v20 surface); device counts per source; naming/site reconciliation rules | 2–3 wks |
-| **1 — Foundation** | Repo/package layout, migration scripts, config+secrets layout, FastAPI skeleton with AD auth and `/docs`, task-supervisor scaffold, `devices` seeded from one-shot XIQ + PF import | 3 wks |
+| **1 — Foundation** | Repo/package layout, migration scripts, config+secrets layout, FastAPI skeleton with SSO auth (SAML SP / ClassLink) and `/docs`, task-supervisor scaffold, `devices` seeded from one-shot XIQ + PF import | 3 wks |
 | **2 — Native poller** | fping/SNMP poller live against full registry; `device_state`/`state_events` populating; first raw status endpoint + page | 2 wks |
 | **3 — Collector: XIQ** | Switching + wireless federated; source-blind detection; collector-health pattern established; base-class contract proven | 3 wks |
 | **4 — UI port** | React assets extracted, esbuild pipeline, Global + Switches + AP pages on NetMon endpoints served by FastAPI | 3–4 wks |

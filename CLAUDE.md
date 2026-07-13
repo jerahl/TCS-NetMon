@@ -38,8 +38,9 @@ NetMon also owns **alerting** (rules → dedupe → maintenance windows → SMTP
 - **Python 3.12**, single package `netmon`, FastAPI app served by uvicorn behind nginx.
 - **MariaDB** via **SQLAlchemy Core** (no ORM/declarative models — explicit, SQL-shaped queries). Schema via plain numbered migration scripts in `migrations/` applied by a small runner; no Alembic.
 - **Allowed third-party dependencies:** `fastapi`, `uvicorn`, `sqlalchemy`, `httpx`, `ldap3`, `apscheduler`, `pymysql` (MariaDB DBAPI driver — owner-approved 2026-07-11; pure-Python, suits offline-tolerant deploy). Pinned in a lockfile. **Do not add any other dependency without stopping and asking.** Prefer stdlib. ICMP/SNMP are subprocess calls to `fping` / `snmpget` — do not introduce a Python SNMP library.
+  - **Pending (SSO):** a SAML SP library is required for ClassLink login and needs an owner decision on the specific package + pin — likely `python3-saml`, which pulls the `xmlsec1`/`libxml2` system libraries (weigh against the §9 offline-deploy goal) — or a pure-Python alternative. `ldap3` may be retired once SAML assertions are confirmed to carry the role/group claims (kept meanwhile only if a directory lookup turns out necessary).
 - **Frontend:** React components ported from `jerahl/ZabbixCustomDashboard` (`tcs_dashboard/assets/*.jsx`), built with **esbuild** to static files served by FastAPI. No Babel-standalone, no unpkg/CDN loads, no framework migration — keep the existing component structure.
-- **Auth:** Active Directory via `ldap3`; group→role mapping; server-side session cookies. Roles: `viewer`, `operator` (can ack alerts / set maintenance), `admin` (can edit rules/registry).
+- **Auth:** Single sign-on. NetMon is a **SAML 2.0 Service Provider**; **ClassLink** is the identity provider (it federates the district directory). NetMon consumes the signed SAML assertion at its ACS endpoint, maps assertion attributes (ClassLink role/group claims) → roles, and issues its own server-side session cookie. **NetMon never handles a password and does not bind AD directly.** Roles: `viewer`, `operator` (can ack alerts / set maintenance), `admin` (can edit rules/registry). A local dev bypass remains for development without an IdP. *(Plan adjustment 2026-07-13: this replaces the earlier AD-via-`ldap3` bind; the Phase 1 interim `ldap3` login is to be reworked — see `docs/spec/01-foundation.md`.)*
 
 ## 4. Engineering conventions (non-negotiable)
 
@@ -65,7 +66,7 @@ netmon/
 │   ├── app.py                  # FastAPI factory, lifespan task supervisor
 │   ├── config.py               # config load/validate (stdlib configparser or tomllib)
 │   ├── db.py                   # engine, helpers (SQLAlchemy Core)
-│   ├── auth/                   # ldap3 bind, role mapping, sessions
+│   ├── auth/                   # SAML SP (ClassLink IdP), assertion→role mapping, sessions
 │   ├── api/                    # routers: devices, state, events, alerts, admin
 │   ├── models/                 # Pydantic schemas (API contract + collector validation)
 │   ├── poller/                 # fping sweep, snmp-alive, hysteresis state machine
@@ -109,8 +110,8 @@ Verify API access to all five sources; capture sanitized sample payloads into `t
 **DoD:** `docs/spec/00-sources.md` complete; one sanitized fixture per source committed.
 
 ### Phase 1 — Foundation
-Package scaffold per §5; `001_init.sql` implementing §6 with rollback notes; config loader + validation; FastAPI skeleton with AD auth, sessions, roles, `/healthz`; task-supervisor scaffold in lifespan; one-shot import script seeding `devices` from XIQ + PacketFence fixtures/exports; migration runner.
-**DoD:** app boots, auth works against AD, `/docs` renders, registry populated, `pytest` green, runbook `docs/runbooks/deploy.md` written.
+Package scaffold per §5; `001_init.sql` implementing §6 with rollback notes; config loader + validation; FastAPI skeleton with SSO auth (SAML SP / ClassLink), sessions, roles, `/healthz`; task-supervisor scaffold in lifespan; one-shot import script seeding `devices` from XIQ + PacketFence fixtures/exports; migration runner.
+**DoD:** app boots, SSO login works (or the dev bypass), `/docs` renders, registry populated, `pytest` green, runbook `docs/runbooks/deploy.md` written. *(Interim `ldap3` login shipped ahead of this plan change; SAML SP is the target — tracked in `docs/spec/01-foundation.md`.)*
 
 ### Phase 2 — Native poller
 fping sweep + snmp-alive as supervised tasks and standalone modules; hysteresis (3 consecutive failures → DOWN, 2 successes → UP; thresholds in config); writes to `device_state`/`state_events`; raw status API endpoint + minimal status page.

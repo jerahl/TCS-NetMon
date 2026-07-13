@@ -21,8 +21,9 @@ Phase 1 proves is that the *frame* is correct and reversible.
    CLAUDE.md §6, each migration carrying a `-- rollback:` note. Applied by the
    runner (`netmon/migrate.py`, also `python -m netmon.migrate`).
 5. **FastAPI app** (`netmon/app.py`) — app factory + lifespan that starts the
-   task supervisor; routers for health, auth, devices; AD auth via `ldap3`
-   with group→role mapping; server-side session cookies; role-gated deps.
+   task supervisor; routers for health, auth, devices; SSO auth (SAML SP,
+   ClassLink IdP) with assertion→role mapping; server-side session cookies;
+   role-gated deps.
 6. **Task supervisor** (`netmon/supervisor.py`) — registers named async tasks,
    each wrapped in an interval loop + timeout + exception boundary +
    reschedule. Phase 1 ships it empty (no collectors registered) but exercised
@@ -42,16 +43,52 @@ Exactly CLAUDE.md §6: `devices`, `device_state`, `state_events`,
 `state_events` = append-only "what changed when", a blind source is a *state*
 (`source_status = blind`) and must never render as healthy.
 
-## Roles & auth
+## Roles & auth — SSO via ClassLink (SAML)
 
-- AD bind via `ldap3` (`config [auth]`). Group DN → role mapping in config.
-- Roles: `viewer` < `operator` < `admin`. `require_role(min_role)` dependency.
-- Server-side sessions: opaque cookie → in-memory session store (Phase 1);
-  a DB/Redis-backed store is a later hardening item. Cookie is `HttpOnly`,
-  `SameSite=Lax`, `Secure` when `[web] secure_cookies=true`.
-- A `[auth] dev_bypass_user`/`dev_bypass_role` pair allows local development
-  without an AD server; it is refused when `[web] secure_cookies=true` so it
-  can never be left on in production.
+**Plan adjustment (2026-07-13):** login is single sign-on. NetMon is a **SAML
+2.0 Service Provider**; **ClassLink** is the identity provider (it federates
+the district directory). NetMon does **not** handle passwords and does **not**
+bind AD directly.
+
+Target flow:
+
+1. Unauthenticated request to a gated route → redirect to ClassLink (SP-initiated
+   SSO), or ClassLink app-launch (IdP-initiated) posts to NetMon's ACS endpoint.
+2. NetMon validates the signed SAML assertion (signature against the IdP's
+   metadata certificate, `Audience`/`Destination`/`NotOnOrAfter`, replay
+   protection) at `POST /auth/saml/acs`.
+3. Attribute → role mapping: ClassLink role/group claims map to
+   `viewer` < `operator` < `admin` (config, same precedence rule as today —
+   highest granted role wins). A user with no mapped claim is denied.
+4. On success NetMon issues its own server-side session cookie (unchanged from
+   the interim design: opaque cookie → session store; `HttpOnly`, `SameSite=Lax`,
+   `Secure` when `[web] secure_cookies=true`). SLO/logout clears the session.
+
+Endpoints to add: `GET /auth/saml/login` (SP-initiated redirect),
+`POST /auth/saml/acs` (assertion consumer), `GET /auth/saml/metadata` (SP
+metadata for ClassLink), logout. `require_role(min_role)` and the session
+store are unchanged.
+
+Config (`[auth]`, replacing the LDAP keys): IdP metadata URL/entity-id + signing
+cert, SP entity-id + ACS URL, SP signing key/cert (secrets on disk only), and
+the attribute→role claim map.
+
+The `[auth] dev_bypass_user`/`dev_bypass_role` pair still allows local
+development without an IdP; it is refused when `[web] secure_cookies=true` so
+it can never be left on in production.
+
+**Current code status:** Phase 1 shipped an *interim* `ldap3` username/password
+login (`netmon/auth/ldap.py`, `POST /auth/login`) before this decision. It is a
+placeholder to be replaced by the SAML SP above; the session store, roles, and
+`require_role` gate it fed into are reused unchanged. See "Next session".
+
+**Open decisions (resolve before implementing — do not guess):**
+- SAML SP library + pin (e.g. `python3-saml`, which needs `xmlsec1`/`libxml2`
+  system libs — weigh against the §9 offline-deploy goal — vs. a pure-Python
+  option). New dependency ⇒ owner approval (§3).
+- Exact ClassLink attribute names carrying role/group; whether any directory
+  lookup is still needed (if so, `ldap3` stays; otherwise it is retired).
+- SP signing/encryption cert management and rotation.
 
 ## Execution model
 
@@ -78,18 +115,24 @@ task registers with the supervisor **and** is runnable standalone
 - [x] Package scaffold per §5.
 - [x] `001_init.sql` implements §6 with rollback notes; runner applies it.
 - [x] Config loader + validation; `netmon.conf.example` present.
-- [x] FastAPI skeleton: AD auth, sessions, roles, `/healthz`, `/docs`.
+- [x] FastAPI skeleton: sessions, roles, `/healthz`, `/docs`.
+- [~] Auth: interim `ldap3` login shipped; **SAML SP (ClassLink) is the target**
+      and is not yet implemented (plan adjustment 2026-07-13).
 - [x] Task-supervisor scaffold in lifespan (heartbeat self-task).
 - [x] One-shot seed populates `devices` from XIQ + PF fixtures.
 - [x] `pytest` green.
 - [x] `docs/runbooks/deploy.md` written.
 - [x] MariaDB driver decision resolved (`pymysql`, owner-approved).
-- [ ] **Owner-side:** app boots against real MariaDB + AD (on-network).
+- [ ] **Owner-side:** app boots against real MariaDB (on-network).
       Verified during deploy, not in this session.
 
 ## Next session
 
-- Resolve the MariaDB driver dependency question, then wire a live boot test.
+- **Rework auth to SAML SSO (ClassLink)** per the "Roles & auth" section: pick
+  + get approval for the SAML SP library, add the `[auth]` SAML config, build
+  the `/auth/saml/{login,acs,metadata}` endpoints and the attribute→role map,
+  and replace the interim `ldap3` login (reusing the session store + role gate).
+  Retire `ldap3` if assertions carry the role claims.
 - Phase 2 (native poller) — first real supervisor task; begins with
   `docs/spec/02-poller.md`.
 - Consider promoting the in-memory session store to a DB-backed table before
