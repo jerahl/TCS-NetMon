@@ -116,16 +116,6 @@ class Supervisor:
 
 
 async def _heartbeat() -> None:
-    """Phase 1 self-task — proves the supervisor loop is alive."""
+    """Self-task — proves the supervisor loop is alive. Registered by
+    ``netmon.app.register_tasks`` alongside the poller/collectors."""
     log.debug("netmon supervisor heartbeat")
-
-
-def build_default_supervisor() -> Supervisor:
-    """Supervisor with only the Phase 1 heartbeat registered.
-
-    Later phases register collectors/poller/engine here (gated on
-    ``config.source_enabled(...)``).
-    """
-    sup = Supervisor()
-    sup.register("heartbeat", _heartbeat, interval_s=30.0, timeout_s=5.0)
-    return sup

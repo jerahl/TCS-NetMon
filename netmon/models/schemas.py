@@ -84,6 +84,26 @@ class StateEvent(BaseModel):
     occurred_at: datetime | None = None
 
 
+class DimensionState(BaseModel):
+    """Current state of one device dimension (from device_state)."""
+
+    value: str | None = None
+    severity: Severity = Severity.unknown
+    updated_at: datetime | None = None
+
+
+class DeviceStatus(BaseModel):
+    """A device plus its current poller-observed ping/snmp state."""
+
+    id: int
+    name: str
+    site: str | None = None
+    device_type: DeviceType = DeviceType.other
+    mgmt_ip: str | None = None
+    ping: DimensionState = DimensionState()
+    snmp: DimensionState = DimensionState()
+
+
 class UserSession(BaseModel):
     """The authenticated principal attached to a request."""
 

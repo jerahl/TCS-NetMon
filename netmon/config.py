@@ -57,6 +57,24 @@ class AuthConfig:
 
 
 @dataclass(frozen=True)
+class PollerConfig:
+    enabled: bool = False
+    ping_interval_s: int = 60
+    snmp_interval_s: int = 300
+    fail_threshold: int = 3
+    ok_threshold: int = 2
+    fping_path: str = "fping"
+    fping_timeout_ms: int = 500
+    fping_retries: int = 1
+    snmpget_path: str = "snmpget"
+    snmp_version: str = "2c"
+    snmp_community: str = ""  # secret; config file only
+    snmp_timeout_s: int = 2
+    snmp_retries: int = 1
+    snmp_concurrency: int = 20
+
+
+@dataclass(frozen=True)
 class SourceToggle:
     """Generic per-source enable flag + opaque settings bag.
 
@@ -74,6 +92,7 @@ class Config:
     db: DBConfig
     web: WebConfig
     auth: AuthConfig
+    poller: PollerConfig
     sources: dict[str, SourceToggle]
     path: str
 
@@ -165,6 +184,31 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
             "development)"
         )
 
+    # --- [poller] ---
+    def _pint(key: str, default: int) -> int:
+        return parser.getint("poller", key, fallback=default)
+
+    poller = PollerConfig(
+        enabled=_as_bool(parser.get("poller", "enabled", fallback="false")),
+        ping_interval_s=_pint("ping_interval_s", 60),
+        snmp_interval_s=_pint("snmp_interval_s", 300),
+        fail_threshold=_pint("fail_threshold", 3),
+        ok_threshold=_pint("ok_threshold", 2),
+        fping_path=parser.get("poller", "fping_path", fallback="fping").strip(),
+        fping_timeout_ms=_pint("fping_timeout_ms", 500),
+        fping_retries=_pint("fping_retries", 1),
+        snmpget_path=parser.get("poller", "snmpget_path", fallback="snmpget").strip(),
+        snmp_version=parser.get("poller", "snmp_version", fallback="2c").strip(),
+        snmp_community=parser.get("poller", "snmp_community", fallback="").strip(),
+        snmp_timeout_s=_pint("snmp_timeout_s", 2),
+        snmp_retries=_pint("snmp_retries", 1),
+        snmp_concurrency=_pint("snmp_concurrency", 20),
+    )
+    if poller.enabled and poller.fail_threshold < 1:
+        raise ConfigError("[poller] fail_threshold must be >= 1")
+    if poller.enabled and poller.ok_threshold < 1:
+        raise ConfigError("[poller] ok_threshold must be >= 1")
+
     # --- per-source toggles ---
     sources: dict[str, SourceToggle] = {}
     for name in ("xiq", "packetfence", "milestone", "threecx", "rconfig"):
@@ -177,4 +221,4 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         else:
             sources[name] = SourceToggle(enabled=False)
 
-    return Config(db=db, web=web, auth=auth, sources=sources, path=conf_path)
+    return Config(db=db, web=web, auth=auth, poller=poller, sources=sources, path=conf_path)

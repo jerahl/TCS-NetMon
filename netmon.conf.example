@@ -50,6 +50,25 @@ group_admin = CN=NetMon-Admins,OU=Groups,DC=example,DC=local
 # dev_bypass_user = devadmin
 # dev_bypass_role = admin
 
+[poller]
+# Native poller: fping ICMP sweep + snmpget sysUpTime. Read-only ground truth.
+# Disabled by default (per-step reversibility); flip on when ready.
+enabled = false
+ping_interval_s = 60
+snmp_interval_s = 300
+# Hysteresis: consecutive failures to declare DOWN / successes to declare UP.
+fail_threshold = 3
+ok_threshold = 2
+# fping tuning (per-target).
+fping_timeout_ms = 500
+fping_retries = 1
+# SNMP. Community is a SECRET — keep it only in this file, never in the repo.
+snmp_version = 2c
+# snmp_community = REPLACE_WITH_RO_COMMUNITY
+snmp_timeout_s = 2
+snmp_retries = 1
+snmp_concurrency = 20
+
 [xiq]
 # ExtremeCloud IQ. Bearer token from XIQ Admin -> API Access Tokens.
 # Store the token here, not in the repo. Read-only usage (CLAUDE.md §4.1).

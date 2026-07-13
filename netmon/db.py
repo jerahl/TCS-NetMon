@@ -47,6 +47,36 @@ def execute(engine: Engine, sql: str, params: Mapping[str, Any] | Iterable[Mappi
         return result.rowcount
 
 
+def upsert(
+    engine: Engine,
+    table: str,
+    keys: Mapping[str, Any],
+    values: Mapping[str, Any],
+) -> None:
+    """Portable insert-or-update on ``keys``.
+
+    Uses SELECT-then-UPDATE/INSERT rather than MariaDB's
+    ``ON DUPLICATE KEY UPDATE`` so the same code runs under SQLite (tests) and
+    MariaDB (prod). ``table`` and column names are code-controlled identifiers,
+    never user input. Single-writer callers (the poller) don't race here.
+    """
+    where = " AND ".join(f"{k} = :{k}" for k in keys)
+    params = {**keys, **values}
+    with engine.begin() as conn:
+        exists = conn.execute(
+            text(f"SELECT 1 FROM {table} WHERE {where}"), dict(keys)
+        ).first()
+        if exists is not None:
+            if values:
+                set_clause = ", ".join(f"{c} = :{c}" for c in values)
+                conn.execute(text(f"UPDATE {table} SET {set_clause} WHERE {where}"), params)
+        else:
+            cols = list(keys) + list(values)
+            collist = ", ".join(cols)
+            vallist = ", ".join(f":{c}" for c in cols)
+            conn.execute(text(f"INSERT INTO {table} ({collist}) VALUES ({vallist})"), params)
+
+
 def healthcheck(engine: Engine) -> bool:
     """Cheap connectivity probe used by /healthz."""
     try:
