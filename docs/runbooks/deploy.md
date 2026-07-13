@@ -89,12 +89,13 @@ anywhere with `DB_HOST`/`ADMIN_USER` set. Then `sudo ./scripts/deploy.sh update`
 
 - Python 3.11+ on the VM (3.12 preferred; Debian 12 ships 3.11 and is
   supported), a service user `netmon`, and MariaDB reachable.
-- SSO via **ClassLink (SAML)**: a NetMon SAML application registered in the
-  ClassLink admin console, the IdP metadata/entity-id + signing cert, NetMon's
-  SP entity-id + ACS URL (`https://<host>/auth/saml/acs`), an SP signing
-  key/cert, and ClassLink configured to release the role/group claim that maps
-  to `viewer`/`operator`/`admin`. *(SAML SP is planned, not yet implemented —
-  the interim build uses `ldap3`; see `docs/spec/01-foundation.md`.)*
+- SSO via **ClassLink (SAML)**: register a NetMon SAML app in the ClassLink
+  admin console using NetMon's SP metadata (`https://<host>/auth/saml/metadata`,
+  ACS `https://<host>/auth/saml/acs`); put the IdP entity-id / SSO URL /
+  signing cert into `[auth]` (`saml_idp_*`), and map the released `role` /
+  `group_ids` claims to `viewer`/`operator`/`admin` (`saml_role_*` /
+  `saml_group_*`). `xmlsec1`/`libxml2` (installed by the deploy script) back
+  `python3-saml`. A dev bypass remains for local, no-IdP development.
 - MariaDB driver: `pymysql` ships in `pyproject.toml` (owner-approved). Use a
   `mysql+pymysql://user:pass@host/netmon?charset=utf8mb4` URL. No system
   packages needed — PyMySQL is pure-Python.

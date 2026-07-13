@@ -92,8 +92,13 @@ def write_config(tmp_path: Path, *, dev_bypass: bool = True, secure_cookies: boo
     if dev_bypass:
         auth_lines += ["dev_bypass_user = devadmin", "dev_bypass_role = admin"]
     else:
-        auth_lines += ["ldap_server = ldaps://dc.example.local",
-                       "ldap_base_dn = DC=example,DC=local"]
+        auth_lines += [
+            "saml_idp_entity_id = https://idp.example/entity",
+            "saml_idp_sso_url = https://idp.example/sso",
+            "saml_idp_x509cert = MIIBdummycert",
+            "saml_sp_entity_id = https://netmon.example/sp",
+            "saml_sp_acs_url = https://netmon.example/auth/saml/acs",
+        ]
     auth_lines.append(extra_auth)
     conf = tmp_path / "netmon.conf"
     conf.write_text(

@@ -1,1 +1,1 @@
-"""Authentication & authorization — AD via ldap3, server-side sessions."""
+"""Authentication & authorization — SAML SP (ClassLink IdP), server-side sessions."""

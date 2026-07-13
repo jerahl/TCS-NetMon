@@ -14,8 +14,10 @@ dependencies = [
     "uvicorn==0.34.0",
     "sqlalchemy==2.0.36",
     "httpx==0.28.1",
-    "ldap3==2.9.1",
     "apscheduler==3.11.0",
+    # ClassLink SSO (SAML SP). Owner-approved 2026-07-13. Pulls xmlsec/lxml
+    # (self-contained wheels); the deploy also installs the xmlsec1 system lib.
+    "python3-saml==1.16.0",
     # MariaDB DBAPI driver for the mysql+pymysql:// URL. Owner-approved
     # 2026-07-11 (CLAUDE.md §3). PyMySQL is pure-Python — no C build or system
     # libs — which suits the offline-tolerant deploy (README §8/§9). Dev/test

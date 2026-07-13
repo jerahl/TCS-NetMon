@@ -133,7 +133,8 @@ pkg_install() {
 
 install_packages() {
   log "installing system packages"
-  local common=(nginx git openssl curl ca-certificates)
+  # xmlsec1/libxml2 back python3-saml (ClassLink SSO).
+  local common=(nginx git openssl curl ca-certificates xmlsec1 libxml2)
   # fping + snmpget are needed by the native poller (Phase 2). Package names differ.
   case "$PKG" in
     apt)

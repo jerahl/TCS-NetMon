@@ -34,16 +34,33 @@ secure_cookies = false
 session_ttl = 43200
 
 [auth]
-# Active Directory (ldap3). Bind is read-only; NetMon never writes to AD.
-ldap_server = ldaps://dc.example.local
-ldap_base_dn = DC=example,DC=local
-# Bind template: {username} is substituted with the login name.
-ldap_user_dn_template = {username}@example.local
-# Group DN -> role mapping. One key per role; value is the AD group DN whose
-# members receive that role. Highest role a user's groups grant wins.
-group_viewer = CN=NetMon-Viewers,OU=Groups,DC=example,DC=local
-group_operator = CN=NetMon-Operators,OU=Groups,DC=example,DC=local
-group_admin = CN=NetMon-Admins,OU=Groups,DC=example,DC=local
+# Single sign-on: NetMon is a SAML 2.0 Service Provider; ClassLink is the IdP.
+# No passwords are handled here and there is no directory bind. Register NetMon
+# in the ClassLink admin console, then fill these from the IdP metadata.
+#
+# IdP (ClassLink):
+# saml_idp_entity_id = https://idp.classlink.com/<tenant>
+# saml_idp_sso_url   = https://idp.classlink.com/<tenant>/sso
+# saml_idp_x509cert  = MIIC...    (IdP signing cert, base64, no PEM headers)
+#
+# SP (this NetMon install):
+# saml_sp_entity_id  = https://netmon.tcs.k12.al.us/auth/saml/metadata
+# saml_sp_acs_url    = https://netmon.tcs.k12.al.us/auth/saml/acs
+# Optional SP signing key/cert (for signed AuthnRequests):
+# saml_sp_cert = MIIC...
+# saml_sp_key  = MIIE...
+#
+# Assertion attribute names ClassLink releases (defaults shown):
+saml_role_attr = role
+saml_group_attr = group_ids
+# Map claim values -> NetMon role (comma-separated). Highest granted role wins.
+# saml_role_admin = Administrator, District Admin
+# saml_role_operator = Network Operator
+# saml_role_viewer = Staff, Teacher
+# Or map by group id:
+# saml_group_admin = 1001
+# saml_group_operator = 1002
+#
 # LOCAL DEVELOPMENT ONLY. When set (and secure_cookies=false), login is
 # bypassed and every request is authenticated as this user/role. Refused when
 # secure_cookies=true so it can never be enabled in production.

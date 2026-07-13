@@ -80,13 +80,16 @@ The `[auth] dev_bypass_user`/`dev_bypass_role` pair still allows local
 development without an IdP; it is refused when `[web] secure_cookies=true` so
 it can never be left on in production.
 
-**Current code status:** Phase 1 shipped an *interim* `ldap3` username/password
-login (`netmon/auth/ldap.py`, `POST /auth/login`) before this decision. It is a
-placeholder to be replaced by the SAML SP above; the session store, roles, and
-`require_role` gate it fed into are reused unchanged. **`ldap3` is retired** —
-it will be dropped from the dependency list and `netmon/auth/ldap.py` removed
-when the SAML SP lands (the assertion's `role`/`group_ids` remove the only
-reason to bind a directory). See "Next session".
+**Current code status:** IMPLEMENTED (2026-07-13). The SAML SP is live in
+`netmon/auth/saml.py` + `netmon/api/auth_routes.py`
+(`/auth/login`, `/auth/saml/acs`, `/auth/saml/metadata`), consuming
+`python3-saml`. The interim `ldap3` login and `netmon/auth/ldap.py` are
+**removed**; `ldap3` is dropped from the dependency list. Role mapping uses the
+ClassLink `role` + `group_ids` claims; the session store, roles, and
+`require_role` gate are unchanged. Verified: SP metadata generation, the
+SP-initiated login redirect (signed AuthnRequest → ClassLink), and unmapped-
+user denial. Live assertion validation against ClassLink is confirmed at
+deploy.
 
 **Decisions (2026-07-13):**
 - **SAML SP library: `python3-saml`.** The revised runtime-resilience goal
@@ -128,8 +131,8 @@ task registers with the supervisor **and** is runnable standalone
 - [x] `001_init.sql` implements §6 with rollback notes; runner applies it.
 - [x] Config loader + validation; `netmon.conf.example` present.
 - [x] FastAPI skeleton: sessions, roles, `/healthz`, `/docs`.
-- [~] Auth: interim `ldap3` login shipped; **SAML SP (ClassLink) is the target**
-      and is not yet implemented (plan adjustment 2026-07-13).
+- [x] Auth: **SAML SP (ClassLink) implemented** (`python3-saml`); interim
+      `ldap3` login removed. Live ClassLink assertion validation at deploy.
 - [x] Task-supervisor scaffold in lifespan (heartbeat self-task).
 - [x] One-shot seed populates `devices` from XIQ + PF fixtures.
 - [x] `pytest` green.

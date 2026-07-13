@@ -47,11 +47,23 @@ class WebConfig:
 
 @dataclass(frozen=True)
 class AuthConfig:
-    ldap_server: str = ""
-    ldap_base_dn: str = ""
-    ldap_user_dn_template: str = "{username}"
-    # role name -> AD group DN
-    group_map: dict[str, str] = field(default_factory=dict)
+    # SAML 2.0 Service Provider (ClassLink IdP). NetMon consumes the signed
+    # assertion; no passwords, no directory bind.
+    idp_entity_id: str = ""
+    idp_sso_url: str = ""
+    idp_x509cert: str = ""
+    sp_entity_id: str = ""
+    sp_acs_url: str = ""
+    sp_slo_url: str = ""
+    sp_cert: str = ""
+    sp_key: str = ""
+    # Assertion attribute names carrying the role claim and group ids.
+    role_attr: str = "role"
+    group_attr: str = "group_ids"
+    # netmon role -> the claim values / group_ids that grant it.
+    role_values: dict[str, set[str]] = field(default_factory=dict)
+    group_values: dict[str, set[str]] = field(default_factory=dict)
+    # Local development bypass (no IdP). Refused when secure_cookies=true.
     dev_bypass_user: str | None = None
     dev_bypass_role: str | None = None
 
@@ -143,13 +155,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         session_ttl=parser.getint("web", "session_ttl", fallback=43200),
     )
 
-    # --- [auth] ---
-    group_map: dict[str, str] = {}
-    for role in ROLES:
-        dn = parser.get("auth", f"group_{role}", fallback="").strip()
-        if dn:
-            group_map[role] = dn
-
+    # --- [auth] — SAML SP (ClassLink) + dev bypass ---
     dev_user = parser.get("auth", "dev_bypass_user", fallback="").strip() or None
     dev_role = parser.get("auth", "dev_bypass_role", fallback="").strip() or None
 
@@ -166,22 +172,46 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
             f"[auth] dev_bypass_role={dev_role!r} is not one of {ROLES}"
         )
 
+    def _csv_set(key: str) -> set[str]:
+        raw = parser.get("auth", key, fallback="").strip()
+        return {v.strip() for v in raw.split(",") if v.strip()}
+
+    role_values: dict[str, set[str]] = {}
+    group_values: dict[str, set[str]] = {}
+    for role in ROLES:
+        rv = _csv_set(f"saml_role_{role}")
+        gv = _csv_set(f"saml_group_{role}")
+        if rv:
+            role_values[role] = rv
+        if gv:
+            group_values[role] = gv
+
     auth = AuthConfig(
-        ldap_server=parser.get("auth", "ldap_server", fallback="").strip(),
-        ldap_base_dn=parser.get("auth", "ldap_base_dn", fallback="").strip(),
-        ldap_user_dn_template=parser.get(
-            "auth", "ldap_user_dn_template", fallback="{username}"
-        ).strip(),
-        group_map=group_map,
+        idp_entity_id=parser.get("auth", "saml_idp_entity_id", fallback="").strip(),
+        idp_sso_url=parser.get("auth", "saml_idp_sso_url", fallback="").strip(),
+        idp_x509cert=parser.get("auth", "saml_idp_x509cert", fallback="").strip(),
+        sp_entity_id=parser.get("auth", "saml_sp_entity_id", fallback="").strip(),
+        sp_acs_url=parser.get("auth", "saml_sp_acs_url", fallback="").strip(),
+        sp_slo_url=parser.get("auth", "saml_sp_slo_url", fallback="").strip(),
+        sp_cert=parser.get("auth", "saml_sp_cert", fallback="").strip(),
+        sp_key=parser.get("auth", "saml_sp_key", fallback="").strip(),
+        role_attr=parser.get("auth", "saml_role_attr", fallback="role").strip(),
+        group_attr=parser.get("auth", "saml_group_attr", fallback="group_ids").strip(),
+        role_values=role_values,
+        group_values=group_values,
         dev_bypass_user=dev_user,
         dev_bypass_role=dev_role,
     )
 
-    # Without the dev bypass, an AD server is required to authenticate anyone.
-    if not auth.dev_bypass_user and not auth.ldap_server:
+    # Without the dev bypass, the SAML IdP settings are required to authenticate.
+    if not auth.dev_bypass_user and not (
+        auth.idp_entity_id and auth.idp_sso_url and auth.idp_x509cert
+        and auth.sp_entity_id and auth.sp_acs_url
+    ):
         raise ConfigError(
-            "[auth] ldap_server is required (or set dev_bypass_user for local "
-            "development)"
+            "[auth] SAML IdP settings are required (saml_idp_entity_id, "
+            "saml_idp_sso_url, saml_idp_x509cert, saml_sp_entity_id, "
+            "saml_sp_acs_url) — or set dev_bypass_user for local development."
         )
 
     # --- [poller] ---
