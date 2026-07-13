@@ -13,7 +13,11 @@ export async function getJSON(path) {
   } catch (e) {
     throw new Error("network error contacting NetMon API");
   }
-  if (resp.status === 401) throw new AuthError("not authenticated");
+  if (resp.status === 401) {
+    // Prompt for auth — send the browser to the login page (SSO + local).
+    window.location.assign("/login");
+    throw new AuthError("redirecting to sign in");
+  }
   if (!resp.ok) throw new Error(`API HTTP ${resp.status}`);
   return resp.json();
 }

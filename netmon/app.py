@@ -162,6 +162,7 @@ def create_app(
 
     app.include_router(health.router)
     app.include_router(auth_routes.router)
+    app.include_router(auth_routes.page_router)
     app.include_router(devices.router)
     app.include_router(status.router)
     app.include_router(nac.router)

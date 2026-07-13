@@ -76,6 +76,15 @@ Config (`[auth]`, replacing the LDAP keys): IdP metadata URL/entity-id + signing
 cert, SP entity-id + ACS URL, SP signing key/cert (secrets on disk only), and
 the attribute→role maps (`role` value → role, and `group_id` → role).
 
+**Login prompt + break-glass local account (2026-07-13):** an unauthenticated
+API call returns 401; the SPA turns that into a redirect to **`GET /login`** — a
+server-rendered page offering "Sign in with ClassLink" (`/auth/sso`) and a
+**local** account form (`POST /auth/local`). The local account is break-glass:
+it authenticates with no IdP / no network (NetMon's offline-tolerance applied to
+login), against `[auth] local_user` + `local_password_hash` (PBKDF2-SHA256,
+stdlib; generate with `python -m netmon.auth.local`) → `local_role`. Config
+validation accepts **any** of: dev bypass, SAML, or a local account.
+
 The `[auth] dev_bypass_user`/`dev_bypass_role` pair still allows local
 development without an IdP; it is refused when `[web] secure_cookies=true` so
 it can never be left on in production.

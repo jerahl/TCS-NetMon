@@ -63,6 +63,11 @@ class AuthConfig:
     # netmon role -> the claim values / group_ids that grant it.
     role_values: dict[str, set[str]] = field(default_factory=dict)
     group_values: dict[str, set[str]] = field(default_factory=dict)
+    # Break-glass local account (works with no IdP / network). Password is a
+    # PBKDF2 hash (never plaintext). Distinct from the dev bypass.
+    local_user: str = ""
+    local_password_hash: str = ""
+    local_role: str = "admin"
     # Local development bypass (no IdP). Refused when secure_cookies=true.
     dev_bypass_user: str | None = None
     dev_bypass_role: str | None = None
@@ -198,6 +203,10 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         if gv:
             group_values[role] = gv
 
+    local_role = parser.get("auth", "local_role", fallback="admin").strip()
+    if local_role not in ROLES:
+        raise ConfigError(f"[auth] local_role={local_role!r} is not one of {ROLES}")
+
     auth = AuthConfig(
         idp_entity_id=parser.get("auth", "saml_idp_entity_id", fallback="").strip(),
         idp_sso_url=parser.get("auth", "saml_idp_sso_url", fallback="").strip(),
@@ -211,19 +220,25 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         group_attr=parser.get("auth", "saml_group_attr", fallback="group_ids").strip(),
         role_values=role_values,
         group_values=group_values,
+        local_user=parser.get("auth", "local_user", fallback="").strip(),
+        local_password_hash=parser.get("auth", "local_password_hash", fallback="").strip(),
+        local_role=local_role,
         dev_bypass_user=dev_user,
         dev_bypass_role=dev_role,
     )
 
-    # Without the dev bypass, the SAML IdP settings are required to authenticate.
-    if not auth.dev_bypass_user and not (
+    # At least one auth method must be usable: the dev bypass, SAML SSO, or the
+    # break-glass local account.
+    saml_ok = bool(
         auth.idp_entity_id and auth.idp_sso_url and auth.idp_x509cert
         and auth.sp_entity_id and auth.sp_acs_url
-    ):
+    )
+    local_ok = bool(auth.local_user and auth.local_password_hash)
+    if not (auth.dev_bypass_user or saml_ok or local_ok):
         raise ConfigError(
-            "[auth] SAML IdP settings are required (saml_idp_entity_id, "
-            "saml_idp_sso_url, saml_idp_x509cert, saml_sp_entity_id, "
-            "saml_sp_acs_url) — or set dev_bypass_user for local development."
+            "[auth] no auth method configured — set the SAML IdP settings "
+            "(saml_idp_*/saml_sp_*), a break-glass local_user + "
+            "local_password_hash, or dev_bypass_user for local development."
         )
 
     # --- [poller] ---

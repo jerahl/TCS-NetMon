@@ -57,7 +57,8 @@ export function Loading({ what }) {
 
 export function ErrorMsg({ error }) {
   if (error?.name === "AuthError") {
-    return <div className="msg error">Not signed in. <a href="/auth/login">Sign in</a> to view NetMon.</div>;
+    // api.js already redirects to /login; this is just the brief interim text.
+    return <div className="msg">Redirecting to sign in… <a href="/login">Sign in</a></div>;
   }
   return <div className="msg error">Error: {String(error?.message || error)}</div>;
 }

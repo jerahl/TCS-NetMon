@@ -96,6 +96,11 @@ anywhere with `DB_HOST`/`ADMIN_USER` set. Then `sudo ./scripts/deploy.sh update`
   `group_ids` claims to `viewer`/`operator`/`admin` (`saml_role_*` /
   `saml_group_*`). `xmlsec1`/`libxml2` (installed by the deploy script) back
   `python3-saml`. A dev bypass remains for local, no-IdP development.
+- **Break-glass local account** (recommended) so admins can log in when
+  ClassLink or the network is down: generate a hash with
+  `python -m netmon.auth.local` and set `[auth] local_user` /
+  `local_password_hash` / `local_role`. Users land on `/login` (ClassLink +
+  local form) when unauthenticated.
 - MariaDB driver: `pymysql` ships in `pyproject.toml` (owner-approved). Use a
   `mysql+pymysql://user:pass@host/netmon?charset=utf8mb4` URL. No system
   packages needed — PyMySQL is pure-Python.

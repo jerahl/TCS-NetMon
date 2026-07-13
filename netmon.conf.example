@@ -61,6 +61,13 @@ saml_group_attr = group_ids
 # saml_group_admin = 1001
 # saml_group_operator = 1002
 #
+# BREAK-GLASS LOCAL ACCOUNT — works when ClassLink/the network is down. The
+# password is a PBKDF2 hash, never plaintext; generate it with:
+#   python -m netmon.auth.local
+# local_user = netmon-admin
+# local_password_hash = pbkdf2_sha256$240000$...$...
+# local_role = admin
+#
 # LOCAL DEVELOPMENT ONLY. When set (and secure_cookies=false), login is
 # bypassed and every request is authenticated as this user/role. Refused when
 # secure_cookies=true so it can never be enabled in production.
