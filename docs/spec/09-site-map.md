@@ -51,13 +51,16 @@ A geographic map of the district (Leaflet) as an at-a-glance operational view:
 
 ## Open decisions (resolve at phase start — do not guess)
 
-1. **Map tiles are an external network fetch.** The prototype pulls CARTO /
-   Esri basemaps and Leaflet from CDNs. This conflicts with the Phase 4 DoD
-   ("no external network fetches at runtime") and CLAUDE.md §3 ("no CDN
-   loads"). Decide: self-host an offline tile pack (district-bbox only) +
-   bundle Leaflet via esbuild, **or** explicitly allow outbound to a tile
-   provider for this page. Leaflet must be a locally bundled dependency
-   either way (new frontend dep — flag for approval).
+1. **Map tiles as a runtime data source.** The prototype pulls CARTO / Esri
+   basemaps and Leaflet from CDNs. Under the clarified runtime-resilience goal
+   (CLAUDE.md §9, 2026-07-13), pulling map *tiles* from a provider at runtime is
+   acceptable **provided the map degrades gracefully when the network is down**
+   (the prototype already shows a "MAP TILES UNREACHABLE" state — keep it).
+   Leaflet and the app JS/CSS are still bundled locally via esbuild, never from
+   a CDN — that is the separate §3 app-bundle rule (reproducibility/security),
+   not an offline one. Optional hardening: a self-hosted district-bbox tile
+   pack to remove even the tile dependency. Bundling Leaflet is a new frontend
+   dep — flag for approval when the phase starts.
 2. **Fiber-link topology source.** A link registry (site-A ↔ site-B, capacity,
    path polyline) is new. Options: a curated table/config maintained by the
    owner, or derived from LLDP/CDP neighbor data via SNMP/XIQ. Site

@@ -2,7 +2,9 @@
 name = "netmon"
 version = "0.1.0"
 description = "TCS NetMon — federated network/wireless/voice/surveillance monitoring platform"
-requires-python = ">=3.12"
+# 3.11 floor matches the deploy VM (Debian 12 ships 3.11); 3.12 is preferred.
+# The code uses no 3.12-only features (test suite runs on 3.11).
+requires-python = ">=3.11"
 
 # Dependency policy (CLAUDE.md §3): stdlib-preferred; this bounded set is the
 # only third-party surface. Nothing is added here without a written reason and

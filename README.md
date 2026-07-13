@@ -24,10 +24,10 @@ NetMon must own in v1: unified data model, dashboards, and **alerting/notificati
 
 **One Python package. FastAPI serves the JSON API and the built React UI; the collectors, native poller, and alert engine live in the same package and share its models, config, and DB layer.**
 
-- **Runtime:** Python 3.12, `uvicorn` behind nginx (or systemd socket activation), on a dedicated VM.
+- **Runtime:** Python 3.11+ (3.12 preferred; deploy VM is Debian 12 / 3.11), `uvicorn` behind nginx (or systemd socket activation), on a dedicated VM.
 - **Framework:** FastAPI — async-native (right shape for collectors that are 95% waiting on remote APIs), Pydantic models double as the API contract and the collector-output validation layer, and `/docs` gives a free, always-current API reference — a bus-factor asset in itself.
 - **Database:** MariaDB (existing TCS infra, backups, and habits) via SQLAlchemy Core — explicit SQL-shaped queries, no ORM magic. Schema managed by plain, numbered migration scripts.
-- **Dependency policy:** the stdlib-preferred rule bends here because a web framework is the project. The concession is bounded: `fastapi`, `uvicorn`, `sqlalchemy`, `httpx`, `ldap3`, `apscheduler`, `pymysql` — pinned in a lockfile, reviewed before every bump, nothing added without a written reason in the repo. ICMP/SNMP via subprocess to `fping`/`snmpget` rather than a Python SNMP stack. (SSO adds a SAML SP library, pending an owner decision — see CLAUDE.md §3; `ldap3` may be retired once ClassLink assertions are confirmed to carry role claims.)
+- **Dependency policy:** the stdlib-preferred rule bends here because a web framework is the project. The concession is bounded: `fastapi`, `uvicorn`, `sqlalchemy`, `httpx`, `apscheduler`, `pymysql`, `python3-saml` (ClassLink SSO) — pinned in a lockfile, reviewed before every bump, nothing added without a written reason in the repo. ICMP/SNMP via subprocess to `fping`/`snmpget` rather than a Python SNMP stack. (`ldap3` is retired: ClassLink sends `role`/`group_ids` in the assertion, so no directory bind is needed — see CLAUDE.md §3.)
 - **Auth:** single sign-on — NetMon is a SAML 2.0 Service Provider with **ClassLink** as the IdP (federating the district directory); assertion claims map to roles and NetMon issues its own session cookie (no password handling, no direct AD bind). Read-only v1 — no write paths to any source platform.
 - **Frontend:** the React assets from ZabbixCustomDashboard (`global-nav.jsx`, switches port-grid, surveillance NOC, tweaks panel) extracted from the Zabbix module shell, converted to a real esbuild pipeline (dropping Babel-standalone/unpkg per the repo's own README), output served as static files by FastAPI.
 
@@ -131,4 +131,6 @@ Roughly 6–8 calendar months. Phase 1 gains ~a week versus v0.1 (new web/auth c
 
 ## 8. Open items to settle in Phase 0
 
-3CX v20 API surface vs. ODBC access; XIQ API rate limits at TCS device counts; rConfig edition/API availability; whether PF node data belongs in NetMon's registry or stays a linked page; SMTP relay for notifications; VM sizing/placement for the FastAPI host; Python version and package-mirror strategy for an offline-tolerant deploy.
+3CX v20 API surface vs. ODBC access; XIQ API rate limits at TCS device counts; rConfig edition/API availability; whether PF node data belongs in NetMon's registry or stays a linked page; SMTP relay for notifications; VM sizing/placement for the FastAPI host.
+
+*Resolved:* Python 3.11+ (deploy VM is Debian 12 / 3.11; 3.12 preferred). "Offline-tolerant" is a **runtime** property — NetMon keeps functioning when the network/sources are down (graceful degradation, blind-state), not that installs never reach the internet; a package mirror is therefore optional, not required.

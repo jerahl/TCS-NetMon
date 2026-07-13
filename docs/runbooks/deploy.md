@@ -61,7 +61,8 @@ below document what the script does under the hood.
 
 ## 0. Prerequisites
 
-- Python 3.12 on the VM, a service user `netmon`, and MariaDB reachable.
+- Python 3.11+ on the VM (3.12 preferred; Debian 12 ships 3.11 and is
+  supported), a service user `netmon`, and MariaDB reachable.
 - SSO via **ClassLink (SAML)**: a NetMon SAML application registered in the
   ClassLink admin console, the IdP metadata/entity-id + signing cert, NetMon's
   SP entity-id + ACS URL (`https://<host>/auth/saml/acs`), an SP signing
@@ -75,7 +76,7 @@ below document what the script does under the hood.
 ## 1. Install
 
 ```bash
-sudo -u netmon python3.12 -m venv /opt/netmon/venv
+sudo -u netmon python3 -m venv /opt/netmon/venv   # python3.12 if available, else 3.11
 sudo -u netmon /opt/netmon/venv/bin/pip install /opt/netmon/src   # the repo
 # The MariaDB driver (pymysql) installs automatically as a pinned dependency.
 ```

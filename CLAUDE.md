@@ -35,10 +35,11 @@ NetMon also owns **alerting** (rules → dedupe → maintenance windows → SMTP
 
 ## 3. Stack and dependency policy
 
-- **Python 3.12**, single package `netmon`, FastAPI app served by uvicorn behind nginx.
+- **Python 3.11+** (3.12 preferred; the deploy VM runs Debian 12 / Python 3.11 — decided 2026-07-13), single package `netmon`, FastAPI app served by uvicorn behind nginx.
 - **MariaDB** via **SQLAlchemy Core** (no ORM/declarative models — explicit, SQL-shaped queries). Schema via plain numbered migration scripts in `migrations/` applied by a small runner; no Alembic.
-- **Allowed third-party dependencies:** `fastapi`, `uvicorn`, `sqlalchemy`, `httpx`, `ldap3`, `apscheduler`, `pymysql` (MariaDB DBAPI driver — owner-approved 2026-07-11; pure-Python, suits offline-tolerant deploy). Pinned in a lockfile. **Do not add any other dependency without stopping and asking.** Prefer stdlib. ICMP/SNMP are subprocess calls to `fping` / `snmpget` — do not introduce a Python SNMP library.
-  - **Pending (SSO):** a SAML SP library is required for ClassLink login and needs an owner decision on the specific package + pin — likely `python3-saml`, which pulls the `xmlsec1`/`libxml2` system libraries (weigh against the §9 offline-deploy goal) — or a pure-Python alternative. `ldap3` may be retired once SAML assertions are confirmed to carry the role/group claims (kept meanwhile only if a directory lookup turns out necessary).
+- **Allowed third-party dependencies:** `fastapi`, `uvicorn`, `sqlalchemy`, `httpx`, `apscheduler`, `pymysql` (MariaDB DBAPI driver — owner-approved 2026-07-11), `python3-saml` (ClassLink SSO — owner-approved 2026-07-13; links `xmlsec1`/`libxml2` system libs, installed at deploy time). Pinned in a lockfile. **Do not add any other dependency without stopping and asking.** Prefer stdlib. ICMP/SNMP are subprocess calls to `fping` / `snmpget` — do not introduce a Python SNMP library.
+  - `ldap3` is **retired** (was: interim AD-bind login). ClassLink sends `role` + `group_ids` in the SAML assertion, so no directory lookup is needed; drop `ldap3` and `netmon/auth/ldap.py` when the SAML SP replaces the interim login.
+  - `python3-saml`'s pin lands in `pyproject.toml` when the SAML SP is implemented (the last §3 dependency checkpoint); the deploy script adds the `xmlsec1` system package at the same time.
 - **Frontend:** React components ported from `jerahl/ZabbixCustomDashboard` (`tcs_dashboard/assets/*.jsx`), built with **esbuild** to static files served by FastAPI. No Babel-standalone, no unpkg/CDN loads, no framework migration — keep the existing component structure.
 - **Auth:** Single sign-on. NetMon is a **SAML 2.0 Service Provider**; **ClassLink** is the identity provider (it federates the district directory). NetMon consumes the signed SAML assertion at its ACS endpoint, maps assertion attributes (ClassLink role/group claims) → roles, and issues its own server-side session cookie. **NetMon never handles a password and does not bind AD directly.** Roles: `viewer`, `operator` (can ack alerts / set maintenance), `admin` (can edit rules/registry). A local dev bypass remains for development without an IdP. *(Plan adjustment 2026-07-13: this replaces the earlier AD-via-`ldap3` bind; the Phase 1 interim `ldap3` login is to be reworked — see `docs/spec/01-foundation.md`.)*
 
@@ -154,4 +155,6 @@ Begins with `docs/spec/09-site-map.md`; design source is the Claude Design hando
 
 ## 9. Open questions (tracked; do not guess answers)
 
-3CX v20 REST surface vs ODBC; XIQ rate limits at production device counts; rConfig edition/API availability; whether PF node data merges into `devices` or stays a linked view; SMTP relay to use; VM sizing/placement; offline-tolerant package mirror strategy.
+3CX v20 REST surface vs ODBC; XIQ rate limits at production device counts; rConfig edition/API availability; whether PF node data merges into `devices` or stays a linked view; SMTP relay to use; VM sizing/placement.
+
+**Runtime-resilience goal (clarified 2026-07-13):** "offline-tolerant" means NetMon keeps working when the *network or a source is down* — degrade gracefully, mark sources `blind`, never fabricate or serve stale-as-fresh. It does **not** mean a zero-internet install: pulling packages and system libs (e.g. `xmlsec1`) at deploy time is fine, so a local package mirror is **optional**, not required. (Distinct from the §3 frontend rule that the *app bundle* ships no CDN loads — that is a reproducibility/security rule, not an offline one.)

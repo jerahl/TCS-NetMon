@@ -57,9 +57,12 @@ Target flow:
 2. NetMon validates the signed SAML assertion (signature against the IdP's
    metadata certificate, `Audience`/`Destination`/`NotOnOrAfter`, replay
    protection) at `POST /auth/saml/acs`.
-3. Attribute → role mapping: ClassLink role/group claims map to
-   `viewer` < `operator` < `admin` (config, same precedence rule as today —
-   highest granted role wins). A user with no mapped claim is denied.
+3. Attribute → role mapping: ClassLink releases a `role` attribute and a
+   `group_ids` (multi-valued) attribute in the assertion. Both are mapped to
+   `viewer` < `operator` < `admin` via config (a `role`-value map and a
+   `group_id`→role map); the **highest** role any claim grants wins, same
+   precedence rule as today. A user with no mapped claim is denied. Because the
+   assertion carries these directly, **no directory lookup is needed**.
 4. On success NetMon issues its own server-side session cookie (unchanged from
    the interim design: opaque cookie → session store; `HttpOnly`, `SameSite=Lax`,
    `Secure` when `[web] secure_cookies=true`). SLO/logout clears the session.
@@ -71,7 +74,7 @@ store are unchanged.
 
 Config (`[auth]`, replacing the LDAP keys): IdP metadata URL/entity-id + signing
 cert, SP entity-id + ACS URL, SP signing key/cert (secrets on disk only), and
-the attribute→role claim map.
+the attribute→role maps (`role` value → role, and `group_id` → role).
 
 The `[auth] dev_bypass_user`/`dev_bypass_role` pair still allows local
 development without an IdP; it is refused when `[web] secure_cookies=true` so
@@ -80,14 +83,22 @@ it can never be left on in production.
 **Current code status:** Phase 1 shipped an *interim* `ldap3` username/password
 login (`netmon/auth/ldap.py`, `POST /auth/login`) before this decision. It is a
 placeholder to be replaced by the SAML SP above; the session store, roles, and
-`require_role` gate it fed into are reused unchanged. See "Next session".
+`require_role` gate it fed into are reused unchanged. **`ldap3` is retired** —
+it will be dropped from the dependency list and `netmon/auth/ldap.py` removed
+when the SAML SP lands (the assertion's `role`/`group_ids` remove the only
+reason to bind a directory). See "Next session".
 
-**Open decisions (resolve before implementing — do not guess):**
-- SAML SP library + pin (e.g. `python3-saml`, which needs `xmlsec1`/`libxml2`
-  system libs — weigh against the §9 offline-deploy goal — vs. a pure-Python
-  option). New dependency ⇒ owner approval (§3).
-- Exact ClassLink attribute names carrying role/group; whether any directory
-  lookup is still needed (if so, `ldap3` stays; otherwise it is retired).
+**Decisions (2026-07-13):**
+- **SAML SP library: `python3-saml`.** The revised runtime-resilience goal
+  (§9 — "works when the network is down", not "never reaches the internet")
+  removes the objection to its `xmlsec1`/`libxml2` system libs, which are
+  installed at deploy time. Pin is added to `pyproject.toml` at implementation
+  (the last §3 dependency checkpoint); the deploy script gains the `xmlsec1`
+  package then.
+- **Claims: `role` + `group_ids`** (confirmed with ClassLink) — drives the
+  role map above; no directory lookup, so `ldap3` is retired.
+
+**Still open:** SP signing/encryption certificate management + rotation.
 - SP signing/encryption cert management and rotation.
 
 ## Execution model
@@ -104,8 +115,9 @@ task registers with the supervisor **and** is runnable standalone
   and pinned in `pyproject.toml` / CLAUDE.md §3. Production uses
   `mysql+pymysql://…?charset=utf8mb4`; dev/test uses `sqlite://` (stdlib, no
   extra driver). The DB layer is URL-driven, so the two share one code path.
-  PyMySQL is pure-Python (no C build / system libs), which suits the
-  offline-tolerant deploy.
+  PyMySQL is pure-Python (no C build step) — a convenience, not a requirement
+  (the runtime-resilience goal is about surviving a network outage, not
+  avoiding install-time dependencies; see §9 / README §8).
 - The migration SQL is MariaDB-flavored (`ENGINE=InnoDB`, `AUTO_INCREMENT`).
   Tests assert its integrity textually rather than executing it against
   MariaDB; the app applies it live against the configured MariaDB.

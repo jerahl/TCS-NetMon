@@ -138,15 +138,15 @@ install_packages() {
   case "$PKG" in
     apt)
       pkg_install "${common[@]}" fping snmp python3 python3-venv python3-pip
-      # Best-effort 3.12 (pyproject target); falls back to system python3 otherwise.
+      # Prefer 3.12 where available; system python3 (3.11+, e.g. Debian 12) is supported.
       run env DEBIAN_FRONTEND=noninteractive apt-get install -y python3.12 python3.12-venv 2>/dev/null || \
-        warn "python3.12 not available from apt; will use system python3"
+        log "python3.12 not in apt; using system python3 (3.11+ supported)"
       [[ "$ENABLE_FIREWALL" == 1 ]] && pkg_install ufw || true
       [[ "$ENABLE_FAIL2BAN" == 1 ]] && pkg_install fail2ban || true
       ;;
     dnf|yum)
       pkg_install "${common[@]}" fping net-snmp-utils python3 python3-pip
-      run "$PKG" install -y python3.12 2>/dev/null || warn "python3.12 not available; will use system python3"
+      run "$PKG" install -y python3.12 2>/dev/null || log "python3.12 not available; using system python3 (3.11+ supported)"
       [[ "$ENABLE_FIREWALL" == 1 ]] && pkg_install firewalld || true
       [[ "$ENABLE_FAIL2BAN" == 1 ]] && pkg_install fail2ban || true
       ;;
