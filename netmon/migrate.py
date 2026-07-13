@@ -18,7 +18,7 @@ from pathlib import Path
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from netmon import db
 from netmon.config import load_config
@@ -119,7 +119,8 @@ def main(argv: list[str] | None = None) -> int:
 
         applied = apply_migrations(engine)
     except OperationalError as exc:
-        # Fail loud, but readable — not a 60-line SQLAlchemy traceback.
+        # Connection-class failure. Fail loud, but readable — not a 60-line
+        # SQLAlchemy traceback.
         print(
             f"error: cannot open the database at the configured [db] url "
             f"(from {cfg.path}).\n"
@@ -131,6 +132,13 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    except SQLAlchemyError as exc:
+        # A statement failed (e.g. bad DDL). Show the DB message + offending
+        # SQL (SQLAlchemy embeds it) without the Python traceback. Migrations
+        # use CREATE TABLE IF NOT EXISTS, so a fixed migration can be re-run
+        # safely — already-created tables are skipped.
+        print(f"error: migration failed.\n  {exc}", file=sys.stderr)
+        return 3
 
     if applied:
         print(f"applied migrations: {', '.join(applied)}")

@@ -28,6 +28,15 @@ def test_001_present_and_has_all_tables():
         assert f"CREATE TABLE IF NOT EXISTS {table}" in sql, f"missing table {table}"
 
 
+def test_reserved_word_columns_are_quoted():
+    # `condition` is a MariaDB reserved word; an unquoted column of that name is
+    # a 1064 syntax error on MariaDB (SQLite accepts it, so tests alone miss it).
+    import re
+    sql = discover_migrations()[0].path.read_text()
+    assert "`condition`" in sql, "alert_rules.condition must be backtick-quoted"
+    assert re.search(r"(?m)^\s+condition\s+\w", sql) is None, "found an unquoted `condition` column"
+
+
 def test_every_migration_has_rollback_note():
     for mig in discover_migrations():
         text_ = mig.path.read_text().lower()

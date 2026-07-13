@@ -85,7 +85,9 @@ CREATE TABLE IF NOT EXISTS alert_rules (
                   NOT NULL,
     -- condition stored as data (operator + comparison value), evaluated by the
     -- engine. e.g. {"op":"eq","value":"down"} — kept as JSON text.
-    condition     TEXT         NOT NULL,
+    -- `condition` is a reserved word in MariaDB → must stay backtick-quoted
+    -- here and in every query that references it (the Phase 6 engine).
+    `condition`   TEXT         NOT NULL,
     severity      ENUM('ok','warn','crit','unknown') NOT NULL DEFAULT 'warn',
     min_duration_s INT         NOT NULL DEFAULT 0,
     target        VARCHAR(255) NULL,                  -- notification email
