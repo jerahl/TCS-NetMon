@@ -20,6 +20,8 @@ from fastapi import FastAPI
 from netmon import __version__, db, migrate
 from netmon.api import auth_routes, devices, health, status
 from netmon.auth.sessions import SessionStore
+from netmon.collectors.xiq import XiqCollector
+from netmon.collectors.xiq_client import XiqError
 from netmon.config import Config, load_config
 from netmon.poller.poller import Poller
 from netmon.supervisor import Supervisor, _heartbeat
@@ -45,6 +47,16 @@ def register_tasks(supervisor: Supervisor, cfg: Config, engine) -> None:
             interval_s=cfg.poller.snmp_interval_s, timeout_s=cfg.poller.snmp_interval_s,
         )
         log.info("poller enabled: ping/%ss, snmp/%ss", cfg.poller.ping_interval_s, cfg.poller.snmp_interval_s)
+
+    if cfg.source_enabled("xiq"):
+        try:
+            xiq = XiqCollector.from_config(engine, cfg)
+        except XiqError as exc:
+            # Misconfigured source (e.g. missing token) must not crash the app.
+            log.error("XIQ collector not started: %s", exc)
+        else:
+            supervisor.register("xiq", xiq.run_guarded, interval_s=xiq.interval_s, timeout_s=xiq.timeout_s)
+            log.info("XIQ collector enabled: status/%ss", xiq.interval_s)
 
 
 @asynccontextmanager

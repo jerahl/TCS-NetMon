@@ -37,6 +37,14 @@ def test_reserved_word_columns_are_quoted():
     assert re.search(r"(?m)^\s+condition\s+\w", sql) is None, "found an unquoted `condition` column"
 
 
+def test_002_seeds_source_blind_rule():
+    migs = {m.version: m for m in discover_migrations()}
+    assert "002" in migs, "expected 002 seed migration"
+    sql = migs["002"].path.read_text()
+    assert "source_blind" in sql
+    assert "`condition`" in sql  # reserved word stays quoted in the INSERT too
+
+
 def test_every_migration_has_rollback_note():
     for mig in discover_migrations():
         text_ = mig.path.read_text().lower()

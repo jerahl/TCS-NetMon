@@ -1,20 +1,17 @@
-"""Collector base contract.
+"""Collector base contract (finalized in Phase 3).
 
 Every collector (XIQ, PacketFence, Milestone, 3CX, rConfig) subclasses
-``Collector``. The contract, built here from the start (CLAUDE.md §5):
+``Collector``:
 
-  * ``run_once()`` — one collection cycle; subclass implements the real work.
-    Read-only against the source; validates payloads with Pydantic; upserts to
-    ``devices``/``device_state``; appends transitions to ``state_events``.
-  * heartbeat + error boundary — ``run_guarded()`` wraps ``run_once()`` and
-    writes ``collector_health`` (last_start/last_success/last_error/duration/
-    records/consecutive_failures). A failure marks health loud and leaves prior
-    state visibly stale — it never fabricates or silently overwrites (§4.5).
-  * two execution modes — the same object runs in-process under the supervisor
-    (``as_task`` returns the supervisor callable) AND standalone via
-    ``python -m netmon.collectors.<name> --once|--loop`` (``main()``).
-
-Phase 1 ships the contract only; concrete collectors arrive in Phase 3+.
+  * ``run_once()`` — one collection cycle; read-only against the source,
+    Pydantic-validated payloads, writes to ``device_state``/``state_events``
+    via ``netmon.state.write_state``. Returns the number of records written.
+  * ``run_guarded()`` — wraps ``run_once`` in the portable ``collector_health``
+    heartbeat + error boundary (``netmon.health``, shared with the poller). A
+    failure records loud and leaves prior state intact — never fabricated (§4.5).
+  * ``as_task()`` — the callable the supervisor schedules in-process.
+  * ``run_standalone(build)`` — ``python -m netmon.collectors.<name>
+    --once|--loop``, the documented escape hatch (§5).
 """
 
 from __future__ import annotations
@@ -28,7 +25,7 @@ from collections.abc import Awaitable, Callable
 
 from sqlalchemy.engine import Engine
 
-from netmon import db
+from netmon import health
 
 log = logging.getLogger("netmon.collector")
 
@@ -50,57 +47,36 @@ class Collector(abc.ABC):
 
     async def run_guarded(self) -> None:
         """Run one cycle inside the heartbeat + error boundary."""
-        self._health_start()
+        health.record_start(self.engine, self.name)
         started = time.monotonic()
         try:
             written = await self.run_once()
-        except Exception as exc:  # fail loud into collector_health; prior state stays stale
-            self._health_error(repr(exc), int((time.monotonic() - started) * 1000))
+        except Exception as exc:  # fail loud into collector_health; keep prior state
+            health.record_error(
+                self.engine, self.name, message=repr(exc),
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
             log.exception("collector %s failed", self.name)
             return
-        self._health_success(written, int((time.monotonic() - started) * 1000))
+        health.record_success(
+            self.engine, self.name, records=written,
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
 
     def as_task(self) -> Callable[[], Awaitable[None]]:
         """The callable the supervisor schedules."""
         return self.run_guarded
 
-    # --- collector_health writers (best-effort; never mask the real error) ---
-
-    def _health_start(self) -> None:
-        db.execute(
-            self.engine,
-            "INSERT INTO collector_health (name, last_start) VALUES (:n, CURRENT_TIMESTAMP) "
-            "ON DUPLICATE KEY UPDATE last_start = CURRENT_TIMESTAMP",
-            {"n": self.name},
-        )
-
-    def _health_success(self, records: int, duration_ms: int) -> None:
-        db.execute(
-            self.engine,
-            "UPDATE collector_health SET last_success = CURRENT_TIMESTAMP, "
-            "duration_ms = :d, records_written = :r, consecutive_failures = 0, "
-            "last_error = NULL WHERE name = :n",
-            {"n": self.name, "d": duration_ms, "r": records},
-        )
-
-    def _health_error(self, message: str, duration_ms: int) -> None:
-        db.execute(
-            self.engine,
-            "UPDATE collector_health SET last_error = :e, duration_ms = :d, "
-            "consecutive_failures = consecutive_failures + 1 WHERE name = :n",
-            {"n": self.name, "e": message, "d": duration_ms},
-        )
-
 
 def run_standalone(
-    build: Callable[[Engine], Collector],
+    build: Callable[[Engine, "object"], Collector],
     argv: list[str] | None = None,
 ) -> int:
     """Shared ``python -m netmon.collectors.<x>`` entry point.
 
-    Loads config, builds the engine and the collector, then runs one cycle
-    (``--once``) or loops on the collector's interval (``--loop``).
+    ``build(engine, cfg)`` constructs the collector from the loaded config.
     """
+    from netmon import db
     from netmon.config import load_config
 
     parser = argparse.ArgumentParser()
@@ -110,9 +86,10 @@ def run_standalone(
     parser.add_argument("--config", default=None)
     args = parser.parse_args(argv)
 
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     cfg = load_config(args.config)
     engine = db.make_engine(cfg.db.url)
-    collector = build(engine)
+    collector = build(engine, cfg)
 
     async def _run() -> None:
         if args.once:
