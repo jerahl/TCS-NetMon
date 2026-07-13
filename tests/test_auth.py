@@ -120,6 +120,19 @@ def test_login_page_and_local_login_flow(tmp_path):
         assert me.status_code == 200 and me.json()["role"] == "admin"
 
 
+def test_login_page_always_shows_local_form(tmp_path):
+    # SAML-configured (no local account): the page still shows the local form
+    # (break-glass), and the "or" divider appears exactly once between methods.
+    app = create_app(config=load_config(write_config(tmp_path, dev_bypass=False)),
+                     supervisor=Supervisor())
+    with TestClient(app, follow_redirects=False) as client:
+        page = client.get("/login")
+        assert page.status_code == 200
+        assert "Sign in with ClassLink" in page.text
+        assert "Sign in (local)" in page.text          # local form present
+        assert page.text.count(">or<") == 1            # single divider, not dangling
+
+
 def test_unauthenticated_api_is_401_without_bypass(tmp_path):
     # (The SPA turns this 401 into a redirect to /login.)
     app = create_app(config=load_config(_local_conf(tmp_path)), supervisor=Supervisor())

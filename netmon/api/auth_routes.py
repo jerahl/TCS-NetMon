@@ -74,23 +74,21 @@ def login_page(request: Request, error: int = 0, cfg: Config = Depends(get_confi
         return RedirectResponse(url="/ui/")  # dev bypass: already authenticated
 
     sso = bool(cfg.auth.idp_sso_url)
-    local = bool(cfg.auth.local_user and cfg.auth.local_password_hash)
     err_html = ('<p style="color:#e5484d;margin:0 0 12px">Invalid credentials.</p>'
                 if error else "")
     sso_html = (
-        '<a class="btn primary" href="/auth/sso">Sign in with ClassLink</a>'
-        '<div class="or">or</div>' if sso else ""
+        '<a class="btn primary" href="/auth/sso">Sign in with ClassLink</a>' if sso else ""
     )
+    # The local (break-glass) form is always shown — it's the fallback when the
+    # IdP / network is down. The "or" divider only appears between two methods.
+    divider = '<div class="or">or</div>' if sso else ""
     local_html = (
         '<form method="post" action="/auth/local">'
         '<label>Username<input name="username" autocomplete="username" required></label>'
         '<label>Password<input name="password" type="password" autocomplete="current-password" required></label>'
         '<button class="btn" type="submit">Sign in (local)</button>'
         '</form>'
-        if local else ""
     )
-    if not sso and not local:
-        local_html = '<p>No login method is configured. See docs/spec/01-foundation.md.</p>'
 
     body = f"""<!doctype html><meta charset=utf-8><title>Sign in · TCS NetMon</title>
 <style>
@@ -108,7 +106,7 @@ def login_page(request: Request, error: int = 0, cfg: Config = Depends(get_confi
 </style>
 <div class="card">
   <h1>TCS NetMon</h1><p class="sub">Network operations</p>
-  {err_html}{sso_html}{local_html}
+  {err_html}{sso_html}{divider}{local_html}
 </div>"""
     return HTMLResponse(body)
 
