@@ -114,6 +114,25 @@ interval_s = 120
 # Live Events/State WebSocket wiring needs the `websockets` dependency
 # (owner approval pending); the Config-API poll above provides state until then.
 
+[threecx]
+# 3CX v20 REST API (voice). Read-only. OAuth2 client-credentials.
+enabled = false
+# url = https://pbx.tcs.internal:5001
+# client_id = REPLACE
+# client_secret = REPLACE
+verify_ssl = true
+interval_s = 120
+
+[rconfig]
+# rConfig (config-backup freshness). HTTPS only; apitoken auth.
+enabled = false
+# url = https://rconfig.tcs.internal
+# api_token = REPLACE_WITH_RCONFIG_APITOKEN
+verify_ssl = true
+interval_s = 600
+# Backups older than this are 'stale' (default 7 days).
+stale_after_s = 604800
+
 [engine]
 # Alert engine (Phase 6). Evaluates alert_rules against device_state.
 # Disabled by default (per-step reversibility). Ships in SHADOW mode: logs

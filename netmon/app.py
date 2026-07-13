@@ -29,6 +29,10 @@ from netmon.engine.engine import AlertEngine
 from netmon.collectors.milestone import MilestoneCollector, MilestoneError
 from netmon.collectors.packetfence import PfCollector
 from netmon.collectors.pf_client import PfError
+from netmon.collectors.rconfig import RConfigCollector
+from netmon.collectors.rconfig_client import RConfigError
+from netmon.collectors.threecx import ThreeCxCollector
+from netmon.collectors.threecx_client import ThreeCxError
 from netmon.collectors.xiq import XiqCollector
 from netmon.collectors.xiq_client import XiqError
 from netmon.config import Config, load_config
@@ -86,6 +90,24 @@ def register_tasks(app: FastAPI, cfg: Config, engine) -> None:
         else:
             supervisor.register("milestone", ms.run_guarded, interval_s=ms.interval_s, timeout_s=ms.timeout_s)
             log.info("Milestone collector enabled: %ss", ms.interval_s)
+
+    if cfg.source_enabled("threecx"):
+        try:
+            tcx = ThreeCxCollector.from_config(engine, cfg)
+        except ThreeCxError as exc:
+            log.error("3CX collector not started: %s", exc)
+        else:
+            supervisor.register("threecx", tcx.run_guarded, interval_s=tcx.interval_s, timeout_s=tcx.timeout_s)
+            log.info("3CX collector enabled: %ss", tcx.interval_s)
+
+    if cfg.source_enabled("rconfig"):
+        try:
+            rc = RConfigCollector.from_config(engine, cfg)
+        except RConfigError as exc:
+            log.error("rConfig collector not started: %s", exc)
+        else:
+            supervisor.register("rconfig", rc.run_guarded, interval_s=rc.interval_s, timeout_s=rc.timeout_s)
+            log.info("rConfig collector enabled: %ss", rc.interval_s)
 
     if cfg.engine.enabled:
         alert_engine = AlertEngine(engine, cfg.engine)

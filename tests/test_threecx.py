@@ -1,0 +1,65 @@
+import asyncio
+
+from sqlalchemy import text
+
+from netmon import db
+from netmon.collectors.threecx import ThreeCxCollector
+from netmon.collectors.threecx_client import ThreeCxError
+from tests.conftest import create_core_tables
+
+
+class FakeTcx:
+    def __init__(self):
+        self.trunks_data = []
+        self.fail = None
+
+    async def trunks(self):
+        if self.fail:
+            raise self.fail
+        return self.trunks_data
+
+
+def _engine(tmp_path):
+    e = db.make_engine(f"sqlite:///{tmp_path / 'tcx.db'}")
+    create_core_tables(e)
+    with e.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO devices (name, device_type, enabled, threecx_ref) "
+            "VALUES ('SIP-Trunk-1','trunk',1,'10'),('SIP-Trunk-2','trunk',1,'11')"
+        ))
+    return e
+
+
+def _trunk_state(engine):
+    return {r["threecx_ref"]: r for r in db.fetch_all(
+        engine,
+        "SELECT d.threecx_ref, s.value, s.severity FROM devices d "
+        "JOIN device_state s ON s.device_id = d.id AND s.dimension='trunk'")}
+
+
+def test_threecx_trunk_registration(tmp_path):
+    engine = _engine(tmp_path)
+    fake = FakeTcx()
+    fake.trunks_data = [
+        {"Id": 10, "Name": "Primary", "Registered": True},
+        {"Id": 11, "Name": "Backup", "RegistrationStatus": "Unregistered"},
+    ]
+    n = asyncio.run(ThreeCxCollector(engine, fake).run_once())
+    assert n == 2
+    st = _trunk_state(engine)
+    assert st["10"]["value"] == "up" and st["10"]["severity"] == "ok"
+    assert st["11"]["value"] == "down" and st["11"]["severity"] == "crit"
+
+
+def test_threecx_blind_on_unreachable(tmp_path):
+    engine = _engine(tmp_path)
+    fake = FakeTcx()
+    fake.trunks_data = [{"Id": 10, "Registered": True}]
+    coll = ThreeCxCollector(engine, fake)
+    asyncio.run(coll.run_once())
+    fake.fail = ThreeCxError("pbx down")
+    asyncio.run(coll.run_guarded())
+    st = _trunk_state(engine)
+    assert st["10"]["value"] == "blind" and st["11"]["value"] == "blind"
+    h = db.fetch_one(engine, "SELECT * FROM collector_health WHERE name='threecx'")
+    assert h["consecutive_failures"] == 1

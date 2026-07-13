@@ -82,3 +82,31 @@ Ported from `reference/zabbix/milestone/*`.
 
 Both collectors are standalone-runnable
 (`python -m netmon.collectors.packetfence|milestone --once|--loop`).
+
+## 3CX (`threecx.py`, `threecx_client.py`) — voice
+
+Ported from `reference/lib/ThreeCXClient.php`. **v20 REST, not ODBC** (Phase 0
+decision).
+
+- **Auth:** OAuth2 client-credentials → `POST /connect/token` → bearer (cached,
+  refreshed on 401).
+- **Endpoint:** `GET /xapi/v1/Trunks` (OData). Writes `device_state` dimension
+  `trunk` (registered → up/down) for devices matched by `threecx_ref`. Blind on
+  unreachable. Interval `[threecx] interval_s` (default 120s).
+- **Config:** `[threecx] enabled, url, client_id, client_secret, verify_ssl,
+  interval_s`.
+
+## rConfig (`rconfig.py`, `rconfig_client.py`) — config-backup freshness
+
+Ported from `reference/lib/RConfigClient.php`.
+
+- **Auth:** `apitoken: <token>` header (not Bearer); **HTTPS only**.
+- **Endpoint:** `GET /api/v2/devices` (paged). Writes `device_state` dimension
+  `config_backup` — `fresh` (≤ `stale_after_s`, default 7d) / `stale` / `unknown`
+  (timestamp unreadable — never fresh-when-unsure) — for devices matched by
+  `rconfig_device_id`. Blind on unreachable. Interval `[rconfig] interval_s`
+  (default 600s).
+- **Config:** `[rconfig] enabled, url, api_token, verify_ssl, interval_s,
+  stale_after_s`.
+
+Both are standalone-runnable (`python -m netmon.collectors.threecx|rconfig`).
