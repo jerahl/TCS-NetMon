@@ -64,6 +64,15 @@ def test_me_with_dev_bypass(tmp_path):
         assert r.json() == {"username": "devadmin", "role": "admin", "groups": []}
 
 
+def test_root_redirects_to_ui(tmp_path):
+    # Visiting the bare host must not 404 — it redirects to the UI (the built
+    # bundle is committed, so ui_built is true).
+    with TestClient(_app(write_config(tmp_path)), follow_redirects=False) as client:
+        r = client.get("/")
+        assert r.status_code in (307, 308)
+        assert r.headers["location"] in ("/ui/", "/docs")
+
+
 def test_unauthenticated_without_bypass(tmp_path):
     # No dev bypass, no session cookie → 401 on a gated route.
     conf = write_config(tmp_path, dev_bypass=False)

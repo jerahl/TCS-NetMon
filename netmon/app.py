@@ -17,6 +17,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -115,7 +116,15 @@ def create_app(
     # Static React UI (Phase 4), if built. Guarded so the app still boots when
     # the bundle is absent (fresh clone / API-only dev). Build with
     # `npm --prefix frontend ci && npm --prefix frontend run build`.
-    if (WEB_DIR / "index.html").is_file():
+    ui_built = (WEB_DIR / "index.html").is_file()
+
+    # Root → the UI (or /docs when the UI isn't built) so visiting the bare host
+    # doesn't 404. Registered before the mount.
+    @app.get("/", include_in_schema=False)
+    def _root() -> RedirectResponse:
+        return RedirectResponse(url="/ui/" if ui_built else "/docs")
+
+    if ui_built:
         app.mount("/ui", StaticFiles(directory=WEB_DIR, html=True), name="ui")
     else:
         log.warning("UI bundle not found at %s; /ui disabled (run the frontend build)", WEB_DIR)
