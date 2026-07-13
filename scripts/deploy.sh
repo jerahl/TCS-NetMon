@@ -210,6 +210,9 @@ setup_config() {
       # This is a TLS deployment behind nginx → require Secure cookies (also
       # forbids the dev auth bypass, per config validation).
       sed -i 's/^secure_cookies = false/secure_cookies = true/' "$CONF"
+      # Make the placeholder sqlite path ABSOLUTE in the writable state dir so a
+      # first bring-up works regardless of CWD. Replace with MariaDB for prod.
+      sed -i "s#^url = sqlite:///\./netmon.db#url = sqlite:///${STATE_DIR}/netmon.db#" "$CONF"
     fi
     run chown root:"$APP_GROUP" "$CONF"
     run chmod 0640 "$CONF"
@@ -220,9 +223,19 @@ setup_config() {
   run chmod 0640 "$CONF"
 }
 
-as_app() { # run a command as the service user with the config env set
-  run runuser -u "$APP_USER" -- env NETMON_CONF="$CONF" "$@" 2>/dev/null || \
-  run sudo -u "$APP_USER" env NETMON_CONF="$CONF" "$@"
+as_app() { # run a command as the service user, from the writable state dir
+  local -a runner
+  if command -v runuser >/dev/null 2>&1; then runner=(runuser -u "$APP_USER" --)
+  else runner=(sudo -u "$APP_USER"); fi
+  if [[ $DRY_RUN -eq 1 ]]; then
+    printf '  %s+%s (cd %s) %s env NETMON_CONF=%s %s\n' \
+      "$c_yellow" "$c_reset" "$STATE_DIR" "${runner[*]}" "$CONF" "$*"
+    return 0
+  fi
+  # cd into STATE_DIR so a relative sqlite path resolves the same place the
+  # service (WorkingDirectory=STATE_DIR) will use. No stderr suppression — real
+  # errors must surface; a single runner, so nothing runs twice.
+  ( cd "$STATE_DIR" && "${runner[@]}" env NETMON_CONF="$CONF" "$@" )
 }
 
 validate_config() {

@@ -16,6 +16,9 @@
 # use SQLite. Uncomment the MariaDB line and set real credentials for a
 # production install (the driver ships in pyproject).
 # url = mysql+pymysql://netmon:CHANGEME@db.internal/netmon?charset=utf8mb4
+# A relative sqlite path resolves against the process working directory; when
+# running as a service use an ABSOLUTE path in a writable dir, e.g.
+# sqlite:////var/lib/netmon/netmon.db  (the deploy script sets this for you).
 url = sqlite:///./netmon.db
 # Apply pending migrations on app startup. Leave false in production and run
 # the migrate runner deliberately during deploys.

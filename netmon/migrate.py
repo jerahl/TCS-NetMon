@@ -18,6 +18,7 @@ from pathlib import Path
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import OperationalError
 
 from netmon import db
 from netmon.config import load_config
@@ -108,14 +109,29 @@ def main(argv: list[str] | None = None) -> int:
     cfg = load_config(args.config)
     engine = db.make_engine(cfg.db.url)
 
-    if args.status:
-        done = applied_versions(engine)
-        for mig in discover_migrations():
-            mark = "applied" if mig.version in done else "pending"
-            print(f"  {mig.version}  {mig.path.name:32} [{mark}]")
-        return 0
+    try:
+        if args.status:
+            done = applied_versions(engine)
+            for mig in discover_migrations():
+                mark = "applied" if mig.version in done else "pending"
+                print(f"  {mig.version}  {mig.path.name:32} [{mark}]")
+            return 0
 
-    applied = apply_migrations(engine)
+        applied = apply_migrations(engine)
+    except OperationalError as exc:
+        # Fail loud, but readable — not a 60-line SQLAlchemy traceback.
+        print(
+            f"error: cannot open the database at the configured [db] url "
+            f"(from {cfg.path}).\n"
+            f"  {exc.orig}\n"
+            f"  * SQLite: use an ABSOLUTE path in a directory the service user "
+            f"can write, e.g. sqlite:////var/lib/netmon/netmon.db\n"
+            f"  * MariaDB: check host/credentials/reachability, e.g. "
+            f"mysql+pymysql://user:pass@host/netmon?charset=utf8mb4",
+            file=sys.stderr,
+        )
+        return 2
+
     if applied:
         print(f"applied migrations: {', '.join(applied)}")
     else:

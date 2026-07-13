@@ -8,8 +8,10 @@ from netmon.migrate import (
     apply_migrations,
     applied_versions,
     discover_migrations,
+    main,
     parse_statements,
 )
+from tests.conftest import write_config
 
 EXPECTED_TABLES = {
     "devices", "device_state", "state_events", "alert_rules", "alerts",
@@ -59,3 +61,13 @@ def test_runner_applies_and_is_idempotent(tmp_path):
     with engine.connect() as conn:
         # Table exists and is queryable.
         conn.execute(text("SELECT * FROM demo"))
+
+
+def test_migrate_cli_friendly_error_on_unopenable_db(tmp_path, capsys):
+    # A sqlite path in a nonexistent dir can't be opened → readable message,
+    # exit 2, no raw traceback (mirrors the real deploy failure).
+    conf = write_config(tmp_path, db_url="sqlite:////nonexistent/dir/netmon.db")
+    rc = main(["--config", str(conf)])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "cannot open the database" in err
