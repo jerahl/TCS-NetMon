@@ -102,6 +102,7 @@ class DeviceStatus(BaseModel):
     mgmt_ip: str | None = None
     ping: DimensionState = DimensionState()
     snmp: DimensionState = DimensionState()
+    source_status: DimensionState = DimensionState()
 
 
 class UserSession(BaseModel):

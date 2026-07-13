@@ -198,6 +198,18 @@ setup_venv() {
   ok "venv ready at $VENV"
 }
 
+build_frontend() {
+  local fe="$APP_SRC/frontend"
+  [[ -d "$fe" ]] || return 0
+  if command -v npm >/dev/null 2>&1; then
+    log "rebuilding frontend bundle (npm present)"
+    run bash -c "cd '$fe' && npm ci --no-audit --no-fund && npm run build" \
+      || warn "frontend build failed; serving the committed bundle in netmon/web"
+  else
+    log "npm not found; serving the committed UI bundle (no rebuild)"
+  fi
+}
+
 setup_config() {
   if [[ -f "$CONF" ]]; then
     ok "config exists at $CONF (left untouched)"
@@ -472,6 +484,7 @@ cmd_install() {
   create_user
   create_dirs
   setup_venv
+  build_frontend
   setup_config
   install_systemd
   install_nginx
@@ -501,6 +514,7 @@ cmd_update() {
   fi
   after="$(git -C "$APP_SRC" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   setup_venv          # re-resolve pinned deps for the new code
+  build_frontend      # rebuild UI bundle if npm is present
   setup_config        # reassert perms; never clobber operator secrets
   install_systemd     # pick up any unit changes
   if validate_config; then

@@ -21,10 +21,12 @@ router = APIRouter(tags=["status"])
 _STATUS_SQL = """
 SELECT d.id, d.name, d.site, d.device_type, d.mgmt_ip,
        ps.value AS ping_value, ps.severity AS ping_sev, ps.updated_at AS ping_at,
-       ss.value AS snmp_value, ss.severity AS snmp_sev, ss.updated_at AS snmp_at
+       ss.value AS snmp_value, ss.severity AS snmp_sev, ss.updated_at AS snmp_at,
+       src.value AS src_value, src.severity AS src_sev, src.updated_at AS src_at
 FROM devices d
 LEFT JOIN device_state ps ON ps.device_id = d.id AND ps.dimension = 'ping'
 LEFT JOIN device_state ss ON ss.device_id = d.id AND ss.dimension = 'snmp'
+LEFT JOIN device_state src ON src.device_id = d.id AND src.dimension = 'source_status'
 WHERE d.enabled = 1
 ORDER BY d.name
 """
@@ -56,6 +58,11 @@ def _rows(engine: Engine) -> list[DeviceStatus]:
                     value=r.get("snmp_value"),
                     severity=_severity(r.get("snmp_sev")),
                     updated_at=r.get("snmp_at"),
+                ),
+                source_status=DimensionState(
+                    value=r.get("src_value"),
+                    severity=_severity(r.get("src_sev")),
+                    updated_at=r.get("src_at"),
                 ),
             )
         )
@@ -91,7 +98,8 @@ def status_page(
         "table{border-collapse:collapse;width:100%}th,td{padding:6px 10px;border-bottom:1px solid #333;text-align:left}"
         "th{font-size:11px;letter-spacing:.05em;color:#888;text-transform:uppercase}</style>",
         f"<h2>Device status <span style='color:#888;font-weight:400'>({len(rows)} devices)</span></h2>",
-        "<table><tr><th>Name</th><th>Site</th><th>Type</th><th>Mgmt IP</th><th>Ping</th><th>SNMP</th></tr>",
+        "<table><tr><th>Name</th><th>Site</th><th>Type</th><th>Mgmt IP</th>"
+        "<th>Ping</th><th>SNMP</th><th>Source</th></tr>",
     ]
     for d in rows:
         body.append(
@@ -100,7 +108,7 @@ def status_page(
             f"<td>{html.escape(d.site or '—')}</td>"
             f"<td>{html.escape(d.device_type.value)}</td>"
             f"<td>{html.escape(d.mgmt_ip or '—')}</td>"
-            f"{_cell(d.ping)}{_cell(d.snmp)}"
+            f"{_cell(d.ping)}{_cell(d.snmp)}{_cell(d.source_status)}"
             "</tr>"
         )
     body.append("</table>")

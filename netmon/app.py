@@ -14,8 +14,12 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+
+WEB_DIR = Path(__file__).resolve().parent / "web"
 
 from netmon import __version__, db, migrate
 from netmon.api import auth_routes, devices, health, status
@@ -107,5 +111,13 @@ def create_app(
     app.include_router(auth_routes.router)
     app.include_router(devices.router)
     app.include_router(status.router)
+
+    # Static React UI (Phase 4), if built. Guarded so the app still boots when
+    # the bundle is absent (fresh clone / API-only dev). Build with
+    # `npm --prefix frontend ci && npm --prefix frontend run build`.
+    if (WEB_DIR / "index.html").is_file():
+        app.mount("/ui", StaticFiles(directory=WEB_DIR, html=True), name="ui")
+    else:
+        log.warning("UI bundle not found at %s; /ui disabled (run the frontend build)", WEB_DIR)
 
     return app

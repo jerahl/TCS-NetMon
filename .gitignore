@@ -10,6 +10,10 @@ dist/
 .venv/
 venv/
 
+# Frontend deps (the built bundle in netmon/web/ IS committed so the deploy
+# needs no Node; regenerate with `npm --prefix frontend run build`).
+frontend/node_modules/
+
 # Local runtime artifacts
 *.db
 *.sqlite
