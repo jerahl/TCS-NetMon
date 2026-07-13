@@ -59,6 +59,32 @@ Knobs (env vars): `SERVER_NAME`, `NETMON_TLS_CERT`/`NETMON_TLS_KEY`, `BIND_PORT`
 `SSH_PORT`, `ENABLE_FIREWALL`, `ENABLE_FAIL2BAN`, `APP_SRC`. The manual steps
 below document what the script does under the hood.
 
+## Database setup — `scripts/setup_db.sh`
+
+`deploy.sh` assumes the MariaDB database + user already exist. Create them once
+with `scripts/setup_db.sh` (idempotent, least-privilege, no passwords on the
+command line):
+
+```bash
+# Local MariaDB (root via unix_socket), write the URL straight into the conf:
+sudo ./scripts/setup_db.sh --write-config
+
+# Remote MariaDB; prompts for the admin password, app connects from a subnet:
+DB_HOST=db.internal ADMIN_USER=admin DB_USER_HOST='10.10.%' \
+  ./scripts/setup_db.sh
+
+./scripts/setup_db.sh --dry-run     # print the SQL, run nothing
+```
+
+It creates the `netmon` schema (utf8mb4) and the `netmon` app user with
+privileges scoped to `netmon.*` only (DML + the DDL migrations need). The app
+password is generated if you don't pass `DB_PASSWORD`; with `--write-config`
+the resulting `mysql+pymysql://…` URL (password percent-encoded) is written
+into `/etc/netmon/netmon.conf`, otherwise it is printed once for you to paste.
+`--dml-only` makes a runtime user with no schema-change rights (migrate
+separately as an admin). Run it on the DB host for local socket auth, or from
+anywhere with `DB_HOST`/`ADMIN_USER` set. Then `sudo ./scripts/deploy.sh update`.
+
 ## 0. Prerequisites
 
 - Python 3.11+ on the VM (3.12 preferred; Debian 12 ships 3.11 and is
