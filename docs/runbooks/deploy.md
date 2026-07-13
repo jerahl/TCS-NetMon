@@ -4,6 +4,61 @@ Covers standing up the `netmon` FastAPI app + DB schema on the dedicated VM.
 Collectors/poller/engine are not deployed yet (later phases); this brings up
 the frame: config, database, auth, and the API with `/docs`.
 
+## Automated deploy/update — `scripts/deploy.sh`
+
+`scripts/deploy.sh` automates everything in this runbook and hardens the host.
+It is idempotent — safe to re-run — and never writes a secret into the repo.
+
+```bash
+# Clone to a NON-home path (the hardened unit sets ProtectHome=yes):
+sudo git clone <repo-url> /opt/netmon/src
+cd /opt/netmon/src
+
+sudo ./scripts/deploy.sh install --dry-run   # preview every action, change nothing
+sudo ./scripts/deploy.sh install             # full setup + hardening
+# ...edit /etc/netmon/netmon.conf (DB url + AD), then:
+sudo ./scripts/deploy.sh update              # pull, reinstall, migrate, restart, health-check
+
+sudo ./scripts/deploy.sh status              # service + /healthz
+sudo ./scripts/deploy.sh secure              # re-apply hardening only
+```
+
+Provide a CA-issued certificate (otherwise a self-signed placeholder is
+generated):
+
+```bash
+SERVER_NAME=netmon.tcs.local \
+NETMON_TLS_CERT=/etc/ssl/certs/netmon.crt NETMON_TLS_KEY=/etc/ssl/private/netmon.key \
+  sudo -E ./scripts/deploy.sh install
+```
+
+**What `install` does:** installs packages (python, nginx, openssl, `fping`/
+`snmp` for the Phase 2 poller, firewall); creates the locked `netmon` system
+user (no login shell); lays out `/opt/netmon` (root-owned app + venv),
+`/etc/netmon` (`0640` config), `/var/lib/netmon` (state), `/var/log/netmon`;
+builds the venv and installs this repo; creates `/etc/netmon/netmon.conf` from
+the example (never overwriting an existing one) with `secure_cookies=true`;
+runs migrations; installs a **sandboxed** systemd unit; configures an **nginx
+TLS reverse proxy** (HTTP→HTTPS redirect, HSTS + security headers); and sets a
+**host firewall** (SSH + HTTPS only).
+
+**Security posture applied:**
+- App listens on `127.0.0.1:8080` only — never exposed; nginx terminates TLS.
+- systemd sandbox: `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`,
+  `PrivateTmp`, empty `CapabilityBoundingSet`, `SystemCallFilter=@system-service`,
+  `MemoryDenyWriteExecute`, writable paths limited to state + logs.
+- Config `0640 root:netmon`; TLS key `0600 root:root`; secrets stay in
+  `/etc/netmon/`, never in the repo.
+- Firewall default-deny inbound except SSH (`SSH_PORT`, default 22) and 80/443.
+- Single uvicorn worker (the Phase 1 session store is in-process; see §5).
+- **Phase 2 note:** the poller shells out to `fping`, which needs raw sockets.
+  The unit comments where to grant `CAP_NET_RAW` (or split the poller into its
+  own unit) when that phase lands.
+
+Knobs (env vars): `SERVER_NAME`, `NETMON_TLS_CERT`/`NETMON_TLS_KEY`, `BIND_PORT`,
+`SSH_PORT`, `ENABLE_FIREWALL`, `ENABLE_FAIL2BAN`, `APP_SRC`. The manual steps
+below document what the script does under the hood.
+
 ## 0. Prerequisites
 
 - Python 3.12 on the VM, a service user `netmon`, and MariaDB reachable.
