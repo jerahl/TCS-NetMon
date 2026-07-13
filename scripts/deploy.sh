@@ -213,7 +213,7 @@ setup_config() {
     fi
     run chown root:"$APP_GROUP" "$CONF"
     run chmod 0640 "$CONF"
-    warn "EDIT $CONF: set [db] url (MariaDB) and [auth] AD server/base/groups before the service will authenticate anyone."
+    warn "EDIT $CONF: set [db] url (MariaDB) and [auth] (interim AD/LDAP login; ClassLink SAML pending) before the service will authenticate anyone."
   fi
   # Always reassert perms in case a prior run or operator loosened them.
   run chown root:"$APP_GROUP" "$CONF"
@@ -333,9 +333,11 @@ server {
 }
 
 server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    http2 on;
+    # Combined "ssl http2" form works on nginx 1.9.5+ (incl. Debian 12's 1.22).
+    # nginx 1.25.1+ prefers a separate "http2 on;" but still accepts this with
+    # only a deprecation notice (nginx -t stays green), so it is the portable form.
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
     server_name $SERVER_NAME;
 
     ssl_certificate     $CERT;
