@@ -41,3 +41,44 @@ Ported from `reference/lib/XIQFleetClient.php`.
 
 A misconfigured enabled source (e.g. empty token) is logged and skipped at
 startup — it does not crash the app.
+
+---
+
+## PacketFence (`packetfence.py`, `pf_client.py`) — NAC
+
+Ported from `reference/lib/PFClient.php`.
+
+- **Auth:** `POST /api/v1/login` → token, sent **raw** in `Authorization`
+  (no `Bearer`); one auto-refresh on 401. `/search` returns **404 on empty** →
+  treated as empty, not an error.
+- **What it does:** refreshes a cached NAC snapshot (registered / unregistered
+  counts, recent 802.1X rejects, node list) served by `GET /api/nac`. **Not**
+  written to `device_state` — PF stays a linked view pending the §9 merge
+  decision.
+- **Interval:** `[packetfence] interval_s` (default 300s — PF is slow; cache
+  hard, never in a request path).
+- **Failure modes:** on PF unreachable the task fails loud into
+  `collector_health`; the cached snapshot keeps its last-good `fetched_at`
+  (`ok:false` flags staleness). Never stale-as-fresh.
+- **Config:** `[packetfence] enabled, url, user, pass, verify_ssl, interval_s`.
+
+## Milestone (`milestone.py`, `milestone_client.py`, `ws.py`) — surveillance
+
+Ported from `reference/zabbix/milestone/*`.
+
+- **Auth:** OAuth2 password grant `POST /IDP/connect/token`
+  (`client_id=GrantValidatorClient`) → bearer token.
+- **Config API poll** (`/api/rest/v1/recordingServers`, `/cameras`): writes,
+  for devices matched by `milestone_hardware_id`, `source_status` for recording
+  servers (running → up/down) and the `recording` dimension for cameras. Blind
+  on unreachable. Interval `[milestone] interval_s` (default 120s).
+- **Live Events/State WebSocket** (`ws.py` `ResilientWebSocket`): reconnect +
+  exponential backoff + watchdog (forces reconnect on silence). Built and
+  tested (forced-disconnect / watchdog), and runnable standalone. **Wiring it
+  to a live Milestone socket needs the `websockets` dependency (owner approval
+  pending)** — until then the Config-API poll provides state.
+- **Config:** `[milestone] enabled, host, user, pass, scheme, client_id,
+  verify_ssl, interval_s`.
+
+Both collectors are standalone-runnable
+(`python -m netmon.collectors.packetfence|milestone --once|--loop`).

@@ -23,8 +23,11 @@ from fastapi.staticfiles import StaticFiles
 WEB_DIR = Path(__file__).resolve().parent / "web"
 
 from netmon import __version__, db, migrate
-from netmon.api import auth_routes, devices, health, status
+from netmon.api import auth_routes, devices, health, nac, status
 from netmon.auth.sessions import SessionStore
+from netmon.collectors.milestone import MilestoneCollector, MilestoneError
+from netmon.collectors.packetfence import PfCollector
+from netmon.collectors.pf_client import PfError
 from netmon.collectors.xiq import XiqCollector
 from netmon.collectors.xiq_client import XiqError
 from netmon.config import Config, load_config
@@ -34,13 +37,15 @@ from netmon.supervisor import Supervisor, _heartbeat
 log = logging.getLogger("netmon.app")
 
 
-def register_tasks(supervisor: Supervisor, cfg: Config, engine) -> None:
+def register_tasks(app: FastAPI, cfg: Config, engine) -> None:
     """Register supervised tasks once the engine exists (called in lifespan).
 
-    Always runs the heartbeat self-task; adds the poller tasks when
-    ``[poller] enabled``. Collectors (Phase 3+) register here too.
+    Always runs the heartbeat self-task; adds the poller and enabled source
+    collectors. A misconfigured source is logged and skipped, never fatal.
     """
+    supervisor: Supervisor = app.state.supervisor
     supervisor.register("heartbeat", _heartbeat, interval_s=30.0, timeout_s=5.0)
+
     if cfg.poller.enabled:
         poller = Poller(engine, cfg.poller)  # one instance → shared hysteresis state
         supervisor.register(
@@ -57,11 +62,29 @@ def register_tasks(supervisor: Supervisor, cfg: Config, engine) -> None:
         try:
             xiq = XiqCollector.from_config(engine, cfg)
         except XiqError as exc:
-            # Misconfigured source (e.g. missing token) must not crash the app.
             log.error("XIQ collector not started: %s", exc)
         else:
             supervisor.register("xiq", xiq.run_guarded, interval_s=xiq.interval_s, timeout_s=xiq.timeout_s)
             log.info("XIQ collector enabled: status/%ss", xiq.interval_s)
+
+    if cfg.source_enabled("packetfence"):
+        try:
+            pf = PfCollector.from_config(engine, cfg)
+        except PfError as exc:
+            log.error("PacketFence collector not started: %s", exc)
+        else:
+            app.state.pf = pf  # NAC endpoint reads its cached snapshot
+            supervisor.register("packetfence", pf.run_guarded, interval_s=pf.interval_s, timeout_s=pf.timeout_s)
+            log.info("PacketFence collector enabled: %ss", pf.interval_s)
+
+    if cfg.source_enabled("milestone"):
+        try:
+            ms = MilestoneCollector.from_config(engine, cfg)
+        except MilestoneError as exc:
+            log.error("Milestone collector not started: %s", exc)
+        else:
+            supervisor.register("milestone", ms.run_guarded, interval_s=ms.interval_s, timeout_s=ms.timeout_s)
+            log.info("Milestone collector enabled: %ss", ms.interval_s)
 
 
 @asynccontextmanager
@@ -77,7 +100,7 @@ async def lifespan(app: FastAPI):
     app.state.sessions = SessionStore(ttl_seconds=cfg.web.session_ttl)
 
     supervisor: Supervisor = app.state.supervisor
-    register_tasks(supervisor, cfg, app.state.engine)
+    register_tasks(app, cfg, app.state.engine)
     await supervisor.start()
     try:
         yield
@@ -112,6 +135,7 @@ def create_app(
     app.include_router(auth_routes.router)
     app.include_router(devices.router)
     app.include_router(status.router)
+    app.include_router(nac.router)
 
     # Static React UI (Phase 4), if built. Guarded so the app still boots when
     # the bundle is absent (fresh clone / API-only dev). Build with

@@ -82,6 +82,20 @@ enabled = false
 # user = netmon-ro
 # pass = REPLACE_WITH_PF_PASSWORD
 verify_ssl = true
+interval_s = 300
+
+[milestone]
+# Milestone XProtect API Gateway (Config/REST API). Read-only.
+enabled = false
+# host = milestone-gw.internal
+# user = netmon-ro
+# pass = REPLACE_WITH_MILESTONE_PASSWORD
+scheme = https
+client_id = GrantValidatorClient
+verify_ssl = true
+interval_s = 120
+# Live Events/State WebSocket wiring needs the `websockets` dependency
+# (owner approval pending); the Config-API poll above provides state until then.
 
 [smtp]
 # Alert engine notifier (Phase 6). Ships in shadow mode; sends nothing until
