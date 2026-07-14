@@ -35,11 +35,13 @@ NetMon also owns **alerting** (rules → dedupe → maintenance windows → SMTP
 
 ## 3. Stack and dependency policy
 
-- **Python 3.12**, single package `netmon`, FastAPI app served by uvicorn behind nginx.
+- **Python 3.11+** (3.12 preferred; the deploy VM runs Debian 12 / Python 3.11 — decided 2026-07-13), single package `netmon`, FastAPI app served by uvicorn behind nginx.
 - **MariaDB** via **SQLAlchemy Core** (no ORM/declarative models — explicit, SQL-shaped queries). Schema via plain numbered migration scripts in `migrations/` applied by a small runner; no Alembic.
-- **Allowed third-party dependencies:** `fastapi`, `uvicorn`, `sqlalchemy`, `httpx`, `ldap3`, `apscheduler`. Pinned in a lockfile. **Do not add any other dependency without stopping and asking.** Prefer stdlib. ICMP/SNMP are subprocess calls to `fping` / `snmpget` — do not introduce a Python SNMP library.
+- **Allowed third-party dependencies:** `fastapi`, `uvicorn`, `sqlalchemy`, `httpx`, `apscheduler`, `pymysql` (MariaDB DBAPI driver — owner-approved 2026-07-11), `python3-saml` (ClassLink SSO — owner-approved 2026-07-13; links `xmlsec1`/`libxml2` system libs, installed at deploy time). Pinned in a lockfile. **Do not add any other dependency without stopping and asking.** Prefer stdlib. ICMP/SNMP are subprocess calls to `fping` / `snmpget` — do not introduce a Python SNMP library.
+  - `ldap3` is **retired** (was: interim AD-bind login). ClassLink sends `role` + `group_ids` in the SAML assertion, so no directory lookup is needed; drop `ldap3` and `netmon/auth/ldap.py` when the SAML SP replaces the interim login.
+  - `python3-saml`'s pin lands in `pyproject.toml` when the SAML SP is implemented (the last §3 dependency checkpoint); the deploy script adds the `xmlsec1` system package at the same time.
 - **Frontend:** React components ported from `jerahl/ZabbixCustomDashboard` (`tcs_dashboard/assets/*.jsx`), built with **esbuild** to static files served by FastAPI. No Babel-standalone, no unpkg/CDN loads, no framework migration — keep the existing component structure.
-- **Auth:** Active Directory via `ldap3`; group→role mapping; server-side session cookies. Roles: `viewer`, `operator` (can ack alerts / set maintenance), `admin` (can edit rules/registry).
+- **Auth:** Single sign-on. NetMon is a **SAML 2.0 Service Provider**; **ClassLink** is the identity provider (it federates the district directory). NetMon consumes the signed SAML assertion at its ACS endpoint, maps assertion attributes (ClassLink role/group claims) → roles, and issues its own server-side session cookie. **NetMon never handles a password and does not bind AD directly.** Roles: `viewer`, `operator` (can ack alerts / set maintenance), `admin` (can edit rules/registry). A local dev bypass remains for development without an IdP. *(Plan adjustment 2026-07-13: this replaces the earlier AD-via-`ldap3` bind; the Phase 1 interim `ldap3` login is to be reworked — see `docs/spec/01-foundation.md`.)*
 
 ## 4. Engineering conventions (non-negotiable)
 
@@ -65,7 +67,7 @@ netmon/
 │   ├── app.py                  # FastAPI factory, lifespan task supervisor
 │   ├── config.py               # config load/validate (stdlib configparser or tomllib)
 │   ├── db.py                   # engine, helpers (SQLAlchemy Core)
-│   ├── auth/                   # ldap3 bind, role mapping, sessions
+│   ├── auth/                   # SAML SP (ClassLink IdP), assertion→role mapping, sessions
 │   ├── api/                    # routers: devices, state, events, alerts, admin
 │   ├── models/                 # Pydantic schemas (API contract + collector validation)
 │   ├── poller/                 # fping sweep, snmp-alive, hysteresis state machine
@@ -109,8 +111,8 @@ Verify API access to all five sources; capture sanitized sample payloads into `t
 **DoD:** `docs/spec/00-sources.md` complete; one sanitized fixture per source committed.
 
 ### Phase 1 — Foundation
-Package scaffold per §5; `001_init.sql` implementing §6 with rollback notes; config loader + validation; FastAPI skeleton with AD auth, sessions, roles, `/healthz`; task-supervisor scaffold in lifespan; one-shot import script seeding `devices` from XIQ + PacketFence fixtures/exports; migration runner.
-**DoD:** app boots, auth works against AD, `/docs` renders, registry populated, `pytest` green, runbook `docs/runbooks/deploy.md` written.
+Package scaffold per §5; `001_init.sql` implementing §6 with rollback notes; config loader + validation; FastAPI skeleton with SSO auth (SAML SP / ClassLink), sessions, roles, `/healthz`; task-supervisor scaffold in lifespan; one-shot import script seeding `devices` from XIQ + PacketFence fixtures/exports; migration runner.
+**DoD:** app boots, SSO login works (or the dev bypass), `/docs` renders, registry populated, `pytest` green, runbook `docs/runbooks/deploy.md` written. *(Interim `ldap3` login shipped ahead of this plan change; SAML SP is the target — tracked in `docs/spec/01-foundation.md`.)*
 
 ### Phase 2 — Native poller
 fping sweep + snmp-alive as supervised tasks and standalone modules; hysteresis (3 consecutive failures → DOWN, 2 successes → UP; thresholds in config); writes to `device_state`/`state_events`; raw status API endpoint + minimal status page.
@@ -140,6 +142,10 @@ Rule evaluation loop over `device_state`; dedupe per (device, rule); `min_durati
 ≥4 weeks of shadow comparison; close gaps found; owner flips `shadow=false`; Zabbix network/wireless/voice/camera hosts disabled (with exported configs as rollback); Zabbix remains for servers.
 **DoD:** owner sign-off backed by the comparison diffs — Claude Code does not perform the cutover actions.
 
+### Phase 9 — Geographic site-status map (NOC wall view) *(enhancement)*
+Begins with `docs/spec/09-site-map.md`; design source is the Claude Design handoff in `docs/design/netmon-map/` (`project/Netmon Map.dc.html`). A Leaflet map of the district: sites as up/degraded/down status dots (rolled up from `device_state` per site), animated inter-site fiber links weighted by capacity and colored by live utilization, a live event feed from `state_events`, a status-sorted side panel, and a fullscreen NOC mode. Recreate the prototype's visual output on real NetMon endpoints (new `/api/sites` roll-up); do not port its simulation loop. Introduces new data the core model lacks — per-site lat/lon + tier, and an inter-site fiber-link registry with current-state utilization — via a numbered migration. **Depends on Phases 3–4** (real state + UI/esbuild pipeline), so it can be pulled forward once those land; otherwise scheduled after cutover stabilizes. Open decisions live in the spec: map tiles/Leaflet as an external fetch vs. self-hosted offline pack (must satisfy the §3 "no CDN loads" / Phase 4 "no external fetches at runtime" rules), link-topology source, and avoiding the `trunk` (voice) dimension collision. **Scope guard:** current-state view + curated topology only — no historical utilization time-series (§2).
+**DoD:** map page renders live site + link state via FastAPI endpoints; site/link roll-up + topology come from the DB (no simulated data); NOC mode works; tile/Leaflet delivery satisfies the no-external-fetch rule (or the owner's explicit exception is recorded); migration has a rollback note; spec checklist complete.
+
 ## 8. Session protocol for Claude Code
 
 - Start each session by reading `docs/spec/` for the current phase and `git log --oneline -15`.
@@ -149,4 +155,6 @@ Rule evaluation loop over `device_state`; dedupe per (device, rule); `min_durati
 
 ## 9. Open questions (tracked; do not guess answers)
 
-3CX v20 REST surface vs ODBC; XIQ rate limits at production device counts; rConfig edition/API availability; whether PF node data merges into `devices` or stays a linked view; SMTP relay to use; VM sizing/placement; offline-tolerant package mirror strategy.
+3CX v20 REST surface vs ODBC; XIQ rate limits at production device counts; rConfig edition/API availability; whether PF node data merges into `devices` or stays a linked view; SMTP relay to use; VM sizing/placement.
+
+**Runtime-resilience goal (clarified 2026-07-13):** "offline-tolerant" means NetMon keeps working when the *network or a source is down* — degrade gracefully, mark sources `blind`, never fabricate or serve stale-as-fresh. It does **not** mean a zero-internet install: pulling packages and system libs (e.g. `xmlsec1`) at deploy time is fine, so a local package mirror is **optional**, not required. (Distinct from the §3 frontend rule that the *app bundle* ships no CDN loads — that is a reproducibility/security rule, not an offline one.)

@@ -1,0 +1,154 @@
+# TCS NetMon configuration — EXAMPLE ONLY.
+#
+# The real file lives at /etc/netmon/netmon.conf (root-readable, 0640,
+# owned by the netmon service user), OUTSIDE the repository. Override the
+# path with the NETMON_CONF environment variable.
+#
+# NEVER commit a real credential, token, internal hostname-with-secret, or
+# key into the repository, logs, or test fixtures (CLAUDE.md §4.6).
+#
+# This is stdlib configparser (INI) syntax. Values are read by
+# netmon/config.py, which validates required keys and fails loud on missing
+# secrets.
+
+[db]
+# SQLAlchemy URL. Production is MariaDB via the PyMySQL driver; dev/test may
+# use SQLite. Uncomment the MariaDB line and set real credentials for a
+# production install (the driver ships in pyproject).
+# url = mysql+pymysql://netmon:CHANGEME@db.internal/netmon?charset=utf8mb4
+# A relative sqlite path resolves against the process working directory; when
+# running as a service use an ABSOLUTE path in a writable dir, e.g.
+# sqlite:////var/lib/netmon/netmon.db  (the deploy script sets this for you).
+url = sqlite:///./netmon.db
+# Apply pending migrations on app startup. Leave false in production and run
+# the migrate runner deliberately during deploys.
+auto_migrate = false
+
+[web]
+host = 127.0.0.1
+port = 8080
+# Mark the session cookie Secure and forbid the dev auth bypass. MUST be true
+# behind TLS in production.
+secure_cookies = false
+# Opaque session lifetime, seconds.
+session_ttl = 43200
+
+[auth]
+# Single sign-on: NetMon is a SAML 2.0 Service Provider; ClassLink is the IdP.
+# No passwords are handled here and there is no directory bind. Register NetMon
+# in the ClassLink admin console, then fill these from the IdP metadata.
+#
+# IdP (ClassLink):
+# saml_idp_entity_id = https://idp.classlink.com/<tenant>
+# saml_idp_sso_url   = https://idp.classlink.com/<tenant>/sso
+# saml_idp_x509cert  = MIIC...    (IdP signing cert, base64, no PEM headers)
+#
+# SP (this NetMon install):
+# saml_sp_entity_id  = https://netmon.tcs.k12.al.us/auth/saml/metadata
+# saml_sp_acs_url    = https://netmon.tcs.k12.al.us/auth/saml/acs
+# Optional SP signing key/cert (for signed AuthnRequests):
+# saml_sp_cert = MIIC...
+# saml_sp_key  = MIIE...
+#
+# Assertion attribute names ClassLink releases (defaults shown):
+saml_role_attr = role
+saml_group_attr = group_ids
+# Map claim values -> NetMon role (comma-separated). Highest granted role wins.
+# saml_role_admin = Administrator, District Admin
+# saml_role_operator = Network Operator
+# saml_role_viewer = Staff, Teacher
+# Or map by group id:
+# saml_group_admin = 1001
+# saml_group_operator = 1002
+#
+# BREAK-GLASS LOCAL ACCOUNT — works when ClassLink/the network is down. The
+# password is a PBKDF2 hash, never plaintext; generate it with:
+#   python -m netmon.auth.local
+# local_user = netmon-admin
+# local_password_hash = pbkdf2_sha256$240000$...$...
+# local_role = admin
+#
+# LOCAL DEVELOPMENT ONLY. When set (and secure_cookies=false), login is
+# bypassed and every request is authenticated as this user/role. Refused when
+# secure_cookies=true so it can never be enabled in production.
+# dev_bypass_user = devadmin
+# dev_bypass_role = admin
+
+[poller]
+# Native poller: fping ICMP sweep + snmpget sysUpTime. Read-only ground truth.
+# Disabled by default (per-step reversibility); flip on when ready.
+enabled = false
+ping_interval_s = 60
+snmp_interval_s = 300
+# Hysteresis: consecutive failures to declare DOWN / successes to declare UP.
+fail_threshold = 3
+ok_threshold = 2
+# fping tuning (per-target).
+fping_timeout_ms = 500
+fping_retries = 1
+# SNMP. Community is a SECRET — keep it only in this file, never in the repo.
+snmp_version = 2c
+# snmp_community = REPLACE_WITH_RO_COMMUNITY
+snmp_timeout_s = 2
+snmp_retries = 1
+snmp_concurrency = 20
+
+[xiq]
+# ExtremeCloud IQ. Bearer token from XIQ Admin -> API Access Tokens.
+# Store the token here, not in the repo. Read-only usage (CLAUDE.md §4.1).
+enabled = false
+# api_token = REPLACE_WITH_XIQ_API_TOKEN
+base_url = https://api.extremecloudiq.com
+
+[packetfence]
+enabled = false
+# url = https://pf.internal:9999
+# user = netmon-ro
+# pass = REPLACE_WITH_PF_PASSWORD
+verify_ssl = true
+interval_s = 300
+
+[milestone]
+# Milestone XProtect API Gateway (Config/REST API). Read-only.
+enabled = false
+# host = milestone-gw.internal
+# user = netmon-ro
+# pass = REPLACE_WITH_MILESTONE_PASSWORD
+scheme = https
+client_id = GrantValidatorClient
+verify_ssl = true
+interval_s = 120
+# Live Events/State WebSocket wiring needs the `websockets` dependency
+# (owner approval pending); the Config-API poll above provides state until then.
+
+[threecx]
+# 3CX v20 REST API (voice). Read-only. OAuth2 client-credentials.
+enabled = false
+# url = https://pbx.tcs.internal:5001
+# client_id = REPLACE
+# client_secret = REPLACE
+verify_ssl = true
+interval_s = 120
+
+[rconfig]
+# rConfig (config-backup freshness). HTTPS only; apitoken auth.
+enabled = false
+# url = https://rconfig.tcs.internal
+# api_token = REPLACE_WITH_RCONFIG_APITOKEN
+verify_ssl = true
+interval_s = 600
+# Backups older than this are 'stale' (default 7 days).
+stale_after_s = 604800
+
+[engine]
+# Alert engine (Phase 6). Evaluates alert_rules against device_state.
+# Disabled by default (per-step reversibility). Ships in SHADOW mode: logs
+# would-be notifications to the notifications table, sends nothing, until the
+# owner flips shadow=false at cutover (Phase 8).
+enabled = false
+interval_s = 30
+shadow = true
+# smtp_host = smtp.internal
+# smtp_port = 25
+# smtp_from = netmon@tuscaloosacityschools.com
+# default_target = noc@tuscaloosacityschools.com

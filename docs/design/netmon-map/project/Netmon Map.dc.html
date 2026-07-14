@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="nocturne.css">
+<script src="nocturne-bundle.js"></script>
+<style>
+body{margin:0;font-family:Inter,system-ui,sans-serif;background:#161826}
+a{color:var(--color-accent);text-decoration:none}
+a:hover{color:var(--color-accent-300)}
+[data-theme]{--bg:var(--color-bg);--panel:var(--color-surface);--panel2:var(--color-neutral-900);--border:var(--color-divider);--text:var(--color-text);--dim:var(--color-neutral-500);--accent:var(--color-accent);--headbg:#111320;--headtext:var(--color-text);--headdim:var(--color-neutral-500)}
+@keyframes flowdash{to{stroke-dashoffset:-26}}
+.flowline{animation:flowdash 1.4s linear infinite}
+.flowline.fast{animation-duration:.55s}
+.flowline.slow{animation-duration:2.6s}
+.flowline.stopped{animation:none}
+@keyframes sitepulse{0%,100%{opacity:1}50%{opacity:.3}}
+.site-down{animation:sitepulse 1s ease-in-out infinite}
+.leaflet-container{background:var(--bg);font-family:Inter,system-ui,sans-serif}
+.site-tip{background:var(--panel);border:1px solid var(--border);color:var(--text);font:600 10px ui-monospace,'SF Mono',Menlo,monospace;padding:1px 5px;border-radius:4px;box-shadow:0 2px 6px rgba(0,0,0,.25);opacity:.95}
+.site-tip::before{display:none}
+.link-tip{background:var(--panel);border:1px solid var(--border);color:var(--text);font:500 11px ui-monospace,'SF Mono',Menlo,monospace;padding:4px 8px;border-radius:5px;box-shadow:0 2px 8px rgba(0,0,0,.25)}
+.link-tip::before{display:none}
+</style>
+</helmet>
+<div data-screen-label="Netmon Map" data-theme="{{ theme }}" style="height:100vh;display:flex;flex-direction:column;background:var(--bg);color:var(--text);overflow:hidden">
+
+  <div style="display:flex;align-items:center;gap:18px;padding:10px 16px;background:var(--headbg);color:var(--headtext);flex:none">
+    <div style="display:flex;align-items:center;gap:10px">
+      <div style="width:9px;height:9px;border-radius:50%;background:#1fb75a;box-shadow:0 0 8px #1fb75a"></div>
+      <div style="font:500 15px Inter,system-ui,sans-serif;letter-spacing:.02em">TCS NETMON</div>
+      <div style="font:500 10px ui-monospace,'SF Mono',Menlo,monospace;color:var(--headdim);letter-spacing:.08em">TUSCALOOSA METRO FIBER</div>
+    </div>
+    <div style="display:flex;gap:16px;margin-left:auto;font:600 12px ui-monospace,'SF Mono',Menlo,monospace;align-items:center">
+      <span style="color:#1fb75a">● {{ upCount }} UP</span>
+      <span style="color:#e8a415">● {{ degCount }} DEGRADED</span>
+      <span style="color:#e5484d">● {{ downCount }} DOWN</span>
+      <span style="color:var(--headdim)">│ {{ linkDownCount }} FIBER ALARMS</span>
+    </div>
+    <div style="font:600 12px ui-monospace,'SF Mono',Menlo,monospace;color:var(--headdim)">{{ clock }}</div>
+    <button onClick="{{ toggleNoc }}" style="font:600 11px ui-monospace,'SF Mono',Menlo,monospace;padding:6px 12px;border-radius:5px;border:1px solid var(--color-accent);background:transparent;color:var(--color-accent-300);cursor:pointer" style-hover="background:var(--color-accent-900)">{{ nocLabel }}</button>
+  </div>
+
+  <div style="flex:1;display:flex;min-height:0;position:relative">
+    <div style="flex:1;position:relative;min-width:0">
+      <div ref="{{ mapRef }}" style="position:absolute;inset:0"></div>
+      <sc-if value="{{ mapLoading }}" hint-placeholder-val="{{ true }}">
+        <div style="position:absolute;inset:0;z-index:700;display:flex;align-items:center;justify-content:center;background:var(--bg);color:var(--dim);font:500 12px ui-monospace,'SF Mono',Menlo,monospace;letter-spacing:.08em;pointer-events:none">{{ mapMsg }}</div>
+      </sc-if>
+
+      <div style="position:absolute;left:12px;bottom:12px;z-index:800;width:350px;background:var(--panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.2);overflow:hidden">
+        <div style="padding:8px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px">
+          <div style="font:600 11px Inter,system-ui,sans-serif;letter-spacing:.06em">EVENT FEED</div>
+          <div style="margin-left:auto;display:flex;align-items:center;gap:5px;font:500 10px ui-monospace,'SF Mono',Menlo,monospace;color:var(--dim)"><span style="width:6px;height:6px;border-radius:50%;background:#1fb75a"></span>live</div>
+        </div>
+        <div style="max-height:168px;overflow-y:auto;display:flex;flex-direction:column">
+          <sc-for list="{{ alerts }}" as="a" hint-placeholder-count="3">
+            <div style="display:flex;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);font:500 10.5px ui-monospace,'SF Mono',Menlo,monospace;align-items:baseline">
+              <span style="color:var(--dim);flex:none">{{ a.t }}</span>
+              <span style="color:{{ a.color }};flex:none;width:38px">{{ a.sev }}</span>
+              <span style="color:var(--text)">{{ a.msg }}</span>
+            </div>
+          </sc-for>
+          <sc-if value="{{ noAlerts }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:10px 12px;font:500 11px ui-monospace,'SF Mono',Menlo,monospace;color:var(--dim)">No events yet — all systems nominal</div>
+          </sc-if>
+        </div>
+      </div>
+
+      <div style="position:absolute;right:12px;bottom:12px;z-index:800;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;font:500 11px Inter,system-ui,sans-serif;color:var(--text);box-shadow:0 4px 16px rgba(0,0,0,.2)">
+        <div style="display:flex;align-items:center;gap:8px"><span style="width:9px;height:9px;border-radius:50%;background:#1fb75a"></span>Up</div>
+        <div style="display:flex;align-items:center;gap:8px"><span style="width:9px;height:9px;border-radius:50%;background:#e8a415"></span>Degraded</div>
+        <div style="display:flex;align-items:center;gap:8px"><span style="width:9px;height:9px;border-radius:50%;background:#e5484d"></span>Down</div>
+        <div style="height:1px;background:var(--border);margin:2px 0"></div>
+        <div style="display:flex;align-items:center;gap:8px"><span style="width:22px;height:5px;border-radius:2px;background:#1fb75a"></span>10G trunk</div>
+        <div style="display:flex;align-items:center;gap:8px"><span style="width:22px;height:3px;border-radius:2px;background:#1fb75a"></span>1G lateral</div>
+        <div style="display:flex;align-items:center;gap:8px"><span style="width:22px;height:3px;border-radius:2px;background:#f07c1d"></span>&gt;85% utilized</div>
+        <div style="font:500 10px ui-monospace,'SF Mono',Menlo,monospace;color:var(--dim)">dashes flow with traffic</div>
+      </div>
+    </div>
+
+    <sc-if value="{{ showPanel }}" hint-placeholder-val="{{ true }}">
+      <div style="width:322px;flex:none;border-left:1px solid var(--border);background:var(--panel);display:flex;flex-direction:column;min-height:0">
+
+        <sc-if value="{{ selected }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:13px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px">
+            <button onClick="{{ clearSelection }}" style="font:600 13px ui-monospace,'SF Mono',Menlo,monospace;width:28px;height:28px;border-radius:5px;border:1px solid var(--border);background:var(--panel2);color:var(--text);cursor:pointer;flex:none" style-hover="background:var(--border)">←</button>
+            <div style="min-width:0">
+              <div style="font:600 13.5px Inter,system-ui,sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ selected.name }}</div>
+              <div style="font:500 10.5px ui-monospace,'SF Mono',Menlo,monospace;color:var(--dim)">{{ selected.ip }} · {{ selected.typeLabel }}</div>
+            </div>
+            <div style="margin-left:auto;flex:none;font:600 10px ui-monospace,'SF Mono',Menlo,monospace;padding:3px 8px;border-radius:4px;background:{{ selected.badgeBg }};color:{{ selected.badgeFg }}">{{ selected.statusLabel }}</div>
+          </div>
+          <div style="flex:1;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:8px">
+            <div style="font:600 10px ui-monospace,'SF Mono',Menlo,monospace;color:var(--dim);letter-spacing:.1em">FIBER LINKS ({{ selectedLinkCount }})</div>
+            <sc-for list="{{ selectedLinks }}" as="l" hint-placeholder-count="3">
+              <div onClick="{{ l.select }}" style="border:1px solid var(--border);border-radius:6px;padding:9px 10px;background:var(--panel2);display:flex;flex-direction:column;gap:7px;cursor:pointer" style-hover="border-color:var(--accent)">
+                <div style="display:flex;align-items:center;gap:8px">
+                  <div style="width:8px;height:8px;border-radius:2px;background:{{ l.color }};flex:none"></div>
+                  <div style="font:600 12px Inter,system-ui,sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ l.otherName }}</div>
+                  <div style="margin-left:auto;flex:none;font:600 10px ui-monospace,'SF Mono',Menlo,monospace;color:var(--dim)">{{ l.capLabel }}</div>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <div style="flex:1;height:5px;border-radius:3px;background:var(--border);overflow:hidden">
+                    <div style="height:100%;border-radius:3px;background:{{ l.color }};width:{{ l.utilPct }}"></div>
+                  </div>
+                  <div style="font:600 10px ui-monospace,'SF Mono',Menlo,monospace;color:{{ l.color }};width:78px;text-align:right;flex:none">{{ l.utilLabel }}</div>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ noSelection }}" hint-placeholder-val="{{ true }}">
+          <div style="padding:13px 14px;border-bottom:1px solid var(--border)">
+            <div style="font:600 13.5px Inter,system-ui,sans-serif">Sites</div>
+            <div style="font:400 11px Inter,system-ui,sans-serif;color:var(--dim)">Click a site for fiber link detail</div>
+          </div>
+          <div style="flex:1;overflow-y:auto;padding:6px 8px;display:flex;flex-direction:column">
+            <sc-for list="{{ siteRows }}" as="s" hint-placeholder-count="8">
+              <div onClick="{{ s.select }}" style="display:flex;align-items:center;gap:10px;padding:7px 9px;border-radius:6px;cursor:pointer" style-hover="background:var(--panel2)">
+                <div style="width:9px;height:9px;border-radius:50%;background:{{ s.color }};flex:none"></div>
+                <div style="min-width:0">
+                  <div style="font:600 12px Inter,system-ui,sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.name }}</div>
+                  <div style="font:500 10px ui-monospace,'SF Mono',Menlo,monospace;color:var(--dim)">{{ s.ip }}</div>
+                </div>
+                <div style="margin-left:auto;flex:none;font:600 10px ui-monospace,'SF Mono',Menlo,monospace;color:{{ s.color }}">{{ s.statusLabel }}</div>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+
+      </div>
+    </sc-if>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;$preview&quot;: {&quot;width&quot;: 1440, &quot;height&quot;: 900},
+  &quot;theme&quot;: {&quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;dark&quot;, &quot;light&quot;, &quot;satellite&quot;], &quot;default&quot;: &quot;dark&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Map style&quot;},
+  &quot;showLabels&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Map style&quot;},
+  &quot;simSpeedSec&quot;: {&quot;editor&quot;: &quot;range&quot;, &quot;min&quot;: 1, &quot;max&quot;: 10, &quot;step&quot;: 0.5, &quot;default&quot;: 2.5, &quot;unit&quot;: &quot;s&quot;, &quot;tsType&quot;: &quot;number&quot;, &quot;section&quot;: &quot;Simulation&quot;},
+  &quot;eventRate&quot;: {&quot;editor&quot;: &quot;range&quot;, &quot;min&quot;: 0, &quot;max&quot;: 1, &quot;step&quot;: 0.05, &quot;default&quot;: 0.25, &quot;tsType&quot;: &quot;number&quot;, &quot;section&quot;: &quot;Simulation&quot;}
+}">
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.mapRef = React.createRef();
+    this.layers = { sites: {}, links: {} };
+    this.map = null;
+    this.tileLayer = null;
+    this.C = { up: '#1fb75a', degraded: '#e8a415', down: '#e5484d', hot: '#f07c1d' };
+
+    const SITES = [
+      { id: 'co',   name: 'TCS Central Office',        short: 'CENTRAL OFC', type: 'hub', ip: '10.10.0.1',  coord: [33.1990, -87.5605] },
+      { id: 'chs',  name: 'Central High School',       short: 'CENTRAL HS',  type: 'hs',  ip: '10.10.11.1', coord: [33.1897, -87.5940] },
+      { id: 'bhs',  name: 'Paul W. Bryant High',       short: 'BRYANT HS',   type: 'hs',  ip: '10.10.12.1', coord: [33.2317, -87.4820] },
+      { id: 'nhs',  name: 'Northridge High School',    short: 'NORTHRIDGE HS', type: 'hs', ip: '10.10.13.1', coord: [33.2523, -87.5417] },
+      { id: 'wms',  name: 'Westlawn Middle School',    short: 'WESTLAWN MS', type: 'ms',  ip: '10.10.21.1', coord: [33.1943, -87.5872] },
+      { id: 'ems',  name: 'Eastwood Middle School',    short: 'EASTWOOD MS', type: 'ms',  ip: '10.10.22.1', coord: [33.2220, -87.4900] },
+      { id: 'nms',  name: 'Northridge Middle School',  short: 'NORTHRIDGE MS', type: 'ms', ip: '10.10.23.1', coord: [33.2465, -87.5455] },
+      { id: 'tspa', name: 'Alberta School of Performing Arts', short: 'TSPA', type: 'ms', ip: '10.10.24.1', coord: [33.2125, -87.5210] },
+      { id: 'rqe',  name: 'Rock Quarry Elementary',    short: 'ROCK QUARRY', type: 'es',  ip: '10.10.31.1', coord: [33.2450, -87.5093] },
+      { id: 'ver',  name: 'Verner Elementary',         short: 'VERNER',      type: 'es',  ip: '10.10.32.1', coord: [33.2357, -87.5570] },
+      { id: 'sky',  name: 'Skyland Elementary',        short: 'SKYLAND',     type: 'es',  ip: '10.10.33.1', coord: [33.1652, -87.5350] },
+      { id: 'oak',  name: 'Oakdale Elementary',        short: 'OAKDALE',     type: 'es',  ip: '10.10.34.1', coord: [33.1830, -87.5715] },
+      { id: 'mlk',  name: 'MLK Jr. Elementary',        short: 'MLK ELEM',    type: 'es',  ip: '10.10.35.1', coord: [33.2155, -87.5838] },
+      { id: 'uni',  name: 'University Place Elementary', short: 'UNIV PLACE', type: 'es', ip: '10.10.36.1', coord: [33.2093, -87.5450] },
+      { id: 'svm',  name: 'Southview Elementary',      short: 'SOUTHVIEW',   type: 'es',  ip: '10.10.37.1', coord: [33.1568, -87.5505] }
+    ];
+
+    const LINKS = [
+      { id: 'co-chs',  a: 'co', b: 'chs', cap: 10, path: [[33.1990,-87.5605],[33.1962,-87.5608],[33.1958,-87.5780],[33.1930,-87.5900],[33.1897,-87.5940]] },
+      { id: 'co-uni',  a: 'co', b: 'uni', cap: 10, path: [[33.1990,-87.5605],[33.2048,-87.5600],[33.2075,-87.5520],[33.2093,-87.5450]] },
+      { id: 'co-tspa', a: 'co', b: 'tspa', cap: 10, path: [[33.1990,-87.5605],[33.2048,-87.5600],[33.2085,-87.5470],[33.2110,-87.5340],[33.2118,-87.5250],[33.2125,-87.5210]] },
+      { id: 'co-sky',  a: 'co', b: 'sky', cap: 10, path: [[33.1990,-87.5605],[33.1900,-87.5620],[33.1800,-87.5590],[33.1690,-87.5500],[33.1660,-87.5400],[33.1652,-87.5350]] },
+      { id: 'uni-nhs', a: 'uni', b: 'nhs', cap: 10, path: [[33.2093,-87.5450],[33.2160,-87.5430],[33.2280,-87.5405],[33.2400,-87.5410],[33.2480,-87.5430],[33.2523,-87.5417]] },
+      { id: 'nhs-nms', a: 'nhs', b: 'nms', cap: 1, path: [[33.2523,-87.5417],[33.2500,-87.5440],[33.2465,-87.5455]] },
+      { id: 'nhs-ver', a: 'nhs', b: 'ver', cap: 1, path: [[33.2523,-87.5417],[33.2470,-87.5480],[33.2410,-87.5530],[33.2357,-87.5570]] },
+      { id: 'tspa-bhs', a: 'tspa', b: 'bhs', cap: 10, path: [[33.2125,-87.5210],[33.2140,-87.5120],[33.2180,-87.5000],[33.2240,-87.4890],[33.2317,-87.4820]] },
+      { id: 'bhs-ems', a: 'bhs', b: 'ems', cap: 1, path: [[33.2317,-87.4820],[33.2270,-87.4870],[33.2220,-87.4900]] },
+      { id: 'tspa-rqe', a: 'tspa', b: 'rqe', cap: 1, path: [[33.2125,-87.5210],[33.2200,-87.5180],[33.2330,-87.5130],[33.2450,-87.5093]] },
+      { id: 'chs-wms', a: 'chs', b: 'wms', cap: 1, path: [[33.1897,-87.5940],[33.1920,-87.5900],[33.1943,-87.5872]] },
+      { id: 'co-mlk',  a: 'co', b: 'mlk', cap: 1, path: [[33.1990,-87.5605],[33.2040,-87.5640],[33.2100,-87.5750],[33.2155,-87.5838]] },
+      { id: 'co-oak',  a: 'co', b: 'oak', cap: 1, path: [[33.1990,-87.5605],[33.1930,-87.5650],[33.1870,-87.5690],[33.1830,-87.5715]] },
+      { id: 'sky-svm', a: 'sky', b: 'svm', cap: 1, path: [[33.1652,-87.5350],[33.1620,-87.5390],[33.1590,-87.5450],[33.1568,-87.5505]] }
+    ];
+
+    this.state = {
+      sites: SITES.map(s => ({ ...s, status: 'up', downFor: 0 })),
+      links: LINKS.map(l => ({ ...l, status: 'up', downFor: 0, util: 12 + Math.random() * 50 })),
+      selectedId: null,
+      alerts: [],
+      noc: false,
+      mapReady: false,
+      mapStalled: false,
+      clock: this.now()
+    };
+  }
+
+  now() {
+    return new Date().toLocaleTimeString('en-US', { hour12: false });
+  }
+
+  componentDidMount() {
+    // NEVER insert an external resource before the window load event has fired —
+    // pending external requests inserted pre-load delay the load event indefinitely.
+    const start = () => {
+      if (this._extStarted) return;
+      this._extStarted = true;
+      const f = document.createElement('link');
+      f.rel = 'stylesheet';
+      f.href = 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap';
+      document.head.appendChild(f);
+      this.loadLeaflet(0);
+      this.initWhenReady();
+      setTimeout(() => { if (!this.map) this.setState({ mapStalled: true }); }, 15000);
+    };
+    if (document.readyState === 'complete') start();
+    else window.addEventListener('load', start, { once: true });
+    this.startSim();
+  }
+
+  componentWillUnmount() {
+    clearInterval(this.timer);
+    if (this.map) this.map.remove();
+  }
+
+  initWhenReady() {
+    // Called only after the window load event (see componentDidMount).
+    if (!window.L || !this.mapRef.current) {
+      this._initT = setTimeout(() => this.initWhenReady(), 150);
+      return;
+    }
+    this.buildMap();
+    this.setState({ mapReady: true, mapStalled: false });
+  }
+
+  loadLeaflet(i) {
+    if (window.L) return;
+    const CDNS = [
+      'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/',
+      'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/',
+      'https://unpkg.com/leaflet@1.9.4/dist/'
+    ];
+    if (i >= CDNS.length) return;
+    const base = CDNS[i];
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = base + 'leaflet.css';
+    document.head.appendChild(css);
+    const js = document.createElement('script');
+    js.src = base + 'leaflet.js';
+    let settled = false;
+    const next = () => { if (!settled) { settled = true; this.loadLeaflet(i + 1); } };
+    js.onload = () => { settled = true; };
+    js.onerror = next;
+    setTimeout(() => { if (!window.L) next(); }, 8000);
+    document.head.appendChild(js);
+  }
+
+  buildMap() {
+    const L = window.L;
+    const map = L.map(this.mapRef.current, { zoomControl: true });
+    this.map = map;
+    this.setTiles();
+
+    this.state.links.forEach(l => {
+      const casing = L.polyline(l.path, { color: '#000000', opacity: 0.35, weight: 8, interactive: false }).addTo(map);
+      const line = L.polyline(l.path, { color: this.C.up, weight: 4, opacity: 0.95, dashArray: '8 7', className: 'flowline' }).addTo(map);
+      line.on('click', e => { L.DomEvent.stop(e); this.setState({ selectedId: l.a }); });
+      line.bindTooltip(() => this.linkTip(l.id), { sticky: true, className: 'link-tip' });
+      this.layers.links[l.id] = { casing, line };
+    });
+
+    this.state.sites.forEach(s => {
+      const r = s.type === 'hub' ? 10 : s.type === 'hs' ? 8 : 6.5;
+      const m = L.circleMarker(s.coord, { radius: r, weight: 2.5, color: '#e9e9ed', fillColor: this.C.up, fillOpacity: 1 }).addTo(map);
+      m.on('click', e => { L.DomEvent.stop(e); this.setState({ selectedId: s.id }); });
+      this.layers.sites[s.id] = m;
+    });
+    this.refreshLabels();
+
+    map.fitBounds(L.latLngBounds(this.state.sites.map(s => s.coord)).pad(0.15));
+    map.on('click', () => this.setState({ selectedId: null }));
+    this.syncMap();
+  }
+
+  setTiles() {
+    if (!this.map) return;
+    const L = window.L;
+    if (this.tileLayer) this.tileLayer.remove();
+    const t = this.props.theme ?? 'dark';
+    const cfg = {
+      light: ['https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', '&copy; OpenStreetMap &copy; CARTO'],
+      dark: ['https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', '&copy; OpenStreetMap &copy; CARTO'],
+      satellite: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', 'Tiles &copy; Esri']
+    }[t] || ['https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', '&copy; OpenStreetMap &copy; CARTO'];
+    this.tileLayer = L.tileLayer(cfg[0], { maxZoom: 19, attribution: cfg[1] }).addTo(this.map);
+    this.tileLayer.bringToBack();
+  }
+
+  refreshLabels() {
+    const show = this.props.showLabels ?? true;
+    this.state.sites.forEach(s => {
+      const m = this.layers.sites[s.id];
+      if (!m) return;
+      m.unbindTooltip();
+      m.bindTooltip(s.short, { permanent: show, direction: 'top', offset: [0, -8], className: 'site-tip', interactive: false });
+    });
+  }
+
+  siteById(id) {
+    return this.state.sites.find(s => s.id === id);
+  }
+
+  effLink(l, byId) {
+    const map = byId || Object.fromEntries(this.state.sites.map(s => [s.id, s]));
+    if (map[l.a].status === 'down' || map[l.b].status === 'down') return 'down';
+    return l.status;
+  }
+
+  linkTip(id) {
+    const l = this.state.links.find(x => x.id === id);
+    const eff = this.effLink(l);
+    const a = this.siteById(l.a), b = this.siteById(l.b);
+    const stat = eff === 'up' ? Math.round(l.util) + '% of ' + l.cap + 'G' : eff.toUpperCase();
+    return a.short + ' ⟷ ' + b.short + '<br>' + l.cap + 'G fiber · ' + stat;
+  }
+
+  syncMap() {
+    if (!this.map) return;
+    const C = this.C;
+    const byId = Object.fromEntries(this.state.sites.map(s => [s.id, s]));
+    const sel = this.state.selectedId;
+
+    this.state.sites.forEach(s => {
+      const m = this.layers.sites[s.id];
+      if (!m) return;
+      const dimmed = sel && sel !== s.id && !this.state.links.some(l => (l.a === sel && l.b === s.id) || (l.b === sel && l.a === s.id));
+      m.setStyle({
+        fillColor: C[s.status],
+        color: sel === s.id ? '#9184d9' : '#e9e9ed',
+        opacity: dimmed ? 0.45 : 1,
+        fillOpacity: dimmed ? 0.45 : 1,
+        weight: sel === s.id ? 3.5 : 2.5
+      });
+      if (m._path) m._path.classList.toggle('site-down', s.status === 'down');
+    });
+
+    this.state.links.forEach(l => {
+      const lay = this.layers.links[l.id];
+      if (!lay) return;
+      const eff = this.effLink(l, byId);
+      let color = C.up;
+      if (eff === 'down') color = C.down;
+      else if (eff === 'degraded') color = C.degraded;
+      else if (l.util > 85) color = C.hot;
+      const touched = sel && (l.a === sel || l.b === sel);
+      const dimmed = sel && !touched;
+      const w = l.cap >= 10 ? 4.5 : 3;
+      lay.line.setStyle({
+        color,
+        weight: touched ? w + 1.5 : w,
+        opacity: dimmed ? 0.25 : 0.95,
+        dashArray: eff === 'down' ? '3 9' : '8 7'
+      });
+      lay.casing.setStyle({ weight: (touched ? w + 1.5 : w) + 3.5, opacity: dimmed ? 0.1 : 0.35 });
+      const p = lay.line._path;
+      if (p) {
+        p.classList.toggle('stopped', eff === 'down');
+        p.classList.toggle('fast', eff !== 'down' && l.util > 66);
+        p.classList.toggle('slow', eff !== 'down' && l.util <= 33);
+      }
+    });
+  }
+
+  startSim() {
+    clearInterval(this.timer);
+    const sec = this.props.simSpeedSec ?? 2.5;
+    this.timer = setInterval(() => this.tickSim(), sec * 1000);
+  }
+
+  tickSim() {
+    const rate = this.props.eventRate ?? 0.25;
+    const C = this.C;
+    this.setState(st => {
+      const shortOf = id => st.sites.find(s => s.id === id).short;
+      const alerts = st.alerts.slice();
+      const push = (sev, msg) => alerts.unshift({
+        t: this.now(), sev, msg,
+        color: sev === 'DOWN' ? C.down : sev === 'WARN' ? C.degraded : C.up
+      });
+
+      const sites = st.sites.map(s => {
+        let { status, downFor } = s;
+        if (status !== 'up') {
+          downFor--;
+          if (downFor <= 0) { status = 'up'; push('OK', shortOf(s.id) + ' restored'); }
+        } else if (Math.random() < rate * 0.02) {
+          const down = Math.random() < 0.5;
+          status = down ? 'down' : 'degraded';
+          downFor = 3 + Math.floor(Math.random() * 6);
+          push(down ? 'DOWN' : 'WARN', shortOf(s.id) + (down ? ' unreachable' : ' high latency'));
+        }
+        return { ...s, status, downFor };
+      });
+
+      const links = st.links.map(l => {
+        let { status, downFor, util } = l;
+        util = Math.max(3, Math.min(96, util + (Math.random() * 16 - 8)));
+        if (status !== 'up') {
+          downFor--;
+          if (downFor <= 0) { status = 'up'; push('OK', 'Fiber ' + shortOf(l.a) + '–' + shortOf(l.b) + ' restored'); }
+        } else if (Math.random() < rate * 0.025) {
+          const down = Math.random() < 0.45;
+          status = down ? 'down' : 'degraded';
+          downFor = 3 + Math.floor(Math.random() * 5);
+          push(down ? 'DOWN' : 'WARN', 'Fiber ' + shortOf(l.a) + '–' + shortOf(l.b) + (down ? ' loss of signal' : ' errors detected'));
+        }
+        return { ...l, status, downFor, util };
+      });
+
+      return { sites, links, alerts: alerts.slice(0, 40), clock: this.now() };
+    });
+  }
+
+  componentDidUpdate(prevProps, prevState) {
+    if (prevProps.theme !== this.props.theme) this.setTiles();
+    if (prevProps.simSpeedSec !== this.props.simSpeedSec) this.startSim();
+    if (prevProps.showLabels !== this.props.showLabels) this.refreshLabels();
+    if (prevState.noc !== this.state.noc && this.map) setTimeout(() => this.map.invalidateSize(), 60);
+    this.syncMap();
+  }
+
+  renderVals() {
+    const C = this.C;
+    const st = this.state;
+    const byId = Object.fromEntries(st.sites.map(s => [s.id, s]));
+    const label = { up: 'UP', degraded: 'DEGRADED', down: 'DOWN' };
+    const typeLabel = { hub: 'Core · Central Office', hs: 'High School', ms: 'Middle School', es: 'Elementary School' };
+    const order = { down: 0, degraded: 1, up: 2 };
+
+    const upCount = st.sites.filter(s => s.status === 'up').length;
+    const degCount = st.sites.filter(s => s.status === 'degraded').length;
+    const downCount = st.sites.filter(s => s.status === 'down').length;
+    const linkDownCount = st.links.filter(l => this.effLink(l, byId) !== 'up').length;
+
+    const siteRows = st.sites.slice().sort((a, b) => order[a.status] - order[b.status] || a.name.localeCompare(b.name)).map(s => ({
+      name: s.name, ip: s.ip,
+      color: C[s.status], statusLabel: label[s.status],
+      select: () => this.setState({ selectedId: s.id })
+    }));
+
+    const selRaw = byId[st.selectedId] || null;
+    let selected = null;
+    let selectedLinks = [];
+    if (selRaw) {
+      selected = {
+        name: selRaw.name, ip: selRaw.ip,
+        typeLabel: typeLabel[selRaw.type],
+        statusLabel: label[selRaw.status],
+        badgeBg: C[selRaw.status] + '26',
+        badgeFg: C[selRaw.status]
+      };
+      selectedLinks = st.links.filter(l => l.a === selRaw.id || l.b === selRaw.id).map(l => {
+        const other = byId[l.a === selRaw.id ? l.b : l.a];
+        const eff = this.effLink(l, byId);
+        let color = C.up;
+        if (eff === 'down') color = C.down;
+        else if (eff === 'degraded') color = C.degraded;
+        else if (l.util > 85) color = C.hot;
+        return {
+          otherName: other.name,
+          capLabel: l.cap + 'G',
+          color,
+          utilPct: (eff === 'down' ? 0 : Math.round(l.util)) + '%',
+          utilLabel: eff === 'down' ? 'DOWN' : Math.round(l.util) + '% · ' + (l.util * l.cap / 100).toFixed(1) + 'G',
+          select: () => this.setState({ selectedId: other.id })
+        };
+      });
+    }
+
+    return {
+      theme: this.props.theme ?? 'dark',
+      mapRef: this.mapRef,
+      clock: st.clock,
+      upCount, degCount, downCount, linkDownCount,
+      alerts: st.alerts.slice(0, 12),
+      noAlerts: st.alerts.length === 0,
+      siteRows,
+      selected,
+      noSelection: !selected,
+      selectedLinks,
+      selectedLinkCount: selectedLinks.length,
+      showPanel: !st.noc,
+      mapLoading: !st.mapReady,
+      mapMsg: st.mapStalled ? 'MAP TILES UNREACHABLE — CHECK NETWORK' : 'LOADING MAP…',
+      nocLabel: st.noc ? 'EXIT NOC' : 'NOC MODE',
+      toggleNoc: () => {
+        const noc = !st.noc;
+        this.setState({ noc });
+        try { if (noc) document.documentElement.requestFullscreen(); else if (document.fullscreenElement) document.exitFullscreen(); } catch (e) {}
+      },
+      clearSelection: () => this.setState({ selectedId: null })
+    };
+  }
+}
+</script>
+</body>
+</html>

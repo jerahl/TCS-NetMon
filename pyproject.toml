@@ -1,0 +1,46 @@
+[project]
+name = "netmon"
+version = "0.1.0"
+description = "TCS NetMon — federated network/wireless/voice/surveillance monitoring platform"
+# 3.11 floor matches the deploy VM (Debian 12 ships 3.11); 3.12 is preferred.
+# The code uses no 3.12-only features (test suite runs on 3.11).
+requires-python = ">=3.11"
+
+# Dependency policy (CLAUDE.md §3): stdlib-preferred; this bounded set is the
+# only third-party surface. Nothing is added here without a written reason and
+# owner approval. Pins are exact.
+dependencies = [
+    "fastapi==0.115.6",
+    "uvicorn==0.34.0",
+    "sqlalchemy==2.0.36",
+    "httpx==0.28.1",
+    "apscheduler==3.11.0",
+    # ClassLink SSO (SAML SP). Owner-approved 2026-07-13. Pulls xmlsec/lxml
+    # (self-contained wheels); the deploy also installs the xmlsec1 system lib.
+    "python3-saml==1.16.0",
+    # MariaDB DBAPI driver for the mysql+pymysql:// URL. Owner-approved
+    # 2026-07-11 (CLAUDE.md §3). PyMySQL is pure-Python — no C build or system
+    # libs — which suits the offline-tolerant deploy (README §8/§9). Dev/test
+    # still uses the stdlib sqlite3 driver (no dependency).
+    "pymysql==1.1.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+]
+
+[project.scripts]
+netmon-migrate = "netmon.migrate:main"
+netmon-seed = "netmon.seed:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["netmon*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

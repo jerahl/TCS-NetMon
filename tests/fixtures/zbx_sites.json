@@ -1,0 +1,25 @@
+{
+  "_note": "SANITIZED Zabbix host.get export with selectHostGroups. site = the group under the 'Site/' prefix (reference ActionGlobalData::buildSites). No real hosts or secrets.",
+  "result": [
+    {
+      "host": "BHS-56-Hallway",
+      "hostgroups": [{"name": "Wireless"}, {"name": "Site/BHS"}]
+    },
+    {
+      "host": "BHS-Core-1",
+      "hostgroups": [{"name": "Switches"}, {"name": "Site/BHS"}]
+    },
+    {
+      "host": "CHS-12-Room",
+      "hostgroups": [{"name": "Site/CHS"}]
+    },
+    {
+      "host": "NURSE-CAM-1",
+      "hostgroups": [{"name": "Surveillance"}, {"name": "Site/BHS"}]
+    },
+    {
+      "host": "UNGROUPED-HOST",
+      "hostgroups": [{"name": "Switches"}]
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "_note": "SANITIZED sample of POST /api/v1/nodes/search (PFClient::nodesByMac shape). Fake MACs, RFC 5737 IPs. No real credentials.",
+  "items": [
+    {
+      "mac": "aa:bb:cc:00:00:11",
+      "computername": "BHS-56-Hallway",
+      "ip4log.ip": "192.0.2.11",
+      "status": "reg",
+      "category_id": "12",
+      "device_class": "Network Device",
+      "device_type": "Access Point"
+    },
+    {
+      "mac": "aa:bb:cc:00:00:99",
+      "computername": "",
+      "ip4log.ip": "192.0.2.2",
+      "status": "reg",
+      "category_id": "12",
+      "device_class": "SWITCH_HUB",
+      "device_type": "Switch"
+    },
+    {
+      "mac": "aa:bb:cc:00:00:aa",
+      "computername": "NURSE-CAM-1",
+      "ip4log.ip": "192.0.2.60",
+      "status": "reg",
+      "category_id": "20",
+      "device_class": "IP_CAMERA",
+      "device_type": "IP Camera"
+    },
+    {
+      "mac": "aa:bb:cc:00:00:bb",
+      "computername": "",
+      "ip4log.ip": "192.0.2.61",
+      "status": "unreg",
+      "category_id": "1",
+      "device_class": "",
+      "device_type": ""
+    }
+  ]
+}

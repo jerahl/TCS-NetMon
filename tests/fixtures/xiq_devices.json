@@ -1,0 +1,41 @@
+{
+  "_note": "SANITIZED sample of GET /devices?views=BASIC (XIQFleetClient::getDevices). Fake IDs, RFC 5737 IPs (192.0.2.0/24), fake MACs. No real credentials or hostnames-with-secrets.",
+  "data": [
+    {
+      "id": 100001,
+      "hostname": "BHS-56-Hallway",
+      "mac_address": "AABBCC000011",
+      "device_function": "AP",
+      "product_type": "AP305C",
+      "network_policy_id": 501,
+      "software_version": "10.6r3",
+      "connected": true,
+      "last_connect_time_ms": 1751990400000,
+      "ip_address": "192.0.2.11"
+    },
+    {
+      "id": 100002,
+      "hostname": "BHS-Core-1",
+      "mac_address": "AABBCC000002",
+      "device_function": "SWITCH",
+      "product_type": "5420F",
+      "network_policy_id": 0,
+      "software_version": "31.6",
+      "connected": true,
+      "last_connect_time_ms": 1751990400000,
+      "ip_address": "192.0.2.2"
+    },
+    {
+      "id": 100003,
+      "hostname": "CHS-12-Room",
+      "mac_address": "AABBCC000030",
+      "device_function": "AP",
+      "product_type": "AP305C",
+      "network_policy_id": 501,
+      "software_version": "10.6r3",
+      "connected": false,
+      "last_connect_time_ms": 1751900000000,
+      "ip_address": "192.0.2.30"
+    }
+  ]
+}
