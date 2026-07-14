@@ -102,6 +102,34 @@ Field mapping used by `scripts/seed_devices.py`:
 5. `snmp_capable` defaults `true` for `switch`, `false` for `ap`/`camera`
    unless the source export says otherwise (refined in Phase 2).
 
+## Producing the seed exports
+
+The Phase 1 registry seed (`netmon.seed`) is fed by three JSON exports, one per
+"identity" source. Each has a small read-only export script under `scripts/`
+that the owner runs on-network; all three emit a shape `netmon-seed` consumes
+directly and mirror a committed fixture. Devices come from XIQ + PacketFence;
+Zabbix supplies only the `Site/` mapping (rule 2 above).
+
+| Script | Source | Emits | Feeds | Fixture |
+|---|---|---|---|---|
+| `scripts/xiq_export.py` | XIQ `GET /devices?views=BASIC` | `{"data": [...]}` | `--xiq` | `xiq_devices.json` |
+| `scripts/pf_export.py` | PF `POST /nodes/search` | `{"items": [...]}` | `--pf` | `pf_nodes.json` |
+| `scripts/zabbix_export.py` | Zabbix `host.get` | `{"result": [...]}` | `--sites` | `zbx_sites.json` |
+
+Full run once all three exports exist:
+
+    NETMON_CONF=/etc/netmon/netmon.conf python scripts/xiq_export.py --out xiq_devices.json
+    NETMON_CONF=/etc/netmon/netmon.conf python scripts/pf_export.py  --out pf_nodes.json
+    python scripts/zabbix_export.py --url https://zabbix... --out zbx_sites.json
+    python -m netmon.seed --xiq xiq_devices.json --pf pf_nodes.json --sites zbx_sites.json
+
+The XIQ/PF scripts reuse the collector HTTP clients (`XiqClient`, `PfClient`)
+and read credentials from the `[xiq]` / `[packetfence]` config sections — they
+are read-only (GET / login+search) and never write to a source (§4.1). They
+differ from the *collectors* (`python -m netmon.collectors.<x>`), which write
+live status into `device_state` for devices already in the registry: these
+scripts produce the export that *creates* the registry.
+
 ### Producing the Zabbix export
 
 `scripts/zabbix_export.py` pulls sites/groups/hosts from the retiring **Zabbix
