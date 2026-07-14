@@ -1,6 +1,8 @@
 // Small shared UI primitives, in the reference dashboard's idiom but
 // dependency-free (no Zabbix bridges, no CDN).
 
+import { sevLabel, sourceBadge } from "./severity.js";
+
 export const SEV_COLOR = {
   ok: "#1fb75a",
   warn: "#e8a415",
@@ -30,6 +32,18 @@ export function Badge({ state }) {
       {val}
     </span>
   );
+}
+
+// Severity as the design's word + NetMon's colour (mapping in severity.js).
+export function SevText({ severity }) {
+  const sev = severity || "unknown";
+  return <span style={{ color: sevColor(sev), fontWeight: 600 }}>{sevLabel(sev)}</span>;
+}
+
+// Provenance chip (POLLER/SNMP/XIQ/PF/MS/3CX/RCFG). Attribution per widget,
+// exactly as the design shows it — value comes from the API `source` column.
+export function SourceBadge({ source }) {
+  return <span className="src-badge" title={source || "unknown source"}>{sourceBadge(source)}</span>;
 }
 
 export function Card({ title, kicker, children }) {

@@ -1,6 +1,6 @@
 # Spec 10 — "Zabbix Extreme" design port (UI rebuild + snapshot data layer)
 
-**Status:** IN PROGRESS — Phase 10.0 backend landed 2026-07-14 (see Progress log); frontend port + Phases 10.1–10.5 pending. Originated as the design-analysis session deliverable (2026-07-14).
+**Status:** IN PROGRESS — Phase 10.0 complete (backend + frontend, 2026-07-14; see Progress log); Phases 10.1–10.5 pending (10.1 gated on §10 Q2). Originated as the design-analysis session deliverable (2026-07-14).
 **Design source:** `Zabbix_Extreme.zip` (Claude Design handoff: 18 HTML pages + ~50 JSX/CSS modules). Keep the
 archive out of the repo (it contains real hostnames/IPs in mock data); extract locally when implementing.
 **Goal:** make NetMon's UI match this design, and build the data layer the pages need — **cache current
@@ -322,18 +322,41 @@ Done this session:
 - Tests: +status all-dimensions, +`test_events_api`, +`test_collector_health_api`,
   +alert assign/suppress, +migration `005` assertions. Full suite green.
 
+**2026-07-14 — Phase 10.0 frontend landed** (still ungated). Phase 10.0 is now
+**complete** (backend + frontend); old pages still work.
+- **Events Console** (`frontend/src/pages/events.jsx`, route `#/events`) — filter
+  bar (severity/source/site/type/dimension/text), KPI tiles + 24 h severity
+  histogram (from `/api/events/stats`), transition-feed table with provenance
+  badges. Auto-refreshes 30 s (cache cadence). Site/source filter options are
+  derived from the loaded feed — no extra round-trip.
+- **Problems** page reworked to wire all three NetMon-native actions —
+  Ack / Assign / Suppress-1h — on `/api/alerts/*`, with an `assigned_to` column.
+- **Nav source-health pills** from `/api/collector-health` (green/red/grey per
+  collector, hover for last-success + error). Refresh 30 s.
+- Shared modules added: `severity.js` (the single home of the 5-level design →
+  4-level NetMon mapping + provenance-badge table — §2), `primitives.jsx`
+  gains `SevText`/`SourceBadge`, `api.js` gains `postJSON`/`qs`.
+- **Reconciliation:** the design's Events Console conflates transitions and
+  open problems. NetMon keeps them honest — `/api/events` is the immutable
+  `state_events` feed (no ack there); the actionable alert lifecycle lives on
+  Problems. The design's "Status" filter (open/acked) is therefore a Problems
+  concern, not an events filter.
+- Verified end-to-end with a headless-Chromium (Playwright) run against the
+  built bundle on a seeded DB: both pages render live data, source badges and
+  pills populate, histogram/filters/rows correct, no runtime console errors, no
+  runtime external fetches (the one remaining external URL in the bundle is the
+  Phase 9 map's ArcGIS tile layer — a separate spec-09/§10 open question, not
+  introduced here).
+
 ## Next session
 
-- **Frontend half of Phase 10.0** (still ungated): port the design shell /
-  `global-nav` / `primitives` (SourceBadge/StatusDot/Sev/Ring) into
-  `frontend/src/` on the existing esbuild pipeline (strip Babel-standalone/CDN
-  loads); build the **Events Console** + **Problems** pages onto `/api/events`
-  (+`/stats`) and `/api/alerts` (ack/assign/suppress wired); add nav
-  source-health pills backed by `/api/collector-health`. Note: `status` filter
-  (open/acked/closed) is an `alerts` concept, not `state_events` — the console
-  composes both APIs; keep the events feed a pure transition history.
-- **Get §10 Q1–Q3 answered** — Q2 (read-only `snmpbulkwalk` charter amendment)
-  gates Phase 10.1; Q1 (out-of-scope nav) shapes the ported nav; Q3 (sparklines)
-  sets the degraded-widget default.
-- Capture SNMP fixture walks from one lab EXOS stack (ports/FDB/LLDP/stack) into
-  `tests/fixtures/` (pre-work for 10.1, once Q2 is approved).
+- **Phase 10.1 (Switching)** — blocked on **§10 Q2**: owner approval of read-only
+  `snmpbulkwalk` sweeps (the §1 charter amendment). Once approved: `snmp_inventory`
+  module + `004`-series switch-inventory tables (renumber to next free number),
+  switch API, Switches page tabs. Capture SNMP fixture walks from one lab EXOS
+  stack (ports/FDB/LLDP/stack) into `tests/fixtures/` as pre-work.
+- **Get §10 Q1 + Q3 answered** — Q1 (out-of-scope nav: hide vs Zabbix deep-links)
+  shapes the Global page nav in 10.5; Q3 (sparklines) sets the degraded-widget
+  default. Neither blocks 10.1.
+- Optional polish on 10.0: a detail drawer / audit trail on the Events table,
+  bulk selection, and MTTA/MTTR tiles (computable from `alerts` — §7).

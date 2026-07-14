@@ -29,6 +29,7 @@ export function Nav({ active }) {
     try { return localStorage.getItem(STORAGE_KEY) === "1"; } catch { return false; }
   });
   const [counts, setCounts] = React.useState(null);
+  const [health, setHealth] = React.useState(null);
 
   React.useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, collapsed ? "1" : "0"); } catch { /* ignore */ }
@@ -36,18 +37,25 @@ export function Nav({ active }) {
 
   React.useEffect(() => {
     let live = true;
-    getJSON("/api/status")
-      .then((rows) => {
-        if (!live) return;
-        const c = { total: rows.length, switches: 0, aps: 0 };
-        for (const d of rows) {
-          if (d.device_type === "switch") c.switches++;
-          if (d.device_type === "ap") c.aps++;
-        }
-        setCounts(c);
-      })
-      .catch(() => { /* nav counts are best-effort */ });
-    return () => { live = false; };
+    const tick = () => {
+      getJSON("/api/status")
+        .then((rows) => {
+          if (!live) return;
+          const c = { total: rows.length, switches: 0, aps: 0 };
+          for (const d of rows) {
+            if (d.device_type === "switch") c.switches++;
+            if (d.device_type === "ap") c.aps++;
+          }
+          setCounts(c);
+        })
+        .catch(() => { /* nav counts are best-effort */ });
+      getJSON("/api/collector-health")
+        .then((rows) => { if (live) setHealth(rows); })
+        .catch(() => { /* pills are best-effort */ });
+    };
+    tick();
+    const id = setInterval(tick, 30000);
+    return () => { live = false; clearInterval(id); };
   }, []);
 
   const item = (key, href, icon, label, count) => (
@@ -95,7 +103,30 @@ export function Nav({ active }) {
         {item("map", NAV.map, "map", "Site Map")}
       </div>
 
+      {health && health.length > 0 && (
+        <div className="nav-section">
+          <div className="nav-label">Sources</div>
+          {health.map((h) => (
+            <div className={"src-pill src-" + h.status} key={h.name}
+                 title={pillTitle(h)}>
+              <span className="src-pill-dot" style={{ background: HEALTH_COLOR[h.status] || HEALTH_COLOR.unknown }} />
+              <span className="nav-label-text src-pill-name">{h.name}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="nav-foot">v0.1 · {counts ? counts.total + " devices" : "…"}</div>
     </aside>
   );
+}
+
+const HEALTH_COLOR = { ok: "#1fb75a", error: "#e5484d", unknown: "#8a8f98" };
+
+function pillTitle(h) {
+  const parts = [`${h.name}: ${h.status}`];
+  if (h.last_success) parts.push(`last ok ${h.last_success}`);
+  if (h.consecutive_failures) parts.push(`${h.consecutive_failures} consecutive failure(s)`);
+  if (h.last_error) parts.push(`error: ${h.last_error}`);
+  return parts.join(" · ");
 }

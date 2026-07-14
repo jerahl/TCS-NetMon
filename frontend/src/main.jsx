@@ -7,6 +7,7 @@ import { SwitchesPage } from "./pages/switches.jsx";
 import { ApDetailPage } from "./pages/ap_detail.jsx";
 import { NacPage } from "./pages/nac.jsx";
 import { SurveillancePage } from "./pages/surveillance.jsx";
+import { EventsPage } from "./pages/events.jsx";
 import { ProblemsPage } from "./pages/problems.jsx";
 import { VoipPage } from "./pages/voip.jsx";
 import { MapPage } from "./pages/map.jsx";
@@ -18,6 +19,7 @@ function parseRoute() {
   if (parts[0] === "switches") return { name: "switches" };
   if (parts[0] === "nac") return { name: "nac" };
   if (parts[0] === "surveillance") return { name: "surveillance" };
+  if (parts[0] === "events") return { name: "events" };
   if (parts[0] === "problems") return { name: "problems" };
   if (parts[0] === "voip") return { name: "voip" };
   if (parts[0] === "map") return { name: "map" };
@@ -41,6 +43,7 @@ function App() {
   if (route.name === "switches") { page = <SwitchesPage />; active = "switches"; }
   else if (route.name === "nac") { page = <NacPage />; active = "nac"; }
   else if (route.name === "surveillance") { page = <SurveillancePage />; active = "surveillance"; }
+  else if (route.name === "events") { page = <EventsPage />; active = "events"; }
   else if (route.name === "problems") { page = <ProblemsPage />; active = "problems"; }
   else if (route.name === "voip") { page = <VoipPage />; active = "voip"; }
   else if (route.name === "map") { page = <MapPage />; active = "map"; }
