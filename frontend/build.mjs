@@ -27,7 +27,9 @@ const options = {
   sourcemap: watch,
   target: ["es2020"],
   outfile: resolve(outdir, "app.js"),
-  loader: { ".css": "css" },
+  // Leaflet's CSS references its control PNGs; inline them as data URIs so
+  // the bundle stays self-contained (no runtime asset fetches).
+  loader: { ".css": "css", ".png": "dataurl" },
   logLevel: "info",
 };
 
