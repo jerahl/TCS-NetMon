@@ -152,3 +152,16 @@ shadow = true
 # smtp_port = 25
 # smtp_from = netmon@tuscaloosacityschools.com
 # default_target = noc@tuscaloosacityschools.com
+
+[zabbix]
+# Read-only connection for scripts/zabbix_export.py — the Phase 0 recon helper
+# that pulls sites/groups/hosts from the retiring Zabbix 7.4 server to feed
+# `netmon-seed --sites`. Not read by the app (no collector polls Zabbix); this
+# section exists only so the export script can find the server without CLI
+# flags. CLI flags and env vars ($ZABBIX_URL / $ZABBIX_TOKEN) override these.
+# url = https://zabbix.tcs.internal
+# Prefer an API token (Zabbix: Users > API tokens) scoped to a read-only user.
+# token = REPLACE_WITH_ZABBIX_API_TOKEN
+# Or username/password (a session token is fetched via user.login):
+# user = monitoring-ro
+# password = REPLACE

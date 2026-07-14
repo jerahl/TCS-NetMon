@@ -102,6 +102,27 @@ Field mapping used by `scripts/seed_devices.py`:
 5. `snmp_capable` defaults `true` for `switch`, `false` for `ap`/`camera`
    unless the source export says otherwise (refined in Phase 2).
 
+### Producing the Zabbix export
+
+`scripts/zabbix_export.py` pulls sites/groups/hosts from the retiring **Zabbix
+7.4** server over the JSON-RPC API (read-only: `apiinfo.version`,
+`hostgroup.get`, `host.get`; `user.login`/`logout` only when a username is
+used instead of a token). It writes the `host.get` + `selectHostGroups` dump
+that `netmon-seed --sites` consumes and that `tests/fixtures/zbx_sites.json`
+mirrors. It is stdlib-only (no `netmon` import) so it runs on the Zabbix box
+or a jump host. Connection settings come from `--url`/`--token` flags, the
+`$ZABBIX_URL`/`$ZABBIX_TOKEN` env vars, or a `[zabbix]` section in
+`netmon.conf` — Zabbix 7.4 authenticates with the `Authorization: Bearer`
+header (the request-body `auth` field was removed in 7.2). Example:
+
+    export ZABBIX_URL=https://zabbix.tcs.internal
+    export ZABBIX_TOKEN=...            # read-only API token
+    python scripts/zabbix_export.py --out zbx_sites.json
+    python -m netmon.seed --sites zbx_sites.json ...
+
+Its output carries real hostnames/IPs — **sanitize before committing** any of
+it as a fixture (CLAUDE.md §4.6).
+
 ## DoD checklist
 
 - [x] `docs/spec/00-sources.md` documents API surface + reconciliation rules.
