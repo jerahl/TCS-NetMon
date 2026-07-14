@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SANITIZED Google-My-Maps-style KML export for importer tests. Same three
+     sites/two links as map_topology.json. Exercises: 'Site/' name prefix,
+     CDATA descriptions with <br>, a 'tier:' line, lon,lat(,alt) coordinate
+     order, a:/b:/capacity_gbps link descriptions, the 'A-B' name fallback,
+     and an ignored Polygon. No real infrastructure detail. -->
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>TCS fiber map</name>
+    <Folder>
+      <name>Sites</name>
+      <Placemark>
+        <name>Site/CO</name>
+        <description><![CDATA[TCS Central Office<br>tier: hub]]></description>
+        <Point><coordinates>-87.5605,33.1990,0</coordinates></Point>
+      </Placemark>
+      <Placemark>
+        <name>Site/BHS</name>
+        <description>Paul W. Bryant High</description>
+        <Point><coordinates>-87.4820,33.2317,0</coordinates></Point>
+      </Placemark>
+      <Placemark>
+        <name>CHS</name>
+        <description><![CDATA[display_name: Central High School]]></description>
+        <Point><coordinates>-87.5940,33.1897</coordinates></Point>
+      </Placemark>
+    </Folder>
+    <Folder>
+      <name>Fiber</name>
+      <Placemark>
+        <name>CO-BHS</name>
+        <description><![CDATA[a: Site/CO<br>b: BHS<br>capacity_gbps: 10]]></description>
+        <LineString>
+          <coordinates>
+            -87.5605,33.1990,0 -87.5100,33.2200,0 -87.4820,33.2317,0
+          </coordinates>
+        </LineString>
+      </Placemark>
+      <Placemark>
+        <name>CO-CHS</name>
+        <description>drawn lateral; endpoints from the placemark name</description>
+        <LineString>
+          <coordinates>-87.5605,33.1990,0 -87.5940,33.1897,0</coordinates>
+        </LineString>
+      </Placemark>
+    </Folder>
+    <Placemark>
+      <name>campus outline (ignored)</name>
+      <Polygon><outerBoundaryIs><LinearRing>
+        <coordinates>-87.56,33.19,0 -87.55,33.19,0 -87.55,33.20,0 -87.56,33.19,0</coordinates>
+      </LinearRing></outerBoundaryIs></Polygon>
+    </Placemark>
+  </Document>
+</kml>

@@ -45,6 +45,14 @@ def test_002_seeds_source_blind_rule():
     assert "`condition`" in sql  # reserved word stays quoted in the INSERT too
 
 
+def test_004_creates_map_tables():
+    migs = {m.version: m for m in discover_migrations()}
+    assert "004" in migs, "expected 004 site-map migration"
+    sql = migs["004"].path.read_text()
+    for table in ("sites", "fiber_links", "fiber_link_state"):
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in sql, f"missing table {table}"
+
+
 def test_every_migration_has_rollback_note():
     for mig in discover_migrations():
         text_ = mig.path.read_text().lower()

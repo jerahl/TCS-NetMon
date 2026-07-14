@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 WEB_DIR = Path(__file__).resolve().parent / "web"
 
 from netmon import __version__, db, migrate
-from netmon.api import alerts, auth_routes, devices, health, nac, status
+from netmon.api import alerts, auth_routes, devices, health, nac, sites, status
 from netmon.auth.sessions import SessionStore
 from netmon.engine.engine import AlertEngine
 from netmon.collectors.milestone import MilestoneCollector, MilestoneError
@@ -165,6 +165,7 @@ def create_app(
     app.include_router(auth_routes.page_router)
     app.include_router(devices.router)
     app.include_router(status.router)
+    app.include_router(sites.router)
     app.include_router(nac.router)
     app.include_router(alerts.router)
 
