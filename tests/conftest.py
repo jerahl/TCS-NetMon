@@ -122,6 +122,41 @@ CREATE TABLE maintenance_windows (
 """
 
 
+SITES_DDL_SQLITE = """
+CREATE TABLE sites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    display_name TEXT,
+    tier TEXT NOT NULL DEFAULT 'other',
+    lat REAL NOT NULL,
+    lon REAL NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1
+)
+"""
+
+FIBER_LINKS_DDL_SQLITE = """
+CREATE TABLE fiber_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    site_a_id INTEGER NOT NULL,
+    site_b_id INTEGER NOT NULL,
+    capacity_gbps REAL NOT NULL DEFAULT 1.0,
+    path TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    UNIQUE (site_a_id, site_b_id)
+)
+"""
+
+FIBER_LINK_STATE_DDL_SQLITE = """
+CREATE TABLE fiber_link_state (
+    link_id INTEGER PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'unknown',
+    utilization_pct REAL,
+    source TEXT NOT NULL,
+    updated_at TIMESTAMP
+)
+"""
+
+
 def create_core_tables(engine) -> None:
     """Create the tables the poller / collectors / engine / API touch (SQLite)."""
     from sqlalchemy import text
@@ -135,6 +170,9 @@ def create_core_tables(engine) -> None:
             ALERTS_DDL_SQLITE,
             NOTIFICATIONS_DDL_SQLITE,
             MAINTENANCE_DDL_SQLITE,
+            SITES_DDL_SQLITE,
+            FIBER_LINKS_DDL_SQLITE,
+            FIBER_LINK_STATE_DDL_SQLITE,
         ):
             conn.execute(text(ddl))
 

@@ -33,6 +33,7 @@ dev = [
 [project.scripts]
 netmon-migrate = "netmon.migrate:main"
 netmon-seed = "netmon.seed:main"
+netmon-topology = "netmon.topology:main"
 
 [build-system]
 requires = ["setuptools>=68"]

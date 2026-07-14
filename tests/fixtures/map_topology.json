@@ -1,0 +1,12 @@
+{
+  "_note": "SANITIZED minimal topology for parse/import tests. Site names match the zbx_sites.json fixture ('BHS','CHS') plus a hub. Coordinates are the design prototype's public approximations. No real infrastructure detail.",
+  "sites": [
+    { "name": "CO",  "display_name": "TCS Central Office",  "tier": "hub",  "lat": 33.1990, "lon": -87.5605 },
+    { "name": "BHS", "display_name": "Paul W. Bryant High", "tier": "high", "lat": 33.2317, "lon": -87.4820 },
+    { "name": "CHS", "display_name": "Central High School", "tier": "high", "lat": 33.1897, "lon": -87.5940 }
+  ],
+  "links": [
+    { "a": "CO", "b": "BHS", "capacity_gbps": 10, "path": [[33.1990, -87.5605], [33.2200, -87.5100], [33.2317, -87.4820]] },
+    { "a": "CO", "b": "CHS", "capacity_gbps": 1 }
+  ]
+}

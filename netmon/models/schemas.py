@@ -105,6 +105,94 @@ class DeviceStatus(BaseModel):
     source_status: DimensionState = DimensionState()
 
 
+class SiteTier(str, Enum):
+    hub = "hub"
+    high = "high"
+    middle = "middle"
+    elementary = "elementary"
+    other = "other"
+
+
+class SiteStatus(str, Enum):
+    """Roll-up vocabulary for sites AND fiber links (spec 09).
+
+    unknown is displayed distinctly, never as up — blind must never render as
+    healthy (§6 invariant).
+    """
+
+    up = "up"
+    degraded = "degraded"
+    down = "down"
+    unknown = "unknown"
+
+
+class Site(BaseModel):
+    """A row in the curated ``sites`` table (also the importer's shape).
+
+    ``name`` must equal ``devices.site`` — it is the roll-up join key.
+    """
+
+    id: int | None = None
+    name: str
+    display_name: str | None = None
+    tier: SiteTier = SiteTier.other
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+    enabled: bool = True
+
+
+class FiberLinkSpec(BaseModel):
+    """A curated ``fiber_links`` row as the topology importer consumes it."""
+
+    site_a: str
+    site_b: str
+    capacity_gbps: float = Field(default=1.0, gt=0)
+    path: list[tuple[float, float]] | None = None  # [[lat,lon],...] or None
+    enabled: bool = True
+
+
+class SiteRollup(BaseModel):
+    """/api/sites: a curated site plus its live device roll-up."""
+
+    name: str
+    display_name: str | None = None
+    tier: SiteTier = SiteTier.other
+    lat: float
+    lon: float
+    status: SiteStatus = SiteStatus.unknown
+    devices_total: int = 0
+    devices_down: int = 0
+    devices_degraded: int = 0
+
+
+class FiberLink(BaseModel):
+    """/api/links: a curated link plus its effective current state."""
+
+    id: int
+    site_a: str
+    site_b: str
+    capacity_gbps: float
+    path: list[tuple[float, float]] | None = None
+    status: SiteStatus = SiteStatus.unknown
+    utilization_pct: float | None = None
+    utilization_at: datetime | None = None
+    utilization_source: str | None = None
+
+
+class MapEvent(BaseModel):
+    """/api/events: a state_events row joined to its device name/site."""
+
+    id: int
+    device: str
+    site: str | None = None
+    dimension: Dimension
+    old_value: str | None = None
+    new_value: str | None = None
+    severity: Severity = Severity.unknown
+    source: str
+    occurred_at: datetime | None = None
+
+
 class UserSession(BaseModel):
     """The authenticated principal attached to a request."""
 
