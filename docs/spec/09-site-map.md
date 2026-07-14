@@ -46,10 +46,15 @@ A geographic map of the district (Leaflet) as an at-a-glance operational view:
    place (`frontend/src/pages/map.jsx`) to make that swap trivial.
 3. **Fiber-link topology is curated, in the DB.** New tables `sites` and
    `fiber_links` (migration `004_site_map.sql`), populated by a one-shot
-   importer (`python -m netmon.topology <file>`) from an owner-maintained JSON
-   file (`topology.example.json` is the template). Not derived from LLDP/CDP.
-   `sites.name` **must equal** `devices.site` (the Zabbix `Site/<name>` value)
-   — that string is the join key for the roll-up.
+   importer (`python -m netmon.topology <file>`) from an owner-maintained
+   file — JSON (`topology.example.json` is the template) or **KML/KMZ**
+   drawn in Google My Maps / Google Earth (added 2026-07-14 at owner
+   request; Point placemarks = sites with `Site/`-prefixed or plain names +
+   display-name/`tier:` descriptions, LineString placemarks = links with
+   `a:`/`b:`/`capacity_gbps:` description lines whose drawn geometry is the
+   path — conventions in `docs/runbooks/site-map.md`). Not derived from
+   LLDP/CDP. `sites.name` **must equal** `devices.site` (the Zabbix
+   `Site/<name>` value) — that string is the join key for the roll-up.
 4. **Link utilization ingest is deferred** (owner decision 2026-07-14). The
    XIQ-port-stats vs SNMP-ifHCInOctets read path stays an open question (§9);
    guessing it is not allowed. The schema (`fiber_link_state.utilization_pct`,

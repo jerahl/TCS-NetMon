@@ -9,27 +9,45 @@ The NOC wall view at `/ui/#/map` (nav: **Site Map**). Spec: `docs/spec/09-site-m
 
        netmon-migrate            # or: python -m netmon.migrate
 
-2. **Curate the topology.** Copy `topology.example.json` somewhere private
-   (e.g. `/etc/netmon/topology.json`) and edit:
-   - `sites[].name` **must equal** the device registry's `devices.site` value
-     (the Zabbix `Site/<name>` group name, e.g. `BHS`) — it is the roll-up
-     join key. `display_name`, `tier` (`hub|high|middle|elementary|other`),
-     `lat`, `lon` are yours to curate.
-   - `links[]` use `a`/`b` site names, `capacity_gbps`, and an optional
-     `path` polyline (`[[lat,lon],…]`) tracing the street route; omit `path`
-     for a straight line.
-   - The example's coordinates are the design prototype's approximations —
-     replace with real ones.
+2. **Curate the topology** — either format, same validation:
+
+   **KML/KMZ (recommended — draw it in Google My Maps / Google Earth):**
+   - **Sites are Point placemarks.** Placemark *name* = the site name, with
+     or without the Zabbix-style prefix (`Site/BHS` or `BHS` — the prefix is
+     stripped). It **must equal** the device registry's `devices.site` value —
+     that is the roll-up join key. Placemark *description* = the display name
+     (e.g. `Paul W. Bryant High`); add an optional line `tier: high`
+     (`hub|high|middle|elementary|other`, default `other`) to size the dot.
+   - **Fiber links are Line placemarks.** Name the placemark `A-B` and/or put
+     these lines in its description (description wins):
+
+         a: CO
+         b: BHS
+         capacity_gbps: 10
+
+     The line you draw **is** the link's path on the map — trace the street
+     route. Capacity defaults to 1 Gbps when unstated.
+   - Export as KML or KMZ (both import directly). Polygons/folders are
+     ignored.
+
+   **JSON:** copy `topology.example.json` somewhere private
+   (e.g. `/etc/netmon/topology.json`); same fields — `sites[].name`,
+   `display_name`, `tier`, `lat`, `lon`; `links[]` with `a`/`b`,
+   `capacity_gbps`, optional `path` polyline (`[[lat,lon],…]`; omitted =
+   straight line). The example's coordinates are the design prototype's
+   approximations — replace with real ones.
 
 3. **Import** (idempotent; re-run after every edit):
 
-       python -m netmon.topology /etc/netmon/topology.json --dry-run   # inspect first
-       python -m netmon.topology /etc/netmon/topology.json
+       python -m netmon.topology /etc/netmon/district.kml --dry-run   # inspect first
+       python -m netmon.topology /etc/netmon/district.kml
 
    The importer **warns** about curated site names that match no device —
    fix the name rather than ignoring it (mismatched sites roll up as
-   NO DATA). To retire a site/link, set `"enabled": false` in the JSON and
-   re-import; the importer never deletes rows.
+   NO DATA). The importer never deletes rows, so deleting a placemark from
+   the KML only stops future updates — to retire a site/link, set
+   `"enabled": false` via the JSON format (or `UPDATE sites/fiber_links SET
+   enabled=0` directly) .
 
 4. Reload the page. No service restart is needed — the API reads the tables
    live.
