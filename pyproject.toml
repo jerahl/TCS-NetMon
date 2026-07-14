@@ -11,6 +11,13 @@ requires-python = ">=3.11"
 # owner approval. Pins are exact.
 dependencies = [
     "fastapi==0.115.6",
+    # Pydantic v2 is a CORE dependency (CLAUDE.md §5: models/ are Pydantic
+    # schemas). The code uses the v2 API (model_validate/model_copy/model_dump)
+    # throughout. It arrives transitively via fastapi, which accepts BOTH v1
+    # and v2 — so without this explicit pin a deploy can resolve to Pydantic v1
+    # and every v2-only call breaks (e.g. AttributeError: 'Device' object has
+    # no attribute 'model_copy'). Pin v2 so that cannot happen.
+    "pydantic==2.13.4",
     "uvicorn==0.34.0",
     "sqlalchemy==2.0.36",
     "httpx==0.28.1",

@@ -67,3 +67,19 @@ def test_saml_role_maps_and_source_toggles(tmp_path):
     assert cfg.auth.group_values["operator"] == {"42"}
     assert cfg.source_enabled("xiq") is True
     assert cfg.source_enabled("packetfence") is False
+
+
+def test_pydantic_v2_runtime():
+    # The code uses the Pydantic v2 API (model_validate/model_copy/model_dump)
+    # throughout (e.g. netmon.seed.reconcile). Pydantic arrives transitively
+    # via fastapi, which accepts v1 AND v2 — so assert v2 is what's installed,
+    # or a deploy that resolved to v1 fails loud here, not mid-seed.
+    import pydantic
+
+    assert pydantic.VERSION.startswith("2."), (
+        f"NetMon requires Pydantic v2; found {pydantic.VERSION}. "
+        "Reinstall from pyproject (pip install -e .) to get the pinned version."
+    )
+    from netmon.models.schemas import Device
+
+    assert hasattr(Device, "model_copy")
