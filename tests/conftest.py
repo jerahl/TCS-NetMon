@@ -93,7 +93,30 @@ CREATE TABLE alerts (
     last_seen_at TIMESTAMP,
     closed_at TIMESTAMP,
     acked_by TEXT,
-    acked_at TIMESTAMP
+    acked_at TIMESTAMP,
+    assigned_to TEXT
+)
+"""
+
+SNAPSHOT_CACHE_DDL_SQLITE = """
+CREATE TABLE snapshot_cache (
+    `key` TEXT PRIMARY KEY,
+    payload TEXT,
+    source TEXT NOT NULL,
+    ok INTEGER NOT NULL DEFAULT 1,
+    updated_at TIMESTAMP
+)
+"""
+
+CONFIG_BACKUPS_DDL_SQLITE = """
+CREATE TABLE config_backups (
+    device_id INTEGER NOT NULL,
+    taken_at TIMESTAMP NOT NULL,
+    size_bytes INTEGER,
+    hash TEXT,
+    note TEXT,
+    updated_at TIMESTAMP,
+    PRIMARY KEY (device_id, taken_at)
 )
 """
 
@@ -170,6 +193,8 @@ def create_core_tables(engine) -> None:
             ALERTS_DDL_SQLITE,
             NOTIFICATIONS_DDL_SQLITE,
             MAINTENANCE_DDL_SQLITE,
+            SNAPSHOT_CACHE_DDL_SQLITE,
+            CONFIG_BACKUPS_DDL_SQLITE,
             SITES_DDL_SQLITE,
             FIBER_LINKS_DDL_SQLITE,
             FIBER_LINK_STATE_DDL_SQLITE,

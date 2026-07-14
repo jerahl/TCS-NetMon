@@ -1,6 +1,6 @@
 # Spec 10 — "Zabbix Extreme" design port (UI rebuild + snapshot data layer)
 
-**Status:** PLAN — no code yet. This document is the deliverable of the design-analysis session (2026-07-14).
+**Status:** IN PROGRESS — Phase 10.0 backend landed 2026-07-14 (see Progress log); frontend port + Phases 10.1–10.5 pending. Originated as the design-analysis session deliverable (2026-07-14).
 **Design source:** `Zabbix_Extreme.zip` (Claude Design handoff: 18 HTML pages + ~50 JSX/CSS modules). Keep the
 archive out of the repo (it contains real hostnames/IPs in mock data); extract locally when implementing.
 **Goal:** make NetMon's UI match this design, and build the data layer the pages need — **cache current
@@ -255,7 +255,7 @@ Per-page fidelity notes (what degrades and why):
 
 | Phase | Contents | DoD |
 |---|---|---|
-| **10.0 Foundations** | fix `/api/status` dimensions bug; `/api/events` + `/api/collector-health`; `sites` + `snapshot_cache` + `assigned_to` migration (008 lands first as 004 in practice — renumber at implementation); port design shell/nav/primitives; Events Console + Problems pages; nav source-health pills | old pages still work; events console live on real `state_events`; pytest green |
+| **10.0 Foundations** | fix `/api/status` dimensions bug; `/api/events` + `/api/collector-health`; `sites` + `snapshot_cache` + `assigned_to` migration (008 lands first — implemented as **`005`** since Phase 9's site map already took `004` and created `sites`, so `005` adds only `snapshot_cache`/`config_backups`/`assigned_to`); port design shell/nav/primitives; Events Console + Problems pages; nav source-health pills | old pages still work; events console live on real `state_events`; pytest green |
 | **10.1 Switching** | §4 owner gate → snmp_inventory module + 004 tables; switch API; Switches page tabs (ports, port-detail FDB⋈PF, stack, VLAN, PoE, topology, triggers, backups-list) | port faceplate + FDB identity pane live against a real stack; sweep fits interval at fleet scale; README + runbook |
 | **10.2 Wireless** | 005 tables; XIQ detail/clients/SSID cycles (rate-budget verified); wireless API; XIQ page + AP Detail | pages live; XIQ call rate measured &lt; budget; token-revocation test still shows blind, stale rows visible |
 | **10.3 Identity** | 006 `pf_nodes` persistence (+snapshot fetchers); NAC API rework; five PF pages | `/api/nac` served from DB; in-memory snapshot deleted; PF pages live |
@@ -291,8 +291,49 @@ gate) and unblocks the FDB joins that 10.2/10.4 pages reuse.
 8. **`wireless_clients` scale/PII**: ~9–12 k rows refreshed every 5–10 min, containing usernames/MACs —
    acceptable in NetMon's DB? (Same data PF already holds; NetMon adds a second copy.)
 
+## Progress log
+
+**2026-07-14 — Phase 10.0 backend landed** (ungated: all read-only/DB-only, no
+new deps, no charter change). Frontend port of 10.0 is the remaining half.
+
+Done this session:
+- **Migration `005_design_port_foundations.sql`** — `snapshot_cache` (page-level
+  singleton blobs, `key` PK/JSON/`ok`/`updated_at`), `config_backups` (rConfig
+  metadata; feeds the existing `config_backup` dimension), `alerts.assigned_to`.
+  Rollback note included. (`sites` was already created by `004` — not re-added.)
+  Guard test added so a `;` inside an inline SQL comment can never fracture a
+  migration statement again (`test_every_statement_starts_with_a_sql_keyword`).
+- **`/api/status` fix** — now returns `config_backup`/`recording`/`trunk`
+  alongside ping/snmp/source_status; the Surveillance/VoIP/config pages'
+  latent client-side TypeError is closed. `DeviceStatus` schema extended.
+- **`/api/events` rework** — moved out of `netmon.api.sites` into
+  `netmon.api.events` (same path; map feed unbroken). Optional filters
+  (`severity/source/site/device_type/dimension/q/since/until` + `limit/offset`);
+  `MapEvent` gained `device_id`/`device_type` (additive). New
+  **`/api/events/stats`** = 24 h severity histogram + KPI totals, bucketed in
+  Python for MariaDB/SQLite portability (a query, not a stored series — §1/§6).
+- **`/api/collector-health`** — viewer-role source-health pills; derives
+  `ok`/`error`/`unknown` honestly (a once-successful-but-now-failing collector
+  reads `error`; a never-succeeded one reads `unknown`, never `ok` — §4.5).
+- **Alert actions** — `/api/alerts` now returns `assigned_to`; added
+  `POST /api/alerts/{id}/assign` (set/clear) and `POST /api/alerts/{id}/suppress`
+  (1 h device-scoped `maintenance_windows` row — suppresses notification, not
+  state recording, per §6). Both operator-role.
+- Tests: +status all-dimensions, +`test_events_api`, +`test_collector_health_api`,
+  +alert assign/suppress, +migration `005` assertions. Full suite green.
+
 ## Next session
 
-- Get §10 Q1–Q3 answered (they gate Phase 10.0/10.1 scope).
-- Start Phase 10.0: fix `/api/status`, add `/api/events`, port shell/primitives.
-- Capture SNMP fixture walks from one lab EXOS stack (ports/FDB/LLDP/stack) into `tests/fixtures/`.
+- **Frontend half of Phase 10.0** (still ungated): port the design shell /
+  `global-nav` / `primitives` (SourceBadge/StatusDot/Sev/Ring) into
+  `frontend/src/` on the existing esbuild pipeline (strip Babel-standalone/CDN
+  loads); build the **Events Console** + **Problems** pages onto `/api/events`
+  (+`/stats`) and `/api/alerts` (ack/assign/suppress wired); add nav
+  source-health pills backed by `/api/collector-health`. Note: `status` filter
+  (open/acked/closed) is an `alerts` concept, not `state_events` — the console
+  composes both APIs; keep the events feed a pure transition history.
+- **Get §10 Q1–Q3 answered** — Q2 (read-only `snmpbulkwalk` charter amendment)
+  gates Phase 10.1; Q1 (out-of-scope nav) shapes the ported nav; Q3 (sparklines)
+  sets the degraded-widget default.
+- Capture SNMP fixture walks from one lab EXOS stack (ports/FDB/LLDP/stack) into
+  `tests/fixtures/` (pre-work for 10.1, once Q2 is approved).

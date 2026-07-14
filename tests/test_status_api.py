@@ -66,3 +66,29 @@ def test_status_requires_auth(tmp_path):
     conf = write_config(tmp_path, dev_bypass=False, db_url=url)
     with TestClient(_app(conf)) as client:
         assert client.get("/api/status").status_code == 401
+
+
+def test_status_exposes_all_dimensions(tmp_path):
+    # Surveillance/VoIP/config pages read recording/trunk/config_backup; the API
+    # must return them (spec 10 §6 — the latent-TypeError fix).
+    url = f"sqlite:///{tmp_path / 'netmon.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    now = datetime.now(timezone.utc)
+    db.upsert(engine, "device_state", {"device_id": 2, "dimension": "config_backup"},
+              {"value": "stale", "severity": "warn", "source": "rconfig", "updated_at": now})
+    db.upsert(engine, "device_state", {"device_id": 1, "dimension": "recording"},
+              {"value": "recording", "severity": "ok", "source": "milestone", "updated_at": now})
+    db.upsert(engine, "device_state", {"device_id": 1, "dimension": "trunk"},
+              {"value": "registered", "severity": "ok", "source": "threecx", "updated_at": now})
+    engine.dispose()
+    with TestClient(_app(write_config(tmp_path, db_url=url))) as client:
+        data = {d["name"]: d for d in client.get("/api/status").json()}
+        # Populated dimensions surface with their severity…
+        assert data["BHS-Core-1"]["config_backup"]["value"] == "stale"
+        assert data["BHS-Core-1"]["config_backup"]["severity"] == "warn"
+        assert data["BHS-56-Hallway"]["recording"]["value"] == "recording"
+        assert data["BHS-56-Hallway"]["trunk"]["value"] == "registered"
+        # …and an absent dimension is unknown, never a missing field.
+        assert data["BHS-56-Hallway"]["config_backup"]["value"] is None
+        assert data["BHS-56-Hallway"]["config_backup"]["severity"] == "unknown"

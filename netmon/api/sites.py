@@ -1,7 +1,9 @@
-"""Map API (spec 09): site roll-up, fiber links, recent events. Viewer role.
+"""Map API (spec 09): site roll-up + fiber links. Viewer role.
 
 The roll-up and link-derivation functions are pure so the semantics are
-unit-tested without a DB. Everything here is read-only.
+unit-tested without a DB. Everything here is read-only. The recent-events feed
+these pages consume moved to ``netmon.api.events`` (spec 10 §6) — same
+``/api/events`` path, richer filters.
 """
 
 from __future__ import annotations
@@ -9,14 +11,13 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from sqlalchemy.engine import Engine
 
 from netmon import db
 from netmon.api.deps import get_engine, require_role
 from netmon.models.schemas import (
     FiberLink,
-    MapEvent,
     Role,
     SiteRollup,
     SiteStatus,
@@ -57,16 +58,6 @@ LEFT JOIN fiber_link_state st ON st.link_id = l.id
 WHERE l.enabled = 1 AND sa.enabled = 1 AND sb.enabled = 1
 ORDER BY l.id
 """
-
-_EVENTS_SQL = """
-SELECT e.id, e.dimension, e.old_value, e.new_value, e.severity, e.source,
-       e.occurred_at, d.name AS device, d.site AS site
-FROM state_events e
-JOIN devices d ON d.id = e.device_id
-ORDER BY e.id DESC
-LIMIT :limit
-"""
-
 
 def rollup_site(device_flags: list[dict[str, Any]]) -> tuple[SiteStatus, int, int, int]:
     """Roll one site's device flag rows up to (status, total, down, degraded).
@@ -193,25 +184,3 @@ def links_json(
             )
         )
     return out
-
-
-@router.get("/api/events", response_model=list[MapEvent])
-def events_json(
-    engine: Engine = Depends(get_engine),
-    _user=Depends(require_role(Role.viewer)),
-    limit: int = Query(default=50, ge=1, le=500),
-) -> list[MapEvent]:
-    return [
-        MapEvent(
-            id=r["id"],
-            device=r["device"],
-            site=r.get("site"),
-            dimension=r["dimension"],
-            old_value=r.get("old_value"),
-            new_value=r.get("new_value"),
-            severity=r.get("severity") or "unknown",
-            source=r["source"],
-            occurred_at=r.get("occurred_at"),
-        )
-        for r in db.fetch_all(engine, _EVENTS_SQL, {"limit": limit})
-    ]
