@@ -192,7 +192,7 @@ class ZabbixClient:
     API ``token`` or a ``session`` obtained from :meth:`login`.
     """
 
-    def __init__(self, url: str, *, token: str | None = None, insecure: bool = False,
+    def __init__(self, url: str, *, token: str | None = None, verify_ssl: bool = False,
                  timeout: float = 30.0) -> None:
         base = url.rstrip("/")
         if not base.endswith("api_jsonrpc.php"):
@@ -202,8 +202,11 @@ class ZabbixClient:
         self._timeout = timeout
         self._id = 0
         self._logged_in = False  # true only when a session came from user.login
+        # TLS verification is OFF by default: the Zabbix server typically
+        # carries an internal/self-signed cert. Pass --verify-ssl (verify_ssl=
+        # True) to enforce the trust chain instead.
         self._ssl_ctx: ssl.SSLContext | None = None
-        if insecure:
+        if not verify_ssl:
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
@@ -307,8 +310,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--monitored-only", action="store_true",
                    help="Only monitored (status=0) hosts. Default: all hosts.")
     p.add_argument("--out", help="Write JSON here (default: stdout).")
-    p.add_argument("--insecure", action="store_true",
-                   help="Skip TLS verification (discouraged; use a trusted CA instead).")
+    p.add_argument("--verify-ssl", action="store_true",
+                   help="Verify the server TLS certificate. Default: OFF "
+                        "(the Zabbix server usually has an internal/self-signed cert).")
     args = p.parse_args(argv)
 
     cfg = _from_config(args.config)
@@ -322,7 +326,7 @@ def main(argv: list[str] | None = None) -> int:
     if not token and not user:
         p.error("no credentials — pass --token (preferred) or --user/--password.")
 
-    client = ZabbixClient(url, token=token, insecure=args.insecure)
+    client = ZabbixClient(url, token=token, verify_ssl=args.verify_ssl)
     try:
         version = client.version()
         print(f"Connected to Zabbix {version} at {client.endpoint}", file=sys.stderr)
