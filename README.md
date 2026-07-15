@@ -1,4 +1,13 @@
-# TCS NetMon — Federated Monitoring Platform
+# TCS NetMon — Standalone ZabbixCustomDashboard
+
+> **Plan v0.3 (2026-07-15, standalone-scope revision):** the mission is now
+> simply — **NetMon is the standalone version of ZabbixCustomDashboard**: the
+> same operational pages, on NetMon's own collectors, storage, and alerting,
+> with no Zabbix at runtime. The plan of record is
+> [`docs/spec/11-standalone-scope.md`](docs/spec/11-standalone-scope.md) and
+> [`CLAUDE.md`](CLAUDE.md) v2.0. The v0.2 plan below is retained for
+> architecture/stack rationale; where it conflicts with spec 11 (scope
+> exclusions, phases), spec 11 wins.
 
 **Project plan v0.2 — July 2026 (single-language stack revision)**
 **Scope:** Replace Zabbix for network, wireless, voice, and surveillance monitoring at Tuscaloosa City Schools. Servers explicitly out of scope for v1 (Zabbix remains for Nutanix, iDRAC, Linux/Windows, BIND).
