@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -25,7 +25,8 @@ def list_alerts(
     rows = db.fetch_all(
         engine,
         f"SELECT a.id, a.device_id, d.name AS device_name, r.name AS rule_name, "
-        f"r.severity, a.opened_at, a.last_seen_at, a.closed_at, a.acked_by, a.acked_at "
+        f"r.severity, a.opened_at, a.last_seen_at, a.closed_at, a.acked_by, a.acked_at, "
+        f"a.assigned_to "
         f"FROM alerts a "
         f"JOIN alert_rules r ON r.id = a.rule_id "
         f"LEFT JOIN devices d ON d.id = a.device_id {where} "
@@ -48,6 +49,58 @@ def ack_alert(
     if not n:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="open alert not found")
     return {"status": "acked", "alert_id": alert_id, "acked_by": user.username}
+
+
+class AssignBody(BaseModel):
+    # None / "" clears the assignment (an operator un-assigning themselves).
+    assignee: str | None = None
+
+
+@router.post("/alerts/{alert_id}/assign")
+def assign_alert(
+    alert_id: int,
+    body: AssignBody,
+    engine: Engine = Depends(get_engine),
+    user: UserSession = Depends(require_role(Role.operator)),
+) -> dict:
+    """Set (or clear) ``alerts.assigned_to`` — the events/problems Assign action."""
+    assignee = (body.assignee or "").strip() or None
+    n = db.execute(
+        engine,
+        "UPDATE alerts SET assigned_to = :who WHERE id = :id AND closed_at IS NULL",
+        {"who": assignee, "id": alert_id},
+    )
+    if not n:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="open alert not found")
+    return {"status": "assigned", "alert_id": alert_id, "assigned_to": assignee}
+
+
+@router.post("/alerts/{alert_id}/suppress")
+def suppress_alert(
+    alert_id: int,
+    engine: Engine = Depends(get_engine),
+    user: UserSession = Depends(require_role(Role.operator)),
+    hours: float = 1.0,
+) -> dict:
+    """"Suppress 1 h" → a device-scoped maintenance window (spec 10 §2).
+
+    Maintenance suppresses NOTIFICATION, not state recording (§6 invariant), so
+    the alert stays visible and keeps updating; only the engine stops emailing
+    on it. The window is scoped to the alert's device.
+    """
+    row = db.fetch_one(engine, "SELECT device_id FROM alerts WHERE id = :id", {"id": alert_id})
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="alert not found")
+    now = datetime.now(timezone.utc)
+    ends = now + timedelta(hours=max(hours, 0.0))
+    db.execute(
+        engine,
+        "INSERT INTO maintenance_windows (scope_type, scope_value, starts_at, ends_at, created_by) "
+        "VALUES ('device', :dev, :s, :e, :by)",
+        {"dev": str(row["device_id"]), "s": now, "e": ends, "by": user.username},
+    )
+    return {"status": "suppressed", "alert_id": alert_id, "device_id": row["device_id"],
+            "until": ends.isoformat()}
 
 
 class MaintenanceWindow(BaseModel):

@@ -53,10 +53,43 @@ def test_004_creates_map_tables():
         assert f"CREATE TABLE IF NOT EXISTS {table}" in sql, f"missing table {table}"
 
 
+def test_005_adds_foundation_tables_and_column():
+    migs = {m.version: m for m in discover_migrations()}
+    assert "005" in migs, "expected 005 design-port foundations migration"
+    sql = migs["005"].path.read_text()
+    for table in ("snapshot_cache", "config_backups"):
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in sql, f"missing table {table}"
+    assert "ADD COLUMN assigned_to" in sql
+    # `key` is a MariaDB reserved word — must stay backtick-quoted.
+    assert "`key`" in sql
+
+
+def test_006_creates_switch_inventory_tables():
+    migs = {m.version: m for m in discover_migrations()}
+    assert "006" in migs, "expected 006 switch-inventory migration"
+    sql = migs["006"].path.read_text()
+    for table in ("switch_ports", "fdb_entries", "lldp_neighbors", "switch_vlans", "stack_members"):
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in sql, f"missing table {table}"
+
+
 def test_every_migration_has_rollback_note():
     for mig in discover_migrations():
         text_ = mig.path.read_text().lower()
         assert "rollback:" in text_, f"{mig.path.name} lacks a rollback note"
+
+
+def test_every_statement_starts_with_a_sql_keyword():
+    # The runner only strips lines that START with '--', then splits on ';'. A
+    # ';' inside an INLINE comment therefore fractures a statement — the tail
+    # becomes bogus SQL that fails on MariaDB (SQLite tests use hand-written DDL
+    # so they'd miss it). Guard: every parsed statement must begin with DDL/DML.
+    keywords = ("CREATE", "ALTER", "INSERT", "UPDATE", "DELETE", "DROP")
+    for mig in discover_migrations():
+        for stmt in parse_statements(mig.path.read_text()):
+            assert stmt.upper().startswith(keywords), (
+                f"{mig.path.name}: statement does not start with SQL "
+                f"(a ';' inside an inline comment?): {stmt[:60]!r}"
+            )
 
 
 def test_parse_statements_strips_comments():
