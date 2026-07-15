@@ -22,6 +22,7 @@ const NAV = {
   events: "#/events",
   problems: "#/problems",
   map: "#/map",
+  settings: "#/settings",
 };
 
 export function Nav({ active }) {
@@ -30,6 +31,14 @@ export function Nav({ active }) {
   });
   const [counts, setCounts] = React.useState(null);
   const [health, setHealth] = React.useState(null);
+  const [role, setRole] = React.useState(null);
+
+  React.useEffect(() => {
+    // Role only gates nav visibility — the API enforces it server-side.
+    getJSON("/auth/me")
+      .then((me) => setRole(me?.role || null))
+      .catch(() => { /* stay hidden */ });
+  }, []);
 
   React.useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, collapsed ? "1" : "0"); } catch { /* ignore */ }
@@ -102,6 +111,13 @@ export function Nav({ active }) {
         {item("problems", NAV.problems, "alert", "Problems")}
         {item("map", NAV.map, "map", "Site Map")}
       </div>
+
+      {role === "admin" && (
+        <div className="nav-section">
+          <div className="nav-label">Administration</div>
+          {item("settings", NAV.settings, "gear", "Settings")}
+        </div>
+      )}
 
       {health && health.length > 0 && (
         <div className="nav-section">

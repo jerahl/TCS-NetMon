@@ -11,6 +11,7 @@ import { EventsPage } from "./pages/events.jsx";
 import { ProblemsPage } from "./pages/problems.jsx";
 import { VoipPage } from "./pages/voip.jsx";
 import { MapPage } from "./pages/map.jsx";
+import { SettingsPage } from "./pages/settings.jsx";
 
 // Hash router — one index.html serves every route (deep links never 404, no
 // server-side per-page routing, no external navigation).
@@ -23,6 +24,7 @@ function parseRoute() {
   if (parts[0] === "problems") return { name: "problems" };
   if (parts[0] === "voip") return { name: "voip" };
   if (parts[0] === "map") return { name: "map" };
+  if (parts[0] === "settings") return { name: "settings" };
   if (parts[0] === "ap" && parts[1]) return { name: "ap", id: parts[1] };
   return { name: "global" };
 }
@@ -47,6 +49,7 @@ function App() {
   else if (route.name === "problems") { page = <ProblemsPage />; active = "problems"; }
   else if (route.name === "voip") { page = <VoipPage />; active = "voip"; }
   else if (route.name === "map") { page = <MapPage />; active = "map"; }
+  else if (route.name === "settings") { page = <SettingsPage />; active = "settings"; }
   else if (route.name === "ap") { page = <ApDetailPage id={route.id} />; active = "wireless"; }
   else { page = <GlobalPage />; active = "global"; }
 
