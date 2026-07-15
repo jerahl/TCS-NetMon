@@ -1,6 +1,6 @@
 # TCS NetMon — Claude Code Project Brief
 
-**Version:** 1.0 (derived from project plan v0.2, July 2026)
+**Version:** 2.0 (standalone-scope revision, July 2026 — see `docs/spec/11-standalone-scope.md`; supersedes v1.0 / plan v0.2)
 **Audience:** Claude Code sessions building this project. Read this file fully before writing any code.
 **Owner context:** Solo network/systems administrator; development happens in short sessions (6–10 hrs/week total). Every session must leave the repo in a working, committed, documented state.
 
@@ -8,55 +8,61 @@
 
 ## 1. What this project is
 
-NetMon is a federated monitoring platform that replaces Zabbix for **network, wireless, voice, and surveillance** monitoring at a K-12 school district. Instead of polling ~2,600+ devices directly, it pulls state from the platforms that already poll them, and runs one thin native poller for ground truth:
+**NetMon is the standalone version of ZabbixCustomDashboard** (`jerahl/ZabbixCustomDashboard`, mirrored in `reference/`): the same operational dashboards the district runs today as a Zabbix frontend module — Global, Switches, Wireless/XIQ, AP Detail, PacketFence, Surveillance, VoIP, Events/Problems, Search, Site Map, NetMon Status — served from NetMon's own database, fed by its own read-only collectors and SNMP sweeps, with its own alerting. **No Zabbix at runtime.**
+
+The data strategy is unchanged from v1.0 where a source platform already has the answer — federate it rather than re-poll ~2,600 devices:
 
 | Domain | Authoritative source | Collector pulls |
 |---|---|---|
-| Switching & wireless | ExtremeCloud IQ (REST, bearer token) | Device up/down, port state, PoE, client counts, CPU/mem, firmware |
+| Switching & wireless | ExtremeCloud IQ (REST, bearer token) | Device up/down, detail/radio/client cycles, firmware |
 | NAC / endpoints | PacketFence (REST `/api/v1/…`) | Node inventory, connection state, auth events, quarantine |
-| Config management | rConfig (API or read-only DB) | Backup freshness, last config change |
-| Voice | 3CX (ODBC to its DB; REST TBD) | Trunk registration, extension status, service health |
-| Surveillance | Milestone XProtect (Config API + Events/State WebSocket) | Camera state, recording state, recording-server health |
+| Config management | rConfig (API) | Backup freshness, backup metadata |
+| Voice | 3CX (v20 REST) | Trunk registration, extensions, system status |
+| Surveillance | Milestone XProtect (Config API + Events/State WebSocket) | Camera/recording state, RS health, storage, alarms |
 
-The **native poller** does two things against registered management IPs: ICMP up/down (`fping` sweep, 60s) and SNMP-responding (`snmpget` sysUpTime, 5 min). It is the tiebreaker when a source disagrees with reality, and the canary when a source platform itself is unreachable.
+Two things the sources can *not* provide are NetMon's own collection:
 
-**Charter amendment (owner-approved 2026-07-15, spec 10 §4/§10 Q2):** the poller's SNMP surface is extended with **read-only `snmpbulkwalk` inventory sweeps** (per-port/FDB/LLDP/VLAN/stack tables) for the switching UI — same net-snmp package, still GET-only/read-only, still **no Python SNMP library**, concurrency-capped and per-sweep disableable (see `netmon/poller/snmp_inventory.py`, spec 10 §4). This is the one sanctioned widening of the "exactly fping + snmpget" rule above; any further poller write/active behaviour still needs explicit owner sign-off.
+1. **The native poller** — ground truth against registered management IPs: ICMP up/down (`fping` sweep, 60s) and SNMP-responding (`snmpget` sysUpTime, 5 min). Tiebreaker when a source disagrees with reality; canary when a source platform is unreachable.
+2. **SNMP inventory sweeps** *(⛔ D6-gated; spec 10 §4, spec 11 §5)* — read-only `snmpbulkwalk` subprocess sweeps of the switch fleet (ports/PoE, FDB, LLDP, VLANs, stack/env). The ZCD switch experience (port faceplates, FDB⋈PF identity pane) came from Zabbix's direct SNMP polling, which no federated source replaces — this is **core scope**, not an enhancement.
 
 NetMon also owns **alerting** (rules → dedupe → maintenance windows → SMTP email) because Zabbix's alerting is being retired for these domains.
 
 ## 2. Scope boundaries — hard rules
 
-**In scope (v1):** unified device registry, current-state store, state-transition event log, dashboards (React), alert engine with email notifications, collector self-health monitoring.
+**In scope (v1):** unified device registry; current-state store + state-transition event log; the **snapshot/inventory cache layer** (spec 10 — row-shaped inventory tables + `snapshot_cache`, replace-on-refresh, collectors are the only writers, pages never poll a source at render time); the full ZCD page-parity set (spec 11 §4); alert engine with email notifications; site map; collector self-health monitoring.
 
 **Explicitly OUT of scope (do not build, even if it seems easy):**
-- Server monitoring (Nutanix, iDRAC, Linux/Windows agents, BIND) — Zabbix keeps this.
-- Long-term metric time-series / graphs — source platforms retain their own history. NetMon's only history is the `state_events` transition log. **Narrow exception (owner-approved 2026-07-15, spec 10 §10 Q3):** a single **bounded, fixed-24 h, auto-pruned ring buffer** may back the design's sparklines/mini-charts. It is capped-size and self-pruning (not growing history), lands via a numbered migration with a rollback note, and is the *only* sanctioned deviation — no other metric series, no retention beyond 24 h.
-- Write paths to any source platform. **Every integration is read-only.** No config pushes, no acknowledging events in Milestone, no PF node edits. If a task appears to require a write to a source, stop and flag it.
+- Server monitoring (Nutanix, iDRAC, Linux/Windows agents, BIND) — Zabbix keeps this. The ZCD Servers page is **retired**, not ported (spec 11 D2); nav deep-links to Zabbix.
+- The ZCD Zabbix Status page (replaced by a **NetMon Status** page over `collector_health` + supervisor stats) and the Cortex XDR mock page (dropped — spec 11 D8).
+- FortiGate — **deferred** to post-parity phase 11.x (spec 11 D1); nav deep-links to Zabbix meanwhile.
+- Long-term metric time-series / graphs — source platforms retain their own history. NetMon's history is the `state_events` transition log, plus (⛔ D3, if signed off) one **bounded 24h ring-buffer** table (`state_samples`, auto-pruned) to power the ZCD-parity charts. Nothing beyond that window, ever.
+- Write paths to any source platform. **Every integration is read-only.** Exception path: spec 11 D4 (⛔) proposes porting ZCD's four operator write actions (PoE cycle, AP reboot, PF reevaluate/restart-port) as a post-cutover phase — role-gated, audit-logged, per-action config flags, default off. Until D4 is signed off, render disabled buttons with "managed in <source>" tooltips. If any other task appears to require a write to a source, stop and flag it.
 - Notification channels beyond SMTP (no Teams/webhooks/SMS in v1).
 - Multi-tenant / multi-district features.
 
 ## 3. Stack and dependency policy
 
-- **Python 3.11+** (3.12 preferred; the deploy VM runs Debian 12 / Python 3.11 — decided 2026-07-13), single package `netmon`, FastAPI app served by uvicorn behind nginx.
+- **Python 3.11+** (3.12 preferred; the deploy VM runs Debian 12 / Python 3.11), single package `netmon`, FastAPI app served by uvicorn behind nginx.
 - **MariaDB** via **SQLAlchemy Core** (no ORM/declarative models — explicit, SQL-shaped queries). Schema via plain numbered migration scripts in `migrations/` applied by a small runner; no Alembic.
-- **Allowed third-party dependencies:** `fastapi`, `uvicorn`, `sqlalchemy`, `httpx`, `apscheduler`, `pymysql` (MariaDB DBAPI driver — owner-approved 2026-07-11), `python3-saml` (ClassLink SSO — owner-approved 2026-07-13; links `xmlsec1`/`libxml2` system libs, installed at deploy time). Pinned in a lockfile. **Do not add any other dependency without stopping and asking.** Prefer stdlib. ICMP/SNMP are subprocess calls to `fping` / `snmpget` — do not introduce a Python SNMP library.
-  - `ldap3` is **retired** (was: interim AD-bind login). ClassLink sends `role` + `group_ids` in the SAML assertion, so no directory lookup is needed; drop `ldap3` and `netmon/auth/ldap.py` when the SAML SP replaces the interim login.
-  - `python3-saml`'s pin lands in `pyproject.toml` when the SAML SP is implemented (the last §3 dependency checkpoint); the deploy script adds the `xmlsec1` system package at the same time.
-- **Frontend:** React components ported from `jerahl/ZabbixCustomDashboard` (`tcs_dashboard/assets/*.jsx`), built with **esbuild** to static files served by FastAPI. `leaflet` 1.9.4 (Phase 9 map — owner-approved 2026-07-14) is the one additional frontend dependency, bundled locally by esbuild like React. No Babel-standalone, no unpkg/CDN loads, no framework migration — keep the existing component structure.
-- **Auth:** Single sign-on. NetMon is a **SAML 2.0 Service Provider**; **ClassLink** is the identity provider (it federates the district directory). NetMon consumes the signed SAML assertion at its ACS endpoint, maps assertion attributes (ClassLink role/group claims) → roles, and issues its own server-side session cookie. **NetMon never handles a password and does not bind AD directly.** Roles: `viewer`, `operator` (can ack alerts / set maintenance), `admin` (can edit rules/registry). A local dev bypass remains for development without an IdP. *(Plan adjustment 2026-07-13: this replaces the earlier AD-via-`ldap3` bind; the Phase 1 interim `ldap3` login is to be reworked — see `docs/spec/01-foundation.md`.)*
+- **Allowed third-party dependencies:** `fastapi`, `uvicorn`, `sqlalchemy`, `httpx`, `pymysql` (MariaDB DBAPI driver — owner-approved 2026-07-11), `python3-saml` (ClassLink SSO — owner-approved 2026-07-13; links `xmlsec1`/`libxml2` system libs, installed at deploy time). Pinned in a lockfile. **Do not add any other dependency without stopping and asking.** Prefer stdlib. ICMP/SNMP are subprocess calls to `fping` / `snmpget` / (⛔ D6) `snmpbulkwalk` — do not introduce a Python SNMP library.
+  - `websockets` (Milestone Events/State live path) is **recommended-pending sign-off** (⛔ spec 11 D5). `collectors/ws.py` is built and tested against a fake transport; do not wire a live socket until the dependency is approved and pinned.
+  - `apscheduler` is pinned but **unused** (the supervisor is hand-rolled asyncio) — drop the pin in the next code session (spec 11 §8).
+  - `ldap3` is retired (SAML claims carry roles; no directory bind).
+- **Frontend:** React components ported from `jerahl/ZabbixCustomDashboard` — including the spec-10 "Zabbix Extreme" design port — built with **esbuild** to static files served by FastAPI. `leaflet` 1.9.4 (site map — owner-approved 2026-07-14) is bundled locally like React. No Babel-standalone, no unpkg/CDN loads, no framework migration.
+- **Auth:** Single sign-on. NetMon is a **SAML 2.0 Service Provider**; **ClassLink** is the IdP. Assertion `role`/`group_ids` claims map to roles (`viewer` < `operator` < `admin`); NetMon issues its own server-side session cookie and never handles a password. Break-glass local account (PBKDF2, stdlib) and a dev bypass (refused when `secure_cookies=true`) remain.
 
 ## 4. Engineering conventions (non-negotiable)
 
 These reflect the owner's standing practices. Follow them even when unstated in a task:
 
-1. **Read-only-first.** Collectors never mutate source systems. HTTP methods other than GET (and the Milestone WebSocket subscribe) require explicit owner approval.
-2. **Dry-run before live.** Anything that sends email or changes state visible to humans needs a dry-run/shadow flag that is the default until the owner flips it. The alert engine ships in shadow mode (logs would-be notifications, sends nothing).
-3. **Per-step reversibility.** Each collector, the poller, and the engine are independently enable/disable-able via config. Migrations get a documented rollback note.
+1. **Read-only-first.** Collectors never mutate source systems. HTTP methods other than GET (and the Milestone WebSocket subscribe) require explicit owner approval. (The D4 write-action carve-out, once signed off, is the only exception — role-gated, audit-logged, default off.)
+2. **Dry-run before live.** Anything that sends email or changes state visible to humans needs a dry-run/shadow flag that is the default until the owner flips it. The alert engine ships in shadow mode.
+3. **Per-step reversibility.** Each collector, sweep, the poller, and the engine are independently enable/disable-able via config. Migrations get a documented rollback note.
 4. **Spec-first.** Each phase starts by writing/updating the relevant `docs/` spec before code. If implementation diverges from spec, update the spec in the same commit.
-5. **Fail loud, never stale.** A collector that errors must record the failure in `collector_health` and leave prior state visibly stale (with timestamps), never silently overwrite or fabricate.
+5. **Fail loud, never stale.** A collector that errors must record the failure in `collector_health` and leave prior state visibly stale (with timestamps), never silently overwrite or fabricate. Every API list response carries row `updated_at` so the UI badges staleness honestly; a blind source must never render as healthy.
 6. **Secrets** live in `/etc/netmon/netmon.conf` (root-readable, outside the repo). The repo carries `netmon.conf.example` only. Never write a real credential, token, hostname-with-secret, or key into the repo, logs, or test fixtures.
 7. **Docs during, not after.** Every collector gets its own README (endpoints used, poll intervals, rate limits, failure modes). Runbooks in `docs/runbooks/` are updated in the same PR as the behavior they describe.
-8. **Tests:** pytest; every collector gets fixture-based parse tests (sanitized sample payloads in `tests/fixtures/`); the alert engine gets rule-evaluation unit tests before it ever runs against live state.
+8. **Tests:** pytest; every collector/sweep gets fixture-based parse tests (sanitized sample payloads in `tests/fixtures/`); the alert engine gets rule-evaluation unit tests before it ever runs against live state.
 
 ## 5. Repository layout
 
@@ -64,99 +70,81 @@ These reflect the owner's standing practices. Follow them even when unstated in 
 netmon/
 ├── pyproject.toml
 ├── netmon.conf.example
-├── migrations/                 # 001_init.sql, 002_…, each with -- rollback: note
+├── topology.example.json       # site-map topology template (spec 09)
+├── migrations/                 # 001_init.sql … each with -- rollback: note
 ├── netmon/
-│   ├── app.py                  # FastAPI factory, lifespan task supervisor
-│   ├── config.py               # config load/validate (stdlib configparser or tomllib)
-│   ├── db.py                   # engine, helpers (SQLAlchemy Core)
-│   ├── auth/                   # SAML SP (ClassLink IdP), assertion→role mapping, sessions
-│   ├── api/                    # routers: devices, state, events, alerts, admin
+│   ├── app.py                  # FastAPI factory, lifespan task supervisor, /ui mount
+│   ├── config.py               # INI config load/validate (fails loud)
+│   ├── db.py                   # SQLAlchemy Core engine, portable upsert helpers
+│   ├── state.py / health.py    # write_state (state+events), collector_health writers
+│   ├── seed.py / migrate.py / topology.py   # one-shot CLIs (netmon-seed/-migrate/-topology)
+│   ├── supervisor.py           # asyncio task supervisor (interval+timeout+boundary)
+│   ├── auth/                   # SAML SP (ClassLink), local break-glass, sessions
+│   ├── api/                    # routers: devices, status, sites/links/events, nac, alerts, auth, health
 │   ├── models/                 # Pydantic schemas (API contract + collector validation)
-│   ├── poller/                 # fping sweep, snmp-alive, hysteresis state machine
-│   ├── collectors/
-│   │   ├── base.py             # Collector ABC: run(), heartbeat, error boundary
-│   │   ├── xiq.py
-│   │   ├── packetfence.py
-│   │   ├── milestone.py        # Config API + WebSocket task (watchdog, backoff)
-│   │   ├── threecx.py
-│   │   └── rconfig.py
-│   ├── engine/                 # rule evaluation, dedupe, maintenance, notify (SMTP)
-│   └── web/                    # esbuild output (static), served by FastAPI
-├── frontend/                   # JSX source ported from ZabbixCustomDashboard + esbuild config
+│   ├── poller/                 # fping sweep, snmp-alive, hysteresis; (D6) snmp_inventory sweeps
+│   ├── collectors/             # base contract + xiq/packetfence/milestone/threecx/rconfig (+ws)
+│   ├── engine/                 # rule evaluation, dedupe, maintenance, notify (SMTP, shadow)
+│   └── web/                    # committed esbuild output (static), served by FastAPI
+├── frontend/                   # React/JSX source + esbuild config (npm run build)
+├── reference/                  # the ZCD add-on being replaced (authoritative API gotchas)
+├── scripts/                    # one-shot exports (xiq/pf/zabbix), shadow_report, deploy.sh
 ├── docs/
-│   ├── spec/                   # per-phase specs
+│   ├── spec/                   # per-phase specs; 11-standalone-scope.md is the plan of record
+│   ├── design/                 # design handoff bundles
 │   └── runbooks/
 └── tests/
 ```
 
-**Execution model:** collectors, poller, and engine run as supervised asyncio tasks started by the FastAPI lifespan (each wrapped in timeout + exception boundary + reschedule). Every one of them must ALSO run standalone: `python -m netmon.collectors.xiq --once` and `--loop`. Build both paths from the start in `base.py`.
+**Execution model:** collectors, sweeps, poller, and engine run as supervised asyncio tasks started by the FastAPI lifespan (each wrapped in timeout + exception boundary + reschedule). Every one of them must ALSO run standalone: `python -m netmon.collectors.xiq --once|--loop`. The contract lives in `collectors/base.py`.
 
-## 6. Data model (build exactly this in Phase 1; extend only via migration)
+## 6. Data model (extend only via numbered migration)
 
-- **`devices`** — unified registry. `id`, `name`, `site`, `device_type` (switch|ap|camera|recording_server|trunk|pbx|other), `mgmt_ip`, `snmp_capable`, `enabled`, plus nullable per-source keys: `xiq_device_id`, `pf_node_mac`, `milestone_hardware_id`, `rconfig_device_id`, `threecx_ref`. Unique on (`name`), indexed on each source key.
-- **`device_state`** — current state only. `device_id`, `dimension` (ping|snmp|source_status|config_backup|recording|trunk), `value`, `severity` (ok|warn|crit|unknown), `source` (which collector/poller wrote it), `updated_at`. PK (`device_id`,`dimension`).
-- **`state_events`** — append-only. `device_id`, `dimension`, `old_value`, `new_value`, `severity`, `source`, `occurred_at`. This is the only history table; never UPDATE or DELETE rows here.
-- **`alert_rules`** — `dimension`, `condition` (simple comparators, stored as data), `severity`, `min_duration_s`, `target` (email), `enabled`.
-- **`alerts`** — one open row per (`device_id`,`rule_id`); `opened_at`, `last_seen_at`, `closed_at`, `acked_by`, `acked_at`. Re-fires update `last_seen_at`, never duplicate.
-- **`notifications`** — what was (or in shadow mode, would have been) sent: `alert_id`, `channel`, `target`, `sent_at`, `shadow` (bool), `payload_summary`.
-- **`maintenance_windows`** — device/site/type scoped, `starts_at`/`ends_at`, `created_by`. Suppresses notification, not state recording.
-- **`collector_health`** — one row per collector: `name`, `last_start`, `last_success`, `last_error`, `duration_ms`, `records_written`, `consecutive_failures`. Staleness here feeds a built-in `source blind` alert rule.
+**Core (001, built):**
+- **`devices`** — unified registry. `id`, `name`, `site`, `device_type` (switch|ap|camera|recording_server|trunk|pbx|other), `mgmt_ip`, `snmp_capable`, `enabled`, plus nullable per-source keys: `xiq_device_id`, `pf_node_mac`, `milestone_hardware_id`, `rconfig_device_id`, `threecx_ref`.
+- **`device_state`** — current state only. (`device_id`,`dimension`) PK; dimension ∈ ping|snmp|source_status|config_backup|recording|trunk; `value`, `severity` (ok|warn|crit|unknown), `source`, `updated_at`.
+- **`state_events`** — append-only transition log. Never UPDATE or DELETE rows here.
+- **`alert_rules`**, **`alerts`** (one open row per device+rule), **`notifications`**, **`maintenance_windows`**, **`collector_health`**.
 
-**Design invariants:** `device_state` answers "what is true now"; `state_events` answers "what changed when"; dashboards read only these two plus `devices`. A source being unreachable is itself a state (`source_status = blind`), and blind must never render as healthy.
+**Site map (004, built):** `sites` (name = `devices.site` join key, lat/lon, tier), `fiber_links`, `fiber_link_state` (current state only).
+
+**Snapshot/inventory cache (spec 10 §3, planned):** `switch_ports`, `fdb_entries`, `lldp_neighbors`, `switch_vlans`, `stack_members`; `ap_details`, `ap_radios`, `wireless_clients`, `ssids`; `pf_nodes`; `cameras`, `recording_servers`, `trunks`, `extensions`; `config_backups`; generic `snapshot_cache` (key→JSON payload). Replace-on-refresh, `updated_at` on every row, no history. Counters store previous raw values in-row so rates are computed at write time — current rate is state, not history.
+
+**Bounded history (⛔ D3, if approved):** one `state_samples` ring-buffer table, hard 24h retention, auto-pruned — nothing else stores series.
+
+**Design invariants:** `device_state` answers "what is true now"; `state_events` answers "what changed when"; inventory tables are descriptive facts; dashboards read only NetMon's DB — **zero source-platform calls at page render**. A source being unreachable is itself a state (`source_status = blind`), and blind must never render as healthy.
 
 ## 7. Milestones and phases
 
-Work phase-by-phase. **Do not start a phase until the prior phase's Definition of Done is met and committed.** Each phase begins with its spec in `docs/spec/`.
+**Delivered:** Phases 0–4, 6, 9 (foundation, poller, XIQ status collector, first UI port, alert engine in shadow, site map); Phases 5/7 collectors at state-level (PF snapshot, Milestone Config-API poll, 3CX trunks, rConfig freshness). Phase 8 (cutover) remains owner-gated at the end.
 
-### Phase 0 — Spec & reconnaissance *(mostly owner-driven; Claude Code assists)*
-Verify API access to all five sources; capture sanitized sample payloads into `tests/fixtures/`; document rate limits (especially XIQ) and the 3CX v20 API-vs-ODBC decision; write naming/site reconciliation rules for the device registry.
-**DoD:** `docs/spec/00-sources.md` complete; one sanitized fixture per source committed.
+**Forward plan (spec 11 §7 — work phase-by-phase; do not start a phase until the prior phase's DoD is met and committed):**
 
-### Phase 1 — Foundation
-Package scaffold per §5; `001_init.sql` implementing §6 with rollback notes; config loader + validation; FastAPI skeleton with SSO auth (SAML SP / ClassLink), sessions, roles, `/healthz`; task-supervisor scaffold in lifespan; one-shot import script seeding `devices` from XIQ + PacketFence fixtures/exports; migration runner.
-**DoD:** app boots, SSO login works (or the dev bypass), `/docs` renders, registry populated, `pytest` green, runbook `docs/runbooks/deploy.md` written. *(Interim `ldap3` login shipped ahead of this plan change; SAML SP is the target — tracked in `docs/spec/01-foundation.md`.)*
+| Phase | Deliverable | Gate |
+|---|---|---|
+| **10.0 Foundations** | `/api/status` dimension fix; `/api/events` filters + `/api/collector-health`; `snapshot_cache` + `alerts.assigned_to` migration; design shell/nav/primitives port; Events + Problems consoles; **NetMon Status page**; seed `--sites-from-db`; nav disposition (Servers/ZbxStatus/XDR/FortiGate) | — |
+| **10.1 Switching** | `snmp_inventory` sweeps + 004-tables; switch API; 8-tab Switches page incl. FDB⋈PF port-detail pane | ⛔ D6 |
+| **10.2 Wireless** | XIQ detail/clients/SSID cycles (rate budget verified); wireless API; XIQ page + AP Detail | — |
+| **10.3 Identity** | `pf_nodes` persistence (in-memory snapshot deleted); NAC API rework; five PF pages | — |
+| **10.4 Surveillance + VoIP** | camera/RS/storage persistence + `milestone.overview`; ESS WebSocket wiring; camera JPEG proxy; trunks/extensions + SystemStatus | ⛔ D5 |
+| **10.5 Global + Search** | `/api/summary`, `/api/sites` cards, `/api/search` + ⌘K palette; Global page; staleness badging pass | — |
+| **10.6 History buffer** | `state_samples` (24h ring, pruned) + writers + chart slots | ⛔ D3 |
+| **11.x Post-parity** | FortiGate collector + page (D1); operator write actions with audit log (⛔ D4); EAPS/SFP-DOM extras | ⛔ D4 |
+| **8 — Parallel run & cutover** *(owner-gated)* | ≥4 weeks shadow comparison; owner flips `shadow=false`; Zabbix network/wireless/voice/camera hosts disabled (configs exported as rollback); Zabbix remains for servers | owner |
 
-### Phase 2 — Native poller
-fping sweep + snmp-alive as supervised tasks and standalone modules; hysteresis (3 consecutive failures → DOWN, 2 successes → UP; thresholds in config); writes to `device_state`/`state_events`; raw status API endpoint + minimal status page.
-**DoD:** full-registry sweep completes inside its interval; transitions visible in `state_events`; kill-a-lab-device test shows correct DOWN→UP cycle; poller README written.
-
-### Phase 3 — Collector: XIQ
-`base.py` contract finalized (heartbeat, error boundary, Pydantic validation, staleness marking); XIQ collector for device status + port state on fast cycle, inventory on slow cycle; rate-limit compliance from Phase 0 findings; `source_status`/blind detection; built-in collector-stale alert rule seeded.
-**DoD:** switching + wireless state live in DB; XIQ token revocation test shows loud failure + blind state, no stale-as-fresh data; fixture parse tests green.
-
-### Phase 4 — UI port
-Extract JSX assets from ZabbixCustomDashboard into `frontend/`; esbuild pipeline; port Global, Switches, and AP Detail pages onto NetMon endpoints; unified nav (`global-nav.jsx`) with routes for all planned pages; remove Zabbix-module coupling and CDN loads.
-**DoD:** three pages render live data via the FastAPI endpoints; build is one command; no external network fetches at runtime.
-
-### Phase 5 — Collectors: PacketFence, Milestone
-PF collector (nodes + reports, heavy caching, minutes-scale intervals); Milestone Config API collector + Events/State WebSocket task with reconnect/backoff and watchdog; wire Surveillance NOC + camera/recording-server pages; validate Milestone task in standalone mode as the documented fallback.
-**DoD:** NAC and Surveillance pages live; WebSocket survives a forced disconnect test; both collector READMEs written.
-
-### Phase 6 — Alert engine (shadow mode)
-Rule evaluation loop over `device_state`; dedupe per (device, rule); `min_duration_s` gate; maintenance windows; ack API + UI; SMTP notifier behind `shadow=true` default; seed rules: device down, source blind, config backup stale >7d, camera not recording, trunk unregistered, collector stale; shadow-vs-Zabbix comparison report script.
-**DoD:** engine runs continuously in shadow; `notifications` table fills with shadow rows; rule unit tests green; comparison report produces a weekly diff the owner can read.
-
-### Phase 7 — Collectors: 3CX, rConfig
-3CX per the Phase 0 decision (ODBC read-only default); rConfig backup-freshness enrichment; voice status surfaced in UI.
-**DoD:** both live, both documented, both fixtures tested.
-
-### Phase 8 — Parallel run & cutover *(owner-gated)*
-≥4 weeks of shadow comparison; close gaps found; owner flips `shadow=false`; Zabbix network/wireless/voice/camera hosts disabled (with exported configs as rollback); Zabbix remains for servers.
-**DoD:** owner sign-off backed by the comparison diffs — Claude Code does not perform the cutover actions.
-
-### Phase 9 — Geographic site-status map (NOC wall view) *(enhancement)*
-Begins with `docs/spec/09-site-map.md`; design source is the Claude Design handoff in `docs/design/netmon-map/` (`project/Netmon Map.dc.html`). A Leaflet map of the district: sites as up/degraded/down status dots (rolled up from `device_state` per site), animated inter-site fiber links weighted by capacity and colored by live utilization, a live event feed from `state_events`, a status-sorted side panel, and a fullscreen NOC mode. Recreate the prototype's visual output on real NetMon endpoints (new `/api/sites` roll-up); do not port its simulation loop. Introduces new data the core model lacks — per-site lat/lon + tier, and an inter-site fiber-link registry with current-state utilization — via a numbered migration. **Depends on Phases 3–4** (real state + UI/esbuild pipeline), so it can be pulled forward once those land; otherwise scheduled after cutover stabilizes. Open decisions live in the spec: map tiles/Leaflet as an external fetch vs. self-hosted offline pack (must satisfy the §3 "no CDN loads" / Phase 4 "no external fetches at runtime" rules), link-topology source, and avoiding the `trunk` (voice) dimension collision. **Scope guard:** current-state view + curated topology only — no historical utilization time-series (§2).
-**DoD:** map page renders live site + link state via FastAPI endpoints; site/link roll-up + topology come from the DB (no simulated data); NOC mode works; tile/Leaflet delivery satisfies the no-external-fetch rule (or the owner's explicit exception is recorded); migration has a rollback note; spec checklist complete.
+**Cutover criterion:** an operator can do everything they did in ZabbixCustomDashboard *for the in-scope domains* without opening Zabbix — same pages, same drill-downs, honest staleness — and the shadow-alert diff has run clean for the agreed window.
 
 ## 8. Session protocol for Claude Code
 
-- Start each session by reading `docs/spec/` for the current phase and `git log --oneline -15`.
+- Start each session by reading `docs/spec/` for the current phase (spec 11 is the plan of record) and `git log --oneline -15`.
 - Work in small commits with imperative messages; never leave main broken.
 - If a task requires: a new dependency, a non-GET call to a source, sending real email, schema change outside a migration, or anything touching credentials — **stop and ask the owner**.
 - End each session by updating the phase spec's checklist and noting open threads in `docs/spec/NN-…md` under "Next session".
 
 ## 9. Open questions (tracked; do not guess answers)
 
-3CX v20 REST surface vs ODBC; XIQ rate limits at production device counts; rConfig edition/API availability; whether PF node data merges into `devices` or stays a linked view; SMTP relay to use; VM sizing/placement.
+**⛔ Gates awaiting owner sign-off (spec 11 §6, recommendations recorded):** D3 (bounded 24h ring buffer), D4 (operator write actions, post-cutover), D5 (`websockets` dependency), D6 (`snmpbulkwalk` sweeps — gates 10.1).
 
-**Runtime-resilience goal (clarified 2026-07-13):** "offline-tolerant" means NetMon keeps working when the *network or a source is down* — degrade gracefully, mark sources `blind`, never fabricate or serve stale-as-fresh. It does **not** mean a zero-internet install: pulling packages and system libs (e.g. `xmlsec1`) at deploy time is fine, so a local package mirror is **optional**, not required. (Distinct from the §3 frontend rule that the *app bundle* ships no CDN loads — that is a reproducibility/security rule, not an offline one.)
+**Carried over:** XIQ rate limits at production device counts (validate the ≈1.3–1.6k calls/h budget); 3CX v20 surface for extensions/active calls/queues (fixtures first); rConfig config-diff pane (on-click read-through vs. link-out — spec 10 Q5); `wireless_clients` scale/PII acceptance (~9–12k rows with usernames/MACs — spec 10 Q8); SMTP relay; SP cert rotation.
+
+**Runtime-resilience goal (unchanged):** "offline-tolerant" means NetMon keeps working when the *network or a source is down* — degrade gracefully, mark sources `blind`, never fabricate or serve stale-as-fresh. It does **not** mean a zero-internet install; deploy-time package pulls are fine. (Distinct from the §3 frontend rule that the *app bundle* ships no CDN loads.)

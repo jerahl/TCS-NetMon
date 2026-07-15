@@ -1,5 +1,8 @@
 # Spec 10 — "Zabbix Extreme" design port (UI rebuild + snapshot data layer)
 
+**2026-07-15:** adopted into the standalone-scope revision — `docs/spec/11-standalone-scope.md` is the plan of
+record; it amends the phases below (adds NetMon Status page, seed `--sites-from-db`, 10.6 history buffer,
+11.x post-parity bucket) and records recommendations for this spec's §10 open questions as decisions D1–D9.
 **Status:** IN PROGRESS — Phase 10.0 complete (2026-07-14); Phase 10.1 collection foundation complete (SNMP sweeps + switch API + tests, 2026-07-15) with the Switches page UI remaining; Phases 10.2–10.5 pending. Originated as the design-analysis session deliverable (2026-07-14).
 **Design source:** `Zabbix_Extreme.zip` (Claude Design handoff: 18 HTML pages + ~50 JSX/CSS modules). Keep the
 archive out of the repo (it contains real hostnames/IPs in mock data); extract locally when implementing.
