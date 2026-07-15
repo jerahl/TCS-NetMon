@@ -72,6 +72,16 @@ def test_006_creates_switch_inventory_tables():
         assert f"CREATE TABLE IF NOT EXISTS {table}" in sql, f"missing table {table}"
 
 
+def test_007_creates_settings_tables():
+    migs = {m.version: m for m in discover_migrations()}
+    assert "007" in migs, "expected 007 settings-engine migration"
+    sql = migs["007"].path.read_text()
+    for table in ("app_settings", "settings_audit"):
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in sql, f"missing table {table}"
+    # `key` is a MariaDB reserved word — must stay backtick-quoted.
+    assert "`key`" in sql
+
+
 def test_every_migration_has_rollback_note():
     for mig in discover_migrations():
         text_ = mig.path.read_text().lower()
