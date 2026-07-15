@@ -168,3 +168,7 @@ shadow-alert diff has run clean for the agreed window.
   `--sites-from-db`.
 - Capture SNMP fixture walks from one lab EXOS stack (ports/FDB/LLDP/stack)
   into `tests/fixtures/` ahead of the D6 gate.
+- 2026-07-15 (owner-requested, out of phase order): settings engine shipped —
+  web-editable config overlay with write-only secrets, audit trail, and
+  in-place apply. See `docs/spec/12-settings-engine.md` +
+  `docs/runbooks/settings.md`; owner enables via `[security]` in netmon.conf.
