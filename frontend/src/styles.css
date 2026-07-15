@@ -231,3 +231,45 @@ table.grid.kv td:first-child { color: var(--dim); width: 160px; }
   padding: 4px 8px; border-radius: 5px; box-shadow: 0 2px 8px rgba(0,0,0,.25);
 }
 .leaflet-tooltip.link-tip::before { display: none; }
+
+/* ---------------------------------------------------- Events console (spec 10)
+   Provenance badge, filter bar, 24h histogram, action buttons, nav source
+   pills. Reuses the shared card/grid/stat idiom above. */
+.src-badge {
+  display: inline-block; font: 600 10px ui-monospace, "SF Mono", Menlo, monospace;
+  letter-spacing: .04em; color: var(--dim); border: 1px solid var(--border);
+  border-radius: 4px; padding: 1px 5px; background: var(--panel2);
+}
+
+.evt-filters {
+  display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; margin: 16px 0;
+}
+.evt-filter { display: flex; flex-direction: column; gap: 4px; }
+.evt-filter > span {
+  font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--dim);
+}
+.evt-filter select, .evt-filter input {
+  background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+  border-radius: 6px; padding: 6px 8px; font: 13px system-ui; min-width: 130px;
+}
+.evt-filter-grow { flex: 1; min-width: 180px; }
+.evt-filter-grow input { width: 100%; }
+
+.evt-hist { display: flex; align-items: flex-end; gap: 3px; height: 120px; padding-top: 6px; }
+.evt-hist-col { flex: 1; height: 100%; display: flex; align-items: flex-end; }
+.evt-hist-bar {
+  width: 100%; min-height: 2px; display: flex; flex-direction: column-reverse;
+  border-radius: 2px 2px 0 0; overflow: hidden; background: var(--panel2);
+}
+.evt-hist-seg { min-height: 1px; }
+
+.evt-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.evt-actions .btn { padding: 3px 8px; }
+
+/* Nav source-health pills (from /api/collector-health). */
+.src-pill { display: flex; align-items: center; gap: 10px; padding: 5px 9px; border-radius: 7px; }
+.src-pill-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; box-shadow: 0 0 6px currentColor; }
+.src-pill-name { font-size: 12px; color: var(--text); text-transform: capitalize; }
+.src-pill.src-error .src-pill-name { color: #e5484d; }
+.src-pill.src-unknown .src-pill-name { color: var(--dim); }
+.sidebar.collapsed .src-pill { justify-content: center; padding: 5px 0; }

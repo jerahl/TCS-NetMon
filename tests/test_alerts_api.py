@@ -46,6 +46,37 @@ def test_alerts_list_and_ack(tmp_path):
         assert client.post("/api/alerts/999/ack").status_code == 404
 
 
+def test_alert_assign(tmp_path):
+    url = f"sqlite:///{tmp_path / 'as.db'}"
+    _seed(url)
+    with TestClient(_app(write_config(tmp_path, db_url=url))) as client:  # dev bypass = admin
+        aid = client.get("/api/alerts").json()[0]["id"]
+        r = client.post(f"/api/alerts/{aid}/assign", json={"assignee": "sappleby"})
+        assert r.status_code == 200 and r.json()["assigned_to"] == "sappleby"
+        assert client.get("/api/alerts").json()[0]["assigned_to"] == "sappleby"
+        # Empty assignee clears the assignment.
+        client.post(f"/api/alerts/{aid}/assign", json={"assignee": ""})
+        assert client.get("/api/alerts").json()[0]["assigned_to"] is None
+        # Unknown alert → 404.
+        assert client.post("/api/alerts/999/assign", json={"assignee": "x"}).status_code == 404
+
+
+def test_alert_suppress_creates_maintenance_window(tmp_path):
+    url = f"sqlite:///{tmp_path / 'su.db'}"
+    _seed(url)
+    with TestClient(_app(write_config(tmp_path, db_url=url))) as client:
+        aid = client.get("/api/alerts").json()[0]["id"]
+        r = client.post(f"/api/alerts/{aid}/suppress")
+        assert r.status_code == 200 and r.json()["device_id"] == 1
+        # A 1 h device-scoped maintenance window now exists.
+        windows = client.get("/api/maintenance").json()
+        assert len(windows) == 1
+        assert windows[0]["scope_type"] == "device"
+        assert windows[0]["scope_value"] == "1"
+        # Unknown alert → 404.
+        assert client.post("/api/alerts/999/suppress").status_code == 404
+
+
 def test_maintenance_create_and_list(tmp_path):
     url = f"sqlite:///{tmp_path / 'm.db'}"
     _seed(url)

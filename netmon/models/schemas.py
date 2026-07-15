@@ -93,7 +93,13 @@ class DimensionState(BaseModel):
 
 
 class DeviceStatus(BaseModel):
-    """A device plus its current poller-observed ping/snmp state."""
+    """A device plus its current per-dimension state.
+
+    Carries every ``device_state`` dimension the UI reads. Surveillance/VoIP/
+    config pages dereference ``recording``/``trunk``/``config_backup``; omitting
+    them here was a latent client-side TypeError (spec 10 §6). A device with no
+    row for a dimension reports the ``unknown`` default, never a missing field.
+    """
 
     id: int
     name: str
@@ -103,6 +109,9 @@ class DeviceStatus(BaseModel):
     ping: DimensionState = DimensionState()
     snmp: DimensionState = DimensionState()
     source_status: DimensionState = DimensionState()
+    config_backup: DimensionState = DimensionState()
+    recording: DimensionState = DimensionState()
+    trunk: DimensionState = DimensionState()
 
 
 class SiteTier(str, Enum):
@@ -180,10 +189,17 @@ class FiberLink(BaseModel):
 
 
 class MapEvent(BaseModel):
-    """/api/events: a state_events row joined to its device name/site."""
+    """/api/events: a state_events row joined to its device name/site/type.
+
+    Serves both the Phase 9 map feed and the spec 10 Events/Problems console.
+    ``device_id``/``device_type`` are additive (the map ignores them) and let
+    the console filter and group without a second lookup.
+    """
 
     id: int
     device: str
+    device_id: int
+    device_type: DeviceType = DeviceType.other
     site: str | None = None
     dimension: Dimension
     old_value: str | None = None
@@ -191,6 +207,42 @@ class MapEvent(BaseModel):
     severity: Severity = Severity.unknown
     source: str
     occurred_at: datetime | None = None
+
+
+class EventBucket(BaseModel):
+    """One hour of the Events console 24 h severity histogram."""
+
+    hour: datetime
+    ok: int = 0
+    warn: int = 0
+    crit: int = 0
+    unknown: int = 0
+    total: int = 0
+
+
+class EventStats(BaseModel):
+    """/api/events/stats: KPI tiles + 24 h histogram, computed from
+    ``state_events`` timestamps (a query, not a stored series — §1/§6)."""
+
+    total: int = 0
+    by_severity: dict[str, int] = Field(default_factory=dict)
+    window_hours: int = 24
+    buckets: list[EventBucket] = Field(default_factory=list)
+
+
+class CollectorHealth(BaseModel):
+    """/api/collector-health: one collector's heartbeat for the source-health
+    pills + staleness banners (§6). ``status`` is derived, never stored."""
+
+    name: str
+    status: str = "unknown"  # ok | error | unknown
+    last_start: datetime | None = None
+    last_success: datetime | None = None
+    last_error: str | None = None
+    duration_ms: int | None = None
+    records_written: int | None = None
+    consecutive_failures: int = 0
+    updated_at: datetime | None = None
 
 
 class UserSession(BaseModel):

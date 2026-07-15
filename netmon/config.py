@@ -92,6 +92,29 @@ class PollerConfig:
 
 
 @dataclass(frozen=True)
+class SnmpInventoryConfig:
+    """Read-only SNMP inventory sweeps (spec 10 §4; §1 charter amendment,
+    owner-approved 2026-07-15). Reuses the [poller] SNMP credentials/version;
+    this section only carries the sweep cadence, concurrency, and toggles.
+    """
+
+    enabled: bool = False
+    snmpbulkwalk_path: str = "snmpbulkwalk"
+    concurrency: int = 8  # switches in flight
+    # per-sweep enable + interval (seconds)
+    sweep_ports: bool = True
+    ports_interval_s: int = 120
+    sweep_fdb: bool = True
+    fdb_interval_s: int = 900
+    sweep_lldp: bool = True
+    lldp_interval_s: int = 1800
+    sweep_vlans: bool = True
+    vlans_interval_s: int = 3600
+    sweep_stack: bool = True
+    stack_interval_s: int = 300
+
+
+@dataclass(frozen=True)
 class EngineConfig:
     enabled: bool = False
     interval_s: int = 30
@@ -121,6 +144,7 @@ class Config:
     web: WebConfig
     auth: AuthConfig
     poller: PollerConfig
+    snmp_inventory: SnmpInventoryConfig
     engine: EngineConfig
     sources: dict[str, SourceToggle]
     path: str
@@ -266,6 +290,31 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
     if poller.enabled and poller.ok_threshold < 1:
         raise ConfigError("[poller] ok_threshold must be >= 1")
 
+    # --- [snmp_inventory] (spec 10 §4) ---
+    def _sint(key: str, default: int) -> int:
+        return parser.getint("snmp_inventory", key, fallback=default)
+
+    def _sbool(key: str, default: bool) -> bool:
+        return _as_bool(parser.get("snmp_inventory", key, fallback=str(default)))
+
+    snmp_inventory = SnmpInventoryConfig(
+        enabled=_sbool("enabled", False),
+        snmpbulkwalk_path=parser.get("snmp_inventory", "snmpbulkwalk_path", fallback="snmpbulkwalk").strip(),
+        concurrency=_sint("concurrency", 8),
+        sweep_ports=_sbool("sweep_ports", True),
+        ports_interval_s=_sint("ports_interval_s", 120),
+        sweep_fdb=_sbool("sweep_fdb", True),
+        fdb_interval_s=_sint("fdb_interval_s", 900),
+        sweep_lldp=_sbool("sweep_lldp", True),
+        lldp_interval_s=_sint("lldp_interval_s", 1800),
+        sweep_vlans=_sbool("sweep_vlans", True),
+        vlans_interval_s=_sint("vlans_interval_s", 3600),
+        sweep_stack=_sbool("sweep_stack", True),
+        stack_interval_s=_sint("stack_interval_s", 300),
+    )
+    if snmp_inventory.enabled and snmp_inventory.concurrency < 1:
+        raise ConfigError("[snmp_inventory] concurrency must be >= 1")
+
     # --- [engine] ---
     engine = EngineConfig(
         enabled=_as_bool(parser.get("engine", "enabled", fallback="false")),
@@ -289,5 +338,6 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         else:
             sources[name] = SourceToggle(enabled=False)
 
-    return Config(db=db, web=web, auth=auth, poller=poller, engine=engine,
+    return Config(db=db, web=web, auth=auth, poller=poller,
+                  snmp_inventory=snmp_inventory, engine=engine,
                   sources=sources, path=conf_path)

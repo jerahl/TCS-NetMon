@@ -1,9 +1,9 @@
 # Spec 10 — "Zabbix Extreme" design port (UI rebuild + snapshot data layer)
 
-**Status:** PLAN — no code yet. This document is the deliverable of the design-analysis session (2026-07-14).
 **2026-07-15:** adopted into the standalone-scope revision — `docs/spec/11-standalone-scope.md` is the plan of
 record; it amends the phases below (adds NetMon Status page, seed `--sites-from-db`, 10.6 history buffer,
 11.x post-parity bucket) and records recommendations for this spec's §10 open questions as decisions D1–D9.
+**Status:** IN PROGRESS — Phase 10.0 complete (2026-07-14); Phase 10.1 collection foundation complete (SNMP sweeps + switch API + tests, 2026-07-15) with the Switches page UI remaining; Phases 10.2–10.5 pending. Originated as the design-analysis session deliverable (2026-07-14).
 **Design source:** `Zabbix_Extreme.zip` (Claude Design handoff: 18 HTML pages + ~50 JSX/CSS modules). Keep the
 archive out of the repo (it contains real hostnames/IPs in mock data); extract locally when implementing.
 **Goal:** make NetMon's UI match this design, and build the data layer the pages need — **cache current
@@ -258,7 +258,7 @@ Per-page fidelity notes (what degrades and why):
 
 | Phase | Contents | DoD |
 |---|---|---|
-| **10.0 Foundations** | fix `/api/status` dimensions bug; `/api/events` + `/api/collector-health`; `sites` + `snapshot_cache` + `assigned_to` migration (008 lands first as 004 in practice — renumber at implementation); port design shell/nav/primitives; Events Console + Problems pages; nav source-health pills | old pages still work; events console live on real `state_events`; pytest green |
+| **10.0 Foundations** | fix `/api/status` dimensions bug; `/api/events` + `/api/collector-health`; `sites` + `snapshot_cache` + `assigned_to` migration (008 lands first — implemented as **`005`** since Phase 9's site map already took `004` and created `sites`, so `005` adds only `snapshot_cache`/`config_backups`/`assigned_to`); port design shell/nav/primitives; Events Console + Problems pages; nav source-health pills | old pages still work; events console live on real `state_events`; pytest green |
 | **10.1 Switching** | §4 owner gate → snmp_inventory module + 004 tables; switch API; Switches page tabs (ports, port-detail FDB⋈PF, stack, VLAN, PoE, topology, triggers, backups-list) | port faceplate + FDB identity pane live against a real stack; sweep fits interval at fleet scale; README + runbook |
 | **10.2 Wireless** | 005 tables; XIQ detail/clients/SSID cycles (rate-budget verified); wireless API; XIQ page + AP Detail | pages live; XIQ call rate measured &lt; budget; token-revocation test still shows blind, stale rows visible |
 | **10.3 Identity** | 006 `pf_nodes` persistence (+snapshot fetchers); NAC API rework; five PF pages | `/api/nac` served from DB; in-memory snapshot deleted; PF pages live |
@@ -281,11 +281,21 @@ gate) and unblocks the FDB joins that 10.2/10.4 pages reuse.
 
 ## 10. Open questions (owner decisions — do not guess)
 
-1. **Out-of-scope nav entries** (Servers/UPS/FortiGate/ZBX): hide, or show as deep links into Zabbix?
-   (A read-only Zabbix API collector to light those cards up is a *possible* future source — but it
-   contradicts §2's spirit and is not in this plan.)
-2. **§1 charter amendment:** approve read-only `snmpbulkwalk` sweeps (gates Phase 10.1).
-3. **Sparklines:** ship without (default), or approve a bounded 24 h ring buffer as a §2 exception later.
+1. ✅ **RESOLVED 2026-07-15 — Out-of-scope nav entries** (Servers/UPS/FortiGate/ZBX): *"plan them for
+   the future of NetMon."* → **Keep the entries visible** (not hidden); interim behaviour is a
+   **deep-link into the existing Zabbix UI** so they're usable today, with a **roadmap item** to bring
+   those domains natively into NetMon later via a **read-only Zabbix API source** (a new collector +
+   `snapshot_cache` keys — a future phase, explicitly a §2-spirit exception to be specced then). Shapes
+   the Phase 10.5 Global/nav work, not 10.1. *(Interim deep-link vs. a "planned" placeholder is a minor
+   presentation call I'll default to deep-link; flag if you'd rather show a disabled "coming to NetMon"
+   tile.)*
+2. ✅ **RESOLVED 2026-07-15 — §1 charter amendment APPROVED:** read-only `snmpbulkwalk` sweeps are
+   sanctioned (CLAUDE.md §1 amended). **Unblocks Phase 10.1.** Still GET-only, no Python SNMP lib,
+   concurrency-capped, per-sweep disableable.
+3. ✅ **RESOLVED 2026-07-15 — Sparklines: bounded 24 h ring buffer APPROVED** as an explicit §2
+   exception (CLAUDE.md §2 amended). Fixed-size, auto-pruned, ≤24 h, via a numbered migration with a
+   rollback note — the *only* sanctioned metric-series deviation. Scheduled as its own increment (see
+   Next session); the 10.0 pages keep empty sparkline slots until it lands.
 4. **3CX v20 surface** for extensions/active calls/queues — resolve with the standing Phase 0
    ODBC-vs-REST decision; fixtures first.
 5. **Config diff pane:** on-click read-through to rConfig API vs. link-out to rConfig UI.
@@ -294,8 +304,117 @@ gate) and unblocks the FDB joins that 10.2/10.4 pages reuse.
 8. **`wireless_clients` scale/PII**: ~9–12 k rows refreshed every 5–10 min, containing usernames/MACs —
    acceptable in NetMon's DB? (Same data PF already holds; NetMon adds a second copy.)
 
+## Progress log
+
+**2026-07-14 — Phase 10.0 backend landed** (ungated: all read-only/DB-only, no
+new deps, no charter change). Frontend port of 10.0 is the remaining half.
+
+Done this session:
+- **Migration `005_design_port_foundations.sql`** — `snapshot_cache` (page-level
+  singleton blobs, `key` PK/JSON/`ok`/`updated_at`), `config_backups` (rConfig
+  metadata; feeds the existing `config_backup` dimension), `alerts.assigned_to`.
+  Rollback note included. (`sites` was already created by `004` — not re-added.)
+  Guard test added so a `;` inside an inline SQL comment can never fracture a
+  migration statement again (`test_every_statement_starts_with_a_sql_keyword`).
+- **`/api/status` fix** — now returns `config_backup`/`recording`/`trunk`
+  alongside ping/snmp/source_status; the Surveillance/VoIP/config pages'
+  latent client-side TypeError is closed. `DeviceStatus` schema extended.
+- **`/api/events` rework** — moved out of `netmon.api.sites` into
+  `netmon.api.events` (same path; map feed unbroken). Optional filters
+  (`severity/source/site/device_type/dimension/q/since/until` + `limit/offset`);
+  `MapEvent` gained `device_id`/`device_type` (additive). New
+  **`/api/events/stats`** = 24 h severity histogram + KPI totals, bucketed in
+  Python for MariaDB/SQLite portability (a query, not a stored series — §1/§6).
+- **`/api/collector-health`** — viewer-role source-health pills; derives
+  `ok`/`error`/`unknown` honestly (a once-successful-but-now-failing collector
+  reads `error`; a never-succeeded one reads `unknown`, never `ok` — §4.5).
+- **Alert actions** — `/api/alerts` now returns `assigned_to`; added
+  `POST /api/alerts/{id}/assign` (set/clear) and `POST /api/alerts/{id}/suppress`
+  (1 h device-scoped `maintenance_windows` row — suppresses notification, not
+  state recording, per §6). Both operator-role.
+- Tests: +status all-dimensions, +`test_events_api`, +`test_collector_health_api`,
+  +alert assign/suppress, +migration `005` assertions. Full suite green.
+
+**2026-07-14 — Phase 10.0 frontend landed** (still ungated). Phase 10.0 is now
+**complete** (backend + frontend); old pages still work.
+- **Events Console** (`frontend/src/pages/events.jsx`, route `#/events`) — filter
+  bar (severity/source/site/type/dimension/text), KPI tiles + 24 h severity
+  histogram (from `/api/events/stats`), transition-feed table with provenance
+  badges. Auto-refreshes 30 s (cache cadence). Site/source filter options are
+  derived from the loaded feed — no extra round-trip.
+- **Problems** page reworked to wire all three NetMon-native actions —
+  Ack / Assign / Suppress-1h — on `/api/alerts/*`, with an `assigned_to` column.
+- **Nav source-health pills** from `/api/collector-health` (green/red/grey per
+  collector, hover for last-success + error). Refresh 30 s.
+- Shared modules added: `severity.js` (the single home of the 5-level design →
+  4-level NetMon mapping + provenance-badge table — §2), `primitives.jsx`
+  gains `SevText`/`SourceBadge`, `api.js` gains `postJSON`/`qs`.
+- **Reconciliation:** the design's Events Console conflates transitions and
+  open problems. NetMon keeps them honest — `/api/events` is the immutable
+  `state_events` feed (no ack there); the actionable alert lifecycle lives on
+  Problems. The design's "Status" filter (open/acked) is therefore a Problems
+  concern, not an events filter.
+- Verified end-to-end with a headless-Chromium (Playwright) run against the
+  built bundle on a seeded DB: both pages render live data, source badges and
+  pills populate, histogram/filters/rows correct, no runtime console errors, no
+  runtime external fetches (the one remaining external URL in the bundle is the
+  Phase 9 map's ArcGIS tile layer — a separate spec-09/§10 open question, not
+  introduced here).
+
+**2026-07-15 — Phase 10.1 collection foundation landed** (Q2 charter amendment
+in force). Owner supplied the real `zbx_export_templates_8.yaml` ("Extreme EXOS
+by SNMP") — the OID map now comes from production Zabbix, captured in Appendix A.
+
+- **Migration `006_switch_inventory.sql`** — `switch_ports`, `fdb_entries`,
+  `lldp_neighbors`, `switch_vlans`, `stack_members` (rollback note; SQLite DDL
+  mirrored in conftest). Reconciliation vs §3: the EXOS template walks the plain
+  **`dot1dTpFdb`** (BRIDGE-MIB), not Q-BRIDGE, so `fdb_entries` PK is
+  `(device_id, mac)` and `vlan_id` is **nullable** (per-VLAN FDB is a later
+  Q-BRIDGE walk). The `mac` join key for the FDB⋈PF payoff is unaffected.
+- **`netmon/poller/snmp_inventory.py`** — read-only `snmpbulkwalk` sweep as a
+  poller sibling: supervised task + standalone `--once/--loop`; `[snmp_inventory]`
+  config (per-sweep enable + interval, concurrency 8); one supervised task gated
+  internally per-sweep by elapsed time; `collector_health` name `snmp_inventory`;
+  per-switch failure isolated + rows left stale (never blanked), all-switches-fail
+  surfaces loud; **pure `-On` parsers** unit-tested against a sanitized fixture.
+  Rates computed at write time from `prev_counters` (no series — §1); counter
+  resets yield NULL, not spikes.
+- **Switch API** (`netmon/api/switches.py`): `/api/switches` (+ port roll-up),
+  `/{id}` (+stack), `/{id}/ports`, `/{id}/ports/{ifindex}` (port + FDB MAC list),
+  `/{id}/fdb`, `/{id}/lldp`, `/{id}/vlans`. Read-only, viewer role, DB-only.
+- Fixture `tests/fixtures/snmp_exos_stack.txt` + `test_snmp_inventory` (parsers,
+  rate calc, run_once, prune, health) + `test_switches_api` + migration `006`
+  test. Full suite green; verified end-to-end (sweep → API) on a seeded DB.
+- **Deferred to the next 10.1 slice** (schema columns already present, left
+  NULL, honest): PoE (`pethPsePort*`/Extreme index → ifIndex mapping needs a
+  real PoE fixture); per-slot serial/fw (ENTITY-MIB), fans/PSUs JSON; the
+  **Switches page UI** (8 tabs) — the API is ready for it.
+
+## Appendix A — EXOS SNMP OID map (Phase 10.1)
+
+Source: owner's "Extreme EXOS by SNMP" Zabbix 7.4 template. Numeric roots the
+`snmp_inventory` sweeps walk (`OID` dict in `snmp_inventory.py`):
+
+| Sweep | Columns → OID root |
+|---|---|
+| ports | ifOperStatus `1.3.6.1.2.1.2.2.1.8`, ifAdminStatus `…2.2.1.7`, ifType `…2.2.1.3`, ifInErrors `…2.2.1.14`, ifOutErrors `…2.2.1.20`, ifInDiscards `…2.2.1.13`, ifOutDiscards `…2.2.1.19`, ifName `1.3.6.1.2.1.31.1.1.1.1`, ifHighSpeed `…31.1.1.1.15`, ifHCInOctets `…31.1.1.1.6`, ifHCOutOctets `…31.1.1.1.10`, dot3Duplex `1.3.6.1.2.1.10.7.2.1.19` |
+| fdb | dot1dTpFdbPort `1.3.6.1.2.1.17.4.3.1.2` (MAC in suffix) ⋈ dot1dBasePortIfIndex `1.3.6.1.2.1.17.1.4.1.2` |
+| lldp | lldpRem sysName `1.0.8802.1.1.2.1.4.1.1.9`, portId `…7`, portDesc `…8`, sysDesc `…10`, chassisId `…5` (index `timemark.localPort.remIdx`) |
+| vlans | extremeVlan VID `1.3.6.1.4.1.1916.1.2.1.2.1.10`, name `…1.2.1.2.1.2`, admin `…1.2.1.2.1.12` |
+| stack | member status `1.3.6.1.4.1.1916.1.33.2.1.3`, temp `…33.2.1.21`, CPU-5m `…32.1.4.1.9`, memTotal `…32.2.2.1.2`, memAvail `…32.2.2.1.3` |
+| (not yet) | PoE `1.3.6.1.2.1.105.1.1.1.{6 detect,10 class}` + Extreme measured `1.3.6.1.4.1.1916.1.27.2.1.1.6`; ENTITY serial/model/fw `1.3.6.1.2.1.47.1.1.1.1.{11,2,9}`; fans `…1916.1.1.1.9.1.*`, PSUs `…1916.1.1.1.27.1.*` |
+
 ## Next session
 
-- Get §10 Q1–Q3 answered (they gate Phase 10.0/10.1 scope).
-- Start Phase 10.0: fix `/api/status`, add `/api/events`, port shell/primitives.
-- Capture SNMP fixture walks from one lab EXOS stack (ports/FDB/LLDP/stack) into `tests/fixtures/`.
+- **Finish Phase 10.1**: build the **Switches page UI** (navigator, port faceplate,
+  port-detail FDB pane, stack/VLAN/LLDP/topology tabs) on the switch API above;
+  add the deferred sweeps (PoE, ENTITY serial/fw, fans/PSUs) once a PoE fixture is
+  captured; add the Q-BRIDGE per-VLAN FDB walk if VLAN-scoped FDB is wanted.
+- **Phase 10.3 unlocks the FDB⋈PF join**: once `pf_nodes` exists, extend
+  `/api/switches/{id}/ports/{ifindex}` to enrich each MAC with PF identity
+  (LEFT JOIN `pf_nodes` ON mac) — the design's marquee port-detail feature.
+- **Sparkline ring buffer (Q3, approved)** — a bounded fixed-24 h auto-pruned
+  table + collector writes; wire the empty sparkline slots the 10.0 pages leave.
+- **Q1 nav (approved: plan for NetMon's future)** — in 10.5, keep Servers/UPS/
+  FortiGate/ZBX nav entries as Zabbix deep-links now; roadmap a future read-only
+  Zabbix source to render them natively.

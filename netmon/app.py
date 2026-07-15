@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 WEB_DIR = Path(__file__).resolve().parent / "web"
 
 from netmon import __version__, db, migrate
-from netmon.api import alerts, auth_routes, devices, health, nac, sites, status
+from netmon.api import alerts, auth_routes, devices, events, health, nac, sites, status, switches
 from netmon.auth.sessions import SessionStore
 from netmon.engine.engine import AlertEngine
 from netmon.collectors.milestone import MilestoneCollector, MilestoneError
@@ -37,6 +37,7 @@ from netmon.collectors.xiq import XiqCollector
 from netmon.collectors.xiq_client import XiqError
 from netmon.config import Config, load_config
 from netmon.poller.poller import Poller
+from netmon.poller.snmp_inventory import SnmpInventory
 from netmon.supervisor import Supervisor, _heartbeat
 
 log = logging.getLogger("netmon.app")
@@ -62,6 +63,14 @@ def register_tasks(app: FastAPI, cfg: Config, engine) -> None:
             interval_s=cfg.poller.snmp_interval_s, timeout_s=cfg.poller.snmp_interval_s,
         )
         log.info("poller enabled: ping/%ss, snmp/%ss", cfg.poller.ping_interval_s, cfg.poller.snmp_interval_s)
+
+    if cfg.snmp_inventory.enabled:
+        snmp_inv = SnmpInventory.from_config(engine, cfg)
+        supervisor.register(
+            "snmp_inventory", snmp_inv.run_guarded,
+            interval_s=snmp_inv.interval_s, timeout_s=snmp_inv.timeout_s,
+        )
+        log.info("SNMP inventory sweeps enabled: base interval %ss", snmp_inv.interval_s)
 
     if cfg.source_enabled("xiq"):
         try:
@@ -166,6 +175,8 @@ def create_app(
     app.include_router(devices.router)
     app.include_router(status.router)
     app.include_router(sites.router)
+    app.include_router(events.router)
+    app.include_router(switches.router)
     app.include_router(nac.router)
     app.include_router(alerts.router)
 
