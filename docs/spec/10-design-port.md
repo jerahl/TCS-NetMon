@@ -278,11 +278,21 @@ gate) and unblocks the FDB joins that 10.2/10.4 pages reuse.
 
 ## 10. Open questions (owner decisions — do not guess)
 
-1. **Out-of-scope nav entries** (Servers/UPS/FortiGate/ZBX): hide, or show as deep links into Zabbix?
-   (A read-only Zabbix API collector to light those cards up is a *possible* future source — but it
-   contradicts §2's spirit and is not in this plan.)
-2. **§1 charter amendment:** approve read-only `snmpbulkwalk` sweeps (gates Phase 10.1).
-3. **Sparklines:** ship without (default), or approve a bounded 24 h ring buffer as a §2 exception later.
+1. ✅ **RESOLVED 2026-07-15 — Out-of-scope nav entries** (Servers/UPS/FortiGate/ZBX): *"plan them for
+   the future of NetMon."* → **Keep the entries visible** (not hidden); interim behaviour is a
+   **deep-link into the existing Zabbix UI** so they're usable today, with a **roadmap item** to bring
+   those domains natively into NetMon later via a **read-only Zabbix API source** (a new collector +
+   `snapshot_cache` keys — a future phase, explicitly a §2-spirit exception to be specced then). Shapes
+   the Phase 10.5 Global/nav work, not 10.1. *(Interim deep-link vs. a "planned" placeholder is a minor
+   presentation call I'll default to deep-link; flag if you'd rather show a disabled "coming to NetMon"
+   tile.)*
+2. ✅ **RESOLVED 2026-07-15 — §1 charter amendment APPROVED:** read-only `snmpbulkwalk` sweeps are
+   sanctioned (CLAUDE.md §1 amended). **Unblocks Phase 10.1.** Still GET-only, no Python SNMP lib,
+   concurrency-capped, per-sweep disableable.
+3. ✅ **RESOLVED 2026-07-15 — Sparklines: bounded 24 h ring buffer APPROVED** as an explicit §2
+   exception (CLAUDE.md §2 amended). Fixed-size, auto-pruned, ≤24 h, via a numbered migration with a
+   rollback note — the *only* sanctioned metric-series deviation. Scheduled as its own increment (see
+   Next session); the 10.0 pages keep empty sparkline slots until it lands.
 4. **3CX v20 surface** for extensions/active calls/queues — resolve with the standing Phase 0
    ODBC-vs-REST decision; fixtures first.
 5. **Config diff pane:** on-click read-through to rConfig API vs. link-out to rConfig UI.
@@ -350,13 +360,24 @@ Done this session:
 
 ## Next session
 
-- **Phase 10.1 (Switching)** — blocked on **§10 Q2**: owner approval of read-only
-  `snmpbulkwalk` sweeps (the §1 charter amendment). Once approved: `snmp_inventory`
-  module + `004`-series switch-inventory tables (renumber to next free number),
-  switch API, Switches page tabs. Capture SNMP fixture walks from one lab EXOS
-  stack (ports/FDB/LLDP/stack) into `tests/fixtures/` as pre-work.
-- **Get §10 Q1 + Q3 answered** — Q1 (out-of-scope nav: hide vs Zabbix deep-links)
-  shapes the Global page nav in 10.5; Q3 (sparklines) sets the degraded-widget
-  default. Neither blocks 10.1.
+**§10 Q1/Q2/Q3 all resolved 2026-07-15 (see §10).** Phase 10.1 is unblocked.
+
+- **Phase 10.1 (Switching)** — now cleared by the Q2 charter amendment. Order:
+  1. Capture SNMP fixture walks from one lab EXOS stack (ports/FDB/LLDP/stack) into
+     `tests/fixtures/` — Phase 0 rule, fixtures before live.
+  2. `netmon/poller/snmp_inventory.py` — supervised task + standalone `--once/--loop`,
+     `[snmp_inventory]` config (per-sweep enable/interval), concurrency cap (default 8),
+     `collector_health` name `snmp_inventory`, fail-loud stale marking (§4).
+  3. Migration for the 004-series switch-inventory tables (`switch_ports`, `fdb_entries`,
+     `lldp_neighbors`, `switch_vlans`, `stack_members`) — **next free number is `006`**
+     (004=site-map, 005=foundations), with a rollback note.
+  4. Switch API (`/api/switches/{id}` + `/ports`, `/fdb`, `/lldp`, `/vlans`, `/stack`,
+     `/poe`) and the Switches page tabs incl. the FDB⋈PF port-detail pane.
+- **Sparkline ring buffer (Q3, approved)** — schedule as its own small increment:
+  a bounded fixed-24 h auto-pruned table + collector writes + wire the empty
+  sparkline slots the 10.0 pages already leave. Numbered migration + rollback note.
+- **Q1 nav (approved: plan for NetMon's future)** — in 10.5, keep Servers/UPS/
+  FortiGate/ZBX nav entries as Zabbix deep-links now; open a roadmap note for a
+  future read-only Zabbix source to render them natively.
 - Optional polish on 10.0: a detail drawer / audit trail on the Events table,
   bulk selection, and MTTA/MTTR tiles (computable from `alerts` — §7).

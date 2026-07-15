@@ -18,7 +18,9 @@ NetMon is a federated monitoring platform that replaces Zabbix for **network, wi
 | Voice | 3CX (ODBC to its DB; REST TBD) | Trunk registration, extension status, service health |
 | Surveillance | Milestone XProtect (Config API + Events/State WebSocket) | Camera state, recording state, recording-server health |
 
-The **native poller** does exactly two things against registered management IPs: ICMP up/down (`fping` sweep, 60s) and SNMP-responding (`snmpget` sysUpTime, 5 min). It is the tiebreaker when a source disagrees with reality, and the canary when a source platform itself is unreachable.
+The **native poller** does two things against registered management IPs: ICMP up/down (`fping` sweep, 60s) and SNMP-responding (`snmpget` sysUpTime, 5 min). It is the tiebreaker when a source disagrees with reality, and the canary when a source platform itself is unreachable.
+
+**Charter amendment (owner-approved 2026-07-15, spec 10 §4/§10 Q2):** the poller's SNMP surface is extended with **read-only `snmpbulkwalk` inventory sweeps** (per-port/FDB/LLDP/VLAN/stack tables) for the switching UI — same net-snmp package, still GET-only/read-only, still **no Python SNMP library**, concurrency-capped and per-sweep disableable (see `netmon/poller/snmp_inventory.py`, spec 10 §4). This is the one sanctioned widening of the "exactly fping + snmpget" rule above; any further poller write/active behaviour still needs explicit owner sign-off.
 
 NetMon also owns **alerting** (rules → dedupe → maintenance windows → SMTP email) because Zabbix's alerting is being retired for these domains.
 
@@ -28,7 +30,7 @@ NetMon also owns **alerting** (rules → dedupe → maintenance windows → SMTP
 
 **Explicitly OUT of scope (do not build, even if it seems easy):**
 - Server monitoring (Nutanix, iDRAC, Linux/Windows agents, BIND) — Zabbix keeps this.
-- Long-term metric time-series / graphs — source platforms retain their own history. NetMon's only history is the `state_events` transition log.
+- Long-term metric time-series / graphs — source platforms retain their own history. NetMon's only history is the `state_events` transition log. **Narrow exception (owner-approved 2026-07-15, spec 10 §10 Q3):** a single **bounded, fixed-24 h, auto-pruned ring buffer** may back the design's sparklines/mini-charts. It is capped-size and self-pruning (not growing history), lands via a numbered migration with a rollback note, and is the *only* sanctioned deviation — no other metric series, no retention beyond 24 h.
 - Write paths to any source platform. **Every integration is read-only.** No config pushes, no acknowledging events in Milestone, no PF node edits. If a task appears to require a write to a source, stop and flag it.
 - Notification channels beyond SMTP (no Teams/webhooks/SMS in v1).
 - Multi-tenant / multi-district features.
