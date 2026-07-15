@@ -64,6 +64,14 @@ def test_005_adds_foundation_tables_and_column():
     assert "`key`" in sql
 
 
+def test_006_creates_switch_inventory_tables():
+    migs = {m.version: m for m in discover_migrations()}
+    assert "006" in migs, "expected 006 switch-inventory migration"
+    sql = migs["006"].path.read_text()
+    for table in ("switch_ports", "fdb_entries", "lldp_neighbors", "switch_vlans", "stack_members"):
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in sql, f"missing table {table}"
+
+
 def test_every_migration_has_rollback_note():
     for mig in discover_migrations():
         text_ = mig.path.read_text().lower()

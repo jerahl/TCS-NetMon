@@ -1,6 +1,6 @@
 # Spec 10 — "Zabbix Extreme" design port (UI rebuild + snapshot data layer)
 
-**Status:** IN PROGRESS — Phase 10.0 complete (backend + frontend, 2026-07-14; see Progress log); Phases 10.1–10.5 pending (10.1 gated on §10 Q2). Originated as the design-analysis session deliverable (2026-07-14).
+**Status:** IN PROGRESS — Phase 10.0 complete (2026-07-14); Phase 10.1 collection foundation complete (SNMP sweeps + switch API + tests, 2026-07-15) with the Switches page UI remaining; Phases 10.2–10.5 pending. Originated as the design-analysis session deliverable (2026-07-14).
 **Design source:** `Zabbix_Extreme.zip` (Claude Design handoff: 18 HTML pages + ~50 JSX/CSS modules). Keep the
 archive out of the repo (it contains real hostnames/IPs in mock data); extract locally when implementing.
 **Goal:** make NetMon's UI match this design, and build the data layer the pages need — **cache current
@@ -358,26 +358,60 @@ Done this session:
   Phase 9 map's ArcGIS tile layer — a separate spec-09/§10 open question, not
   introduced here).
 
+**2026-07-15 — Phase 10.1 collection foundation landed** (Q2 charter amendment
+in force). Owner supplied the real `zbx_export_templates_8.yaml` ("Extreme EXOS
+by SNMP") — the OID map now comes from production Zabbix, captured in Appendix A.
+
+- **Migration `006_switch_inventory.sql`** — `switch_ports`, `fdb_entries`,
+  `lldp_neighbors`, `switch_vlans`, `stack_members` (rollback note; SQLite DDL
+  mirrored in conftest). Reconciliation vs §3: the EXOS template walks the plain
+  **`dot1dTpFdb`** (BRIDGE-MIB), not Q-BRIDGE, so `fdb_entries` PK is
+  `(device_id, mac)` and `vlan_id` is **nullable** (per-VLAN FDB is a later
+  Q-BRIDGE walk). The `mac` join key for the FDB⋈PF payoff is unaffected.
+- **`netmon/poller/snmp_inventory.py`** — read-only `snmpbulkwalk` sweep as a
+  poller sibling: supervised task + standalone `--once/--loop`; `[snmp_inventory]`
+  config (per-sweep enable + interval, concurrency 8); one supervised task gated
+  internally per-sweep by elapsed time; `collector_health` name `snmp_inventory`;
+  per-switch failure isolated + rows left stale (never blanked), all-switches-fail
+  surfaces loud; **pure `-On` parsers** unit-tested against a sanitized fixture.
+  Rates computed at write time from `prev_counters` (no series — §1); counter
+  resets yield NULL, not spikes.
+- **Switch API** (`netmon/api/switches.py`): `/api/switches` (+ port roll-up),
+  `/{id}` (+stack), `/{id}/ports`, `/{id}/ports/{ifindex}` (port + FDB MAC list),
+  `/{id}/fdb`, `/{id}/lldp`, `/{id}/vlans`. Read-only, viewer role, DB-only.
+- Fixture `tests/fixtures/snmp_exos_stack.txt` + `test_snmp_inventory` (parsers,
+  rate calc, run_once, prune, health) + `test_switches_api` + migration `006`
+  test. Full suite green; verified end-to-end (sweep → API) on a seeded DB.
+- **Deferred to the next 10.1 slice** (schema columns already present, left
+  NULL, honest): PoE (`pethPsePort*`/Extreme index → ifIndex mapping needs a
+  real PoE fixture); per-slot serial/fw (ENTITY-MIB), fans/PSUs JSON; the
+  **Switches page UI** (8 tabs) — the API is ready for it.
+
+## Appendix A — EXOS SNMP OID map (Phase 10.1)
+
+Source: owner's "Extreme EXOS by SNMP" Zabbix 7.4 template. Numeric roots the
+`snmp_inventory` sweeps walk (`OID` dict in `snmp_inventory.py`):
+
+| Sweep | Columns → OID root |
+|---|---|
+| ports | ifOperStatus `1.3.6.1.2.1.2.2.1.8`, ifAdminStatus `…2.2.1.7`, ifType `…2.2.1.3`, ifInErrors `…2.2.1.14`, ifOutErrors `…2.2.1.20`, ifInDiscards `…2.2.1.13`, ifOutDiscards `…2.2.1.19`, ifName `1.3.6.1.2.1.31.1.1.1.1`, ifHighSpeed `…31.1.1.1.15`, ifHCInOctets `…31.1.1.1.6`, ifHCOutOctets `…31.1.1.1.10`, dot3Duplex `1.3.6.1.2.1.10.7.2.1.19` |
+| fdb | dot1dTpFdbPort `1.3.6.1.2.1.17.4.3.1.2` (MAC in suffix) ⋈ dot1dBasePortIfIndex `1.3.6.1.2.1.17.1.4.1.2` |
+| lldp | lldpRem sysName `1.0.8802.1.1.2.1.4.1.1.9`, portId `…7`, portDesc `…8`, sysDesc `…10`, chassisId `…5` (index `timemark.localPort.remIdx`) |
+| vlans | extremeVlan VID `1.3.6.1.4.1.1916.1.2.1.2.1.10`, name `…1.2.1.2.1.2`, admin `…1.2.1.2.1.12` |
+| stack | member status `1.3.6.1.4.1.1916.1.33.2.1.3`, temp `…33.2.1.21`, CPU-5m `…32.1.4.1.9`, memTotal `…32.2.2.1.2`, memAvail `…32.2.2.1.3` |
+| (not yet) | PoE `1.3.6.1.2.1.105.1.1.1.{6 detect,10 class}` + Extreme measured `1.3.6.1.4.1.1916.1.27.2.1.1.6`; ENTITY serial/model/fw `1.3.6.1.2.1.47.1.1.1.1.{11,2,9}`; fans `…1916.1.1.1.9.1.*`, PSUs `…1916.1.1.1.27.1.*` |
+
 ## Next session
 
-**§10 Q1/Q2/Q3 all resolved 2026-07-15 (see §10).** Phase 10.1 is unblocked.
-
-- **Phase 10.1 (Switching)** — now cleared by the Q2 charter amendment. Order:
-  1. Capture SNMP fixture walks from one lab EXOS stack (ports/FDB/LLDP/stack) into
-     `tests/fixtures/` — Phase 0 rule, fixtures before live.
-  2. `netmon/poller/snmp_inventory.py` — supervised task + standalone `--once/--loop`,
-     `[snmp_inventory]` config (per-sweep enable/interval), concurrency cap (default 8),
-     `collector_health` name `snmp_inventory`, fail-loud stale marking (§4).
-  3. Migration for the 004-series switch-inventory tables (`switch_ports`, `fdb_entries`,
-     `lldp_neighbors`, `switch_vlans`, `stack_members`) — **next free number is `006`**
-     (004=site-map, 005=foundations), with a rollback note.
-  4. Switch API (`/api/switches/{id}` + `/ports`, `/fdb`, `/lldp`, `/vlans`, `/stack`,
-     `/poe`) and the Switches page tabs incl. the FDB⋈PF port-detail pane.
-- **Sparkline ring buffer (Q3, approved)** — schedule as its own small increment:
-  a bounded fixed-24 h auto-pruned table + collector writes + wire the empty
-  sparkline slots the 10.0 pages already leave. Numbered migration + rollback note.
+- **Finish Phase 10.1**: build the **Switches page UI** (navigator, port faceplate,
+  port-detail FDB pane, stack/VLAN/LLDP/topology tabs) on the switch API above;
+  add the deferred sweeps (PoE, ENTITY serial/fw, fans/PSUs) once a PoE fixture is
+  captured; add the Q-BRIDGE per-VLAN FDB walk if VLAN-scoped FDB is wanted.
+- **Phase 10.3 unlocks the FDB⋈PF join**: once `pf_nodes` exists, extend
+  `/api/switches/{id}/ports/{ifindex}` to enrich each MAC with PF identity
+  (LEFT JOIN `pf_nodes` ON mac) — the design's marquee port-detail feature.
+- **Sparkline ring buffer (Q3, approved)** — a bounded fixed-24 h auto-pruned
+  table + collector writes; wire the empty sparkline slots the 10.0 pages leave.
 - **Q1 nav (approved: plan for NetMon's future)** — in 10.5, keep Servers/UPS/
-  FortiGate/ZBX nav entries as Zabbix deep-links now; open a roadmap note for a
-  future read-only Zabbix source to render them natively.
-- Optional polish on 10.0: a detail drawer / audit trail on the Events table,
-  bulk selection, and MTTA/MTTR tiles (computable from `alerts` — §7).
+  FortiGate/ZBX nav entries as Zabbix deep-links now; roadmap a future read-only
+  Zabbix source to render them natively.

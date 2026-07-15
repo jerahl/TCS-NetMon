@@ -180,6 +180,94 @@ CREATE TABLE fiber_link_state (
 """
 
 
+SWITCH_PORTS_DDL_SQLITE = """
+CREATE TABLE switch_ports (
+    device_id INTEGER NOT NULL,
+    ifindex INTEGER NOT NULL,
+    name TEXT,
+    member INTEGER,
+    oper_state TEXT NOT NULL DEFAULT 'unknown',
+    admin_up INTEGER,
+    speed_mbps INTEGER,
+    duplex TEXT,
+    poe_admin INTEGER,
+    poe_delivering INTEGER,
+    poe_class TEXT,
+    poe_watts REAL,
+    in_kbps INTEGER,
+    out_kbps INTEGER,
+    util_pct REAL,
+    err_in_delta INTEGER,
+    err_out_delta INTEGER,
+    disc_in_delta INTEGER,
+    disc_out_delta INTEGER,
+    last_change TIMESTAMP,
+    prev_counters TEXT,
+    updated_at TIMESTAMP,
+    PRIMARY KEY (device_id, ifindex)
+)
+"""
+
+FDB_ENTRIES_DDL_SQLITE = """
+CREATE TABLE fdb_entries (
+    device_id INTEGER NOT NULL,
+    mac TEXT NOT NULL,
+    vlan_id INTEGER,
+    ifindex INTEGER,
+    first_seen TIMESTAMP,
+    updated_at TIMESTAMP,
+    PRIMARY KEY (device_id, mac)
+)
+"""
+
+LLDP_NEIGHBORS_DDL_SQLITE = """
+CREATE TABLE lldp_neighbors (
+    device_id INTEGER NOT NULL,
+    local_ifindex INTEGER NOT NULL,
+    remote_sysname TEXT,
+    remote_port TEXT,
+    remote_sysdesc TEXT,
+    remote_chassis TEXT,
+    updated_at TIMESTAMP,
+    PRIMARY KEY (device_id, local_ifindex)
+)
+"""
+
+SWITCH_VLANS_DDL_SQLITE = """
+CREATE TABLE switch_vlans (
+    device_id INTEGER NOT NULL,
+    vlan_id INTEGER NOT NULL,
+    name TEXT,
+    admin_up INTEGER,
+    untagged_count INTEGER,
+    tagged_count INTEGER,
+    port_map TEXT,
+    updated_at TIMESTAMP,
+    PRIMARY KEY (device_id, vlan_id)
+)
+"""
+
+STACK_MEMBERS_DDL_SQLITE = """
+CREATE TABLE stack_members (
+    device_id INTEGER NOT NULL,
+    slot INTEGER NOT NULL,
+    role TEXT,
+    status TEXT,
+    serial TEXT,
+    fw_version TEXT,
+    uptime_s INTEGER,
+    cpu_pct REAL,
+    mem_pct REAL,
+    temp_c REAL,
+    fans TEXT,
+    psus TEXT,
+    warn_msg TEXT,
+    updated_at TIMESTAMP,
+    PRIMARY KEY (device_id, slot)
+)
+"""
+
+
 def create_core_tables(engine) -> None:
     """Create the tables the poller / collectors / engine / API touch (SQLite)."""
     from sqlalchemy import text
@@ -198,6 +286,11 @@ def create_core_tables(engine) -> None:
             SITES_DDL_SQLITE,
             FIBER_LINKS_DDL_SQLITE,
             FIBER_LINK_STATE_DDL_SQLITE,
+            SWITCH_PORTS_DDL_SQLITE,
+            FDB_ENTRIES_DDL_SQLITE,
+            LLDP_NEIGHBORS_DDL_SQLITE,
+            SWITCH_VLANS_DDL_SQLITE,
+            STACK_MEMBERS_DDL_SQLITE,
         ):
             conn.execute(text(ddl))
 
