@@ -68,6 +68,20 @@ OID = {
     "vlan_name": "1.3.6.1.4.1.1916.1.2.1.2.1.2",
     "vlan_vid": "1.3.6.1.4.1.1916.1.2.1.2.1.10",
     "vlan_admin": "1.3.6.1.4.1.1916.1.2.1.2.1.12",
+    # PoE per-port: standard pethPsePortTable (index slot.port) + Extreme
+    # measured power (milliwatts). Fixture: tests/fixtures/snmp_exos_poe.txt.
+    "poe_admin": "1.3.6.1.2.1.105.1.1.1.3",
+    "poe_detect": "1.3.6.1.2.1.105.1.1.1.6",
+    "poe_class": "1.3.6.1.2.1.105.1.1.1.10",
+    "poe_power_mw": "1.3.6.1.4.1.1916.1.27.2.1.1.6",
+    # PoE per-slot budgets: EXTREME-POE-MIB extremePethPseSlotTable (index =
+    # slot; watts). OIDs/units per the owner's Zabbix template (2026-07-16).
+    "poe_slot_budget": "1.3.6.1.4.1.1916.1.27.1.2.1.2",
+    "poe_slot_alloc": "1.3.6.1.4.1.1916.1.27.1.2.1.3",
+    "poe_slot_status": "1.3.6.1.4.1.1916.1.27.1.2.1.8",
+    "poe_slot_avail": "1.3.6.1.4.1.1916.1.27.1.2.1.10",
+    "poe_slot_capacity": "1.3.6.1.4.1.1916.1.27.1.2.1.11",
+    "poe_slot_measured": "1.3.6.1.4.1.1916.1.27.1.2.1.14",
     # Extreme stacking + per-slot sensors:
     "stack_status": "1.3.6.1.4.1.1916.1.33.2.1.3",
     "stack_temp": "1.3.6.1.4.1.1916.1.33.2.1.21",
@@ -87,6 +101,12 @@ _TYPE_PREFIX = re.compile(
 _OPER = {"1": "up", "2": "down", "3": "unknown", "4": "unknown", "5": "unknown",
          "6": "absent", "7": "down"}
 _DUPLEX = {"1": "unknown", "2": "half", "3": "full"}
+# extremePethSlotPoeStatus (per the owner's template description).
+_POE_SLOT_STATUS = {
+    "1": "initializing", "2": "operational", "3": "downloadFail",
+    "4": "calibrationRequired", "5": "invalidFirmware", "6": "mismatchVersion",
+    "7": "updating", "8": "invalidDevice", "9": "notOperational", "10": "other",
+}
 
 
 def _clean_value(raw: str) -> str:
@@ -275,6 +295,61 @@ def build_vlans(walks: dict[str, dict[str, str]]) -> list[dict]:
     return rows
 
 
+def build_poe_ports(walks: dict[str, dict[str, str]]) -> list[dict]:
+    """pethPsePortTable (+ Extreme measured mW) → per-port PoE rows.
+
+    Index is ``slot.port`` → ifIndex ``slot*1000 + port`` (same EXOS scheme
+    as the port names). Ports whose detection status reads ``0`` are not
+    PoE-capable on EXOS and are skipped — their columns stay NULL, never a
+    fabricated "off". Class value is IEEE class + 1 (1 → class0).
+    """
+    detects = walks.get("poe_detect", {})
+    rows: list[dict] = []
+    for idx, detect_raw in detects.items():
+        parts = idx.split(".")
+        if len(parts) != 2:
+            continue
+        slot, port = _to_int(parts[0]), _to_int(parts[1])
+        if slot is None or port is None:
+            continue
+        detect = _to_int(_enum_int(detect_raw) or detect_raw)
+        if not detect:  # 0 -> not a PoE port
+            continue
+        cls = _to_int(_enum_int(walks.get("poe_class", {}).get(idx)))
+        mw = _to_int(walks.get("poe_power_mw", {}).get(idx))
+        rows.append({
+            "ifindex": slot * 1000 + port,
+            "poe_admin": 1 if _enum_int(walks.get("poe_admin", {}).get(idx)) == "1" else 0,
+            "poe_delivering": 1 if detect == 3 else 0,
+            "poe_class": f"class{cls - 1}" if cls and cls >= 1 else None,
+            "poe_watts": round(mw / 1000.0, 1) if mw is not None else None,
+        })
+    return rows
+
+
+def build_poe_slots(walks: dict[str, dict[str, str]]) -> list[dict]:
+    """extremePethPseSlotTable → per-slot budget rows (watts)."""
+    slots = set()
+    for k in ("poe_slot_budget", "poe_slot_status", "poe_slot_avail"):
+        slots.update(walks.get(k, {}))
+    rows: list[dict] = []
+    for idx in sorted(slots, key=lambda s: _to_int(s) or 0):
+        slot = _to_int(idx)
+        if slot is None:
+            continue
+        g = walks.get
+        rows.append({
+            "slot": slot,
+            "poe_status": _POE_SLOT_STATUS.get(_enum_int(g("poe_slot_status", {}).get(idx)) or ""),
+            "poe_budget_w": _to_int(g("poe_slot_budget", {}).get(idx)),
+            "poe_alloc_w": _to_int(g("poe_slot_alloc", {}).get(idx)),
+            "poe_avail_w": _to_int(g("poe_slot_avail", {}).get(idx)),
+            "poe_capacity_w": _to_int(g("poe_slot_capacity", {}).get(idx)),
+            "poe_measured_w": _to_int(g("poe_slot_measured", {}).get(idx)),
+        })
+    return rows
+
+
 def build_stack(walks: dict[str, dict[str, str]]) -> list[dict]:
     slots = set()
     for k in ("stack_status", "stack_temp", "cpu_5m", "mem_total"):
@@ -359,6 +434,10 @@ _SWEEP_OIDS = {
               ["if_oper", "if_admin", "if_descr", "if_type", "if_name", "if_alias",
                "if_highspeed", "if_hc_in_octets", "if_hc_out_octets",
                "if_in_errors", "if_out_errors", "if_in_discards", "if_out_discards", "duplex"]),
+    "poe": ("sweep_poe", "poe_interval_s",
+            ["poe_admin", "poe_detect", "poe_class", "poe_power_mw",
+             "poe_slot_budget", "poe_slot_alloc", "poe_slot_status",
+             "poe_slot_avail", "poe_slot_capacity", "poe_slot_measured"]),
     "fdb": ("sweep_fdb", "fdb_interval_s", ["fdb_port", "base_port_ifindex"]),
     "lldp": ("sweep_lldp", "lldp_interval_s",
              ["lldp_sysname", "lldp_portid", "lldp_portdesc", "lldp_sysdesc", "lldp_chassis"]),
@@ -387,8 +466,8 @@ class SnmpInventory:
         # fastest configured interval drives the supervised task; each sweep is
         # gated internally by its own interval.
         self.interval_s = float(min(
-            cfg.ports_interval_s, cfg.fdb_interval_s, cfg.lldp_interval_s,
-            cfg.vlans_interval_s, cfg.stack_interval_s,
+            cfg.ports_interval_s, cfg.poe_interval_s, cfg.fdb_interval_s,
+            cfg.lldp_interval_s, cfg.vlans_interval_s, cfg.stack_interval_s,
         ))
         # The run budget is deliberately NOT the fastest interval: the first
         # run has every sweep due at once (~29 bulkwalks/switch fleet-wide)
@@ -448,7 +527,7 @@ class SnmpInventory:
     # Fleet-pass order when several sweeps are due at once: cheap/high-cadence
     # first, so a cancelled run has already banked the data operators watch
     # most (ports, stack) before the heavy FDB walk starts.
-    _SWEEP_ORDER = ("ports", "stack", "fdb", "lldp", "vlans")
+    _SWEEP_ORDER = ("ports", "stack", "poe", "fdb", "lldp", "vlans")
 
     def _check_credentials(self) -> None:
         """Fail loud on credentials that can only produce fleet-wide silent
@@ -535,6 +614,9 @@ class SnmpInventory:
         if "ports" in due:
             walks = await self._walk_keys(host, _SWEEP_OIDS["ports"][2])
             written += self._write_ports(dev_id, build_ports(walks))
+        if "poe" in due:
+            walks = await self._walk_keys(host, _SWEEP_OIDS["poe"][2])
+            written += self._write_poe(dev_id, build_poe_ports(walks), build_poe_slots(walks))
         if "fdb" in due:
             walks = await self._walk_keys(host, _SWEEP_OIDS["fdb"][2])
             rows = build_fdb(walks["fdb_port"], walks["base_port_ifindex"])
@@ -602,6 +684,32 @@ class SnmpInventory:
                     {"d": dev_id, **{f"k{i}": v for i, v in enumerate(seen)}},
                 )
         return len(rows)
+
+    def _write_poe(self, dev_id: int, port_rows: list[dict], slot_rows: list[dict]) -> int:
+        """Partial UPDATEs onto rows the ports/stack sweeps own. Deliberately:
+        no INSERT (a port/slot unseen by its owning sweep doesn't exist yet —
+        the next PoE pass catches it), no prune, and no ``updated_at`` bump
+        (freshness must keep reflecting the owning sweep, or a stalled ports
+        sweep would hide behind PoE-refreshed timestamps — §4.5)."""
+        with self.engine.begin() as conn:
+            if port_rows:
+                conn.execute(
+                    text("UPDATE switch_ports SET poe_admin = :poe_admin, "
+                         "poe_delivering = :poe_delivering, poe_class = :poe_class, "
+                         "poe_watts = :poe_watts "
+                         "WHERE device_id = :device_id AND ifindex = :ifindex"),
+                    [{**r, "device_id": dev_id} for r in port_rows],
+                )
+            if slot_rows:
+                conn.execute(
+                    text("UPDATE stack_members SET poe_status = :poe_status, "
+                         "poe_budget_w = :poe_budget_w, poe_alloc_w = :poe_alloc_w, "
+                         "poe_avail_w = :poe_avail_w, poe_capacity_w = :poe_capacity_w, "
+                         "poe_measured_w = :poe_measured_w "
+                         "WHERE device_id = :device_id AND slot = :slot"),
+                    [{**r, "device_id": dev_id} for r in slot_rows],
+                )
+        return len(port_rows) + len(slot_rows)
 
     def _write_ports(self, dev_id: int, rows: list[dict]) -> int:
         now, now_ts = self._now(), time.time()

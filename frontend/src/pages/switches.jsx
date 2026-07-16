@@ -350,33 +350,78 @@ function StackTab({ stack }) {
   );
 }
 
-function PoeTab({ ports }) {
-  const withPoe = (ports || []).filter((p) => p.poe_admin !== null || p.poe_delivering !== null || p.poe_watts !== null);
+function PoeBudgetBar({ used, avail }) {
+  if (!avail) return null;
+  const pct = Math.min(100, (used / avail) * 100);
+  const color = pct >= 90 ? sevColor("crit") : pct >= 75 ? sevColor("warn") : sevColor("ok");
   return (
-    <Card kicker="PoE">
-      {withPoe.length === 0 ? (
-        <div className="msg">
-          The PoE sweep is a deferred 10.1 slice (needs a PoE fixture from a
-          real stack — spec 10 progress log). Per-port PoE state and the budget
-          rings render here once it lands; nothing is fabricated meanwhile.
-        </div>
-      ) : (
-        <table className="grid">
-          <thead><tr><th>Port</th><th>Admin</th><th>Delivering</th><th>Class</th><th>Watts</th></tr></thead>
-          <tbody>
-            {withPoe.map((p) => (
-              <tr key={p.ifindex}>
-                <td className="mono">{p.name || p.ifindex}</td>
-                <td>{p.poe_admin === null ? "—" : p.poe_admin ? "enabled" : "disabled"}</td>
-                <td>{p.poe_delivering === null ? "—" : p.poe_delivering ? "yes" : "no"}</td>
-                <td className="mono dim">{p.poe_class ?? "—"}</td>
-                <td className="mono">{p.poe_watts ?? "—"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </Card>
+    <div className="pd-bar" style={{ width: 140 }}>
+      <i style={{ width: `${Math.max(pct, used ? 2 : 0)}%`, background: color }} />
+    </div>
+  );
+}
+
+function PoeTab({ ports, stack }) {
+  const slots = (stack || []).filter((m) => m.poe_status || m.poe_budget_w !== null);
+  const withPoe = (ports || []).filter(
+    (p) => p.poe_admin !== null || p.poe_delivering !== null || p.poe_watts !== null);
+  const delivering = withPoe.filter((p) => p.poe_delivering)
+    .sort((a, b) => (b.poe_watts || 0) - (a.poe_watts || 0));
+  return (
+    <React.Fragment>
+      <Card kicker="Per-member PoE budget" title="Slot budgets (EXTREME-POE-MIB)">
+        {slots.length === 0 ? (
+          <div className="msg">No slot PoE data yet — the poe sweep hasn't run against this switch.</div>
+        ) : (
+          <table className="grid">
+            <thead>
+              <tr><th>Member</th><th>Status</th><th>Measured</th><th>Allocated</th>
+                  <th>Usage</th><th>Available</th><th>Budget</th><th>HW max</th></tr>
+            </thead>
+            <tbody>
+              {slots.map((m) => (
+                <tr key={m.slot}>
+                  <td className="mono">{m.slot}</td>
+                  <td style={m.poe_status && m.poe_status !== "operational"
+                        ? { color: sevColor("warn"), fontWeight: 600 } : undefined}>
+                    {m.poe_status || "—"}</td>
+                  <td className="mono">{m.poe_measured_w ?? "—"} W</td>
+                  <td className="mono dim">{m.poe_alloc_w ?? "—"} W</td>
+                  <td><PoeBudgetBar used={m.poe_measured_w || 0} avail={m.poe_avail_w} /></td>
+                  <td className="mono">{m.poe_avail_w ?? "—"} W</td>
+                  <td className="mono dim">{m.poe_budget_w ?? "—"} W</td>
+                  <td className="mono dim">{m.poe_capacity_w ?? "—"} W</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+      <Card kicker={withPoe.length
+          ? `${delivering.length} delivering / ${withPoe.length} PoE-capable port(s)`
+          : "Per-port PoE"}>
+        {withPoe.length === 0 ? (
+          <div className="msg">No per-port PoE data yet — non-PoE ports stay blank, never fabricated.</div>
+        ) : (
+          <table className="grid">
+            <thead><tr><th>Port</th><th>Admin</th><th>Delivering</th><th>Class</th><th>Draw</th></tr></thead>
+            <tbody>
+              {[...delivering, ...withPoe.filter((p) => !p.poe_delivering)].map((p) => (
+                <tr key={p.ifindex}>
+                  <td className="mono">{p.name || p.ifindex}</td>
+                  <td>{p.poe_admin === null ? "—" : p.poe_admin ? "enabled" : "disabled"}</td>
+                  <td>{p.poe_delivering === null ? "—"
+                        : p.poe_delivering ? <span style={{ color: sevColor("ok"), fontWeight: 600 }}>yes</span>
+                        : <span className="dim">searching</span>}</td>
+                  <td className="mono dim">{p.poe_class ?? "—"}</td>
+                  <td className="mono">{p.poe_delivering && p.poe_watts !== null ? `${p.poe_watts} W` : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+    </React.Fragment>
   );
 }
 
@@ -526,6 +571,8 @@ export function SwitchesPage({ id }) {
   const maxUtil = Math.max(0, ...(ports || []).map((p) => p.util_pct || 0));
   const maxCpu = Math.max(0, ...stack.map((m) => m.cpu_pct || 0));
   const maxTemp = Math.max(0, ...stack.map((m) => m.temp_c || 0));
+  const poeUsed = stack.reduce((n, m) => n + (m.poe_measured_w || 0), 0);
+  const poeAvail = stack.reduce((n, m) => n + (m.poe_avail_w || 0), 0);
   const portsAge = current ? ageOf(current.ports_updated_at) : null;
 
   const talkers = (ports || [])
@@ -584,7 +631,12 @@ export function SwitchesPage({ id }) {
               <div className="stat-row">
                 <div className="stat"><div className="stat-value">{stack.length || "—"}</div><div className="stat-label">Stack members</div></div>
                 <div className="stat"><div className="stat-value">{ports ? `${upCount}/${ports.length}` : "…"}</div><div className="stat-label">Active ports</div></div>
-                <div className="stat"><div className="stat-value">—</div><div className="stat-label">PoE budget</div></div>
+                <div className="stat">
+                  <div className="stat-value" style={poeAvail && poeUsed / poeAvail >= 0.75 ? { color: sevColor("warn") } : undefined}>
+                    {poeAvail ? `${poeUsed}/${poeAvail} W` : "—"}
+                  </div>
+                  <div className="stat-label">PoE draw / budget</div>
+                </div>
                 <div className="stat"><div className="stat-value">{maxUtil ? `${maxUtil}%` : "—"}</div><div className="stat-label">Top port util</div></div>
                 <div className="stat"><div className="stat-value" style={errCount ? { color: sevColor("warn") } : undefined}>{errCount}</div><div className="stat-label">Errors (Δ sweep)</div></div>
                 <div className="stat"><div className="stat-value">{maxCpu ? `${maxCpu}%` : "—"}</div><div className="stat-label">CPU (max slot)</div></div>
@@ -639,7 +691,7 @@ export function SwitchesPage({ id }) {
             : tab === "topology" ? <TopologyTab switchId={activeId} portName={portName} />
             : tab === "vlans" ? <VlansTab switchId={activeId} />
             : tab === "stack" ? <StackTab stack={stack} />
-            : tab === "poe" ? <PoeTab ports={ports} />
+            : tab === "poe" ? <PoeTab ports={ports} stack={stack} />
             : tab === "triggers" ? <TriggersTab switchId={activeId} />
             : <BackupsTab switchId={activeId} />}
         </div>

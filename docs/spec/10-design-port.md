@@ -402,7 +402,8 @@ Source: owner's "Extreme EXOS by SNMP" Zabbix 7.4 template. Numeric roots the
 | lldp | lldpRem sysName `1.0.8802.1.1.2.1.4.1.1.9`, portId `…7`, portDesc `…8`, sysDesc `…10`, chassisId `…5` (index `timemark.localPort.remIdx`) |
 | vlans | extremeVlan VID `1.3.6.1.4.1.1916.1.2.1.2.1.10`, name `…1.2.1.2.1.2`, admin `…1.2.1.2.1.12` |
 | stack | member status `1.3.6.1.4.1.1916.1.33.2.1.3`, temp `…33.2.1.21`, CPU-5m `…32.1.4.1.9`, memTotal `…32.2.2.1.2`, memAvail `…32.2.2.1.3` |
-| (not yet) | PoE `1.3.6.1.2.1.105.1.1.1.{6 detect,10 class}` + Extreme measured `1.3.6.1.4.1.1916.1.27.2.1.1.6`; ENTITY serial/model/fw `1.3.6.1.2.1.47.1.1.1.1.{11,2,9}`; fans `…1916.1.1.1.9.1.*`, PSUs `…1916.1.1.1.27.1.*` |
+| poe | pethPsePort admin `1.3.6.1.2.1.105.1.1.1.3`, detect `…6`, class `…10` (index slot.port → ifIndex slot*1000+port); Extreme per-port measured **mW** `1.3.6.1.4.1.1916.1.27.2.1.1.6`; extremePethPseSlotTable (index slot, **W**): budget `…1.27.1.2.1.2`, allocated `…3`, status `…8`, available `…10`, capacity `…11`, measured `…14` |
+| (not yet) | ENTITY serial/model/fw `1.3.6.1.2.1.47.1.1.1.1.{11,2,9}`; fans `…1916.1.1.1.9.1.*`, PSUs `…1916.1.1.1.27.1.*` |
 
 **EXOS ifIndex semantics** (owner, 2026-07-16, from the live fleet): front-panel
 ports are `slot*1000 + port` with port 1–199 (e.g. `1001` = 1:1). Excluded from
@@ -484,14 +485,31 @@ looping; `run_guarded` catches `CancelledError`, records it into
 `collector_health`, and re-raises (§4.5). Web-editable via the settings
 registry. Regression tests cover all three.
 
+**2026-07-16 — PoE sweep landed** (owner captured the per-port walk from a
+live 8-slot stack + supplied the slot-table OIDs/units from the production
+Zabbix template). New `poe` sweep (5 min default, own enable flag):
+pethPsePortTable admin/detect/class + Extreme per-port measured power (mW →
+W) fill the `switch_ports` PoE columns; extremePethPseSlotTable budgets
+(watts) land in `stack_members` via migration `009`. The PoE pass does
+**partial UPDATEs only** — no inserts, no prune, and no `updated_at` bump, so
+freshness keeps reflecting the owning ports/stack sweeps (§4.5; tested).
+Ports with detection status 0 (not PoE-capable on EXOS) stay NULL. PoE tab
+now renders slot budget bars + per-port draw; the KPI strip shows real
+draw/budget. Fixture `snmp_exos_poe.txt` (per-port lines verbatim from the
+owner's walk; slot lines template-derived — swap in a real
+`snmpbulkwalk -On <switch> 1.3.6.1.4.1.1916.1.27.1.2.1` when captured).
+
 ## Next session
 
-- **Finish the deferred 10.1 sweeps**: PoE (needs a PoE fixture from a real
-  stack), ENTITY serial/fw, fans/PSUs; add the Q-BRIDGE per-VLAN FDB walk if
-  VLAN-scoped FDB is wanted. The page renders them the moment the columns
-  populate.
-- Owner: after the fix, run `python -m netmon.poller.snmp_inventory --once`
-  at fleet size and set `run_timeout_s` from the measured duration.
+- **Remaining 10.1 extras**: ENTITY serial/model/fw, fans/PSUs (fixture
+  needed: `snmpbulkwalk -On <switch> 1.3.6.1.2.1.47.1.1.1.1`); Q-BRIDGE
+  per-VLAN FDB walk if VLAN-scoped FDB is wanted; capture a real
+  extremePethPseSlotTable walk to replace the template-derived fixture lines.
+- Owner: set `run_timeout_s` from the measured `--once` duration at fleet
+  size once the batched writes land (expect ports-only ticks well under 30s
+  at 69 switches).
+- Then **Phase 10.2 Wireless** (XIQ detail/clients/SSID cycles, wireless API,
+  XIQ page + AP Detail).
 - **Phase 10.3 unlocks the FDB⋈PF join**: once `pf_nodes` exists, extend
   `/api/switches/{id}/ports/{ifindex}` to enrich each MAC with PF identity
   (LEFT JOIN `pf_nodes` ON mac) — the design's marquee port-detail feature.

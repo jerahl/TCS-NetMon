@@ -98,6 +98,15 @@ def test_migration_versions_are_unique():
     assert len(versions) == len(set(versions)), f"duplicate migration version in {versions}"
 
 
+def test_009_adds_stack_poe_columns():
+    migs = {m.version: m for m in discover_migrations()}
+    assert "009" in migs, "expected 009 stack-PoE migration"
+    sql = migs["009"].path.read_text()
+    for col in ("poe_status", "poe_budget_w", "poe_avail_w", "poe_capacity_w",
+                "poe_alloc_w", "poe_measured_w"):
+        assert f"ADD COLUMN {col}" in sql, f"missing column {col}"
+
+
 def test_every_migration_has_rollback_note():
     for mig in discover_migrations():
         text_ = mig.path.read_text().lower()

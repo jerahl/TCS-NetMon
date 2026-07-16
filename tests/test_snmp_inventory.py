@@ -14,6 +14,8 @@ from netmon.poller import snmp_inventory as si
 from tests.conftest import create_core_tables
 
 FIXTURE = (Path(__file__).parent / "fixtures" / "snmp_exos_stack.txt").read_text()
+POE_FIXTURE = (Path(__file__).parent / "fixtures" / "snmp_exos_poe.txt").read_text()
+ALL_FIXTURES = FIXTURE + "\n" + POE_FIXTURE
 
 
 def _walks(keys):
@@ -93,6 +95,32 @@ def test_build_vlans():
     assert rows[100]["name"] == "Data" and rows[100]["admin_up"] == 1
 
 
+def test_build_poe_ports():
+    walks = {k: si.parse_walk(POE_FIXTURE, si.OID[k]) for k in si._SWEEP_OIDS["poe"][2]}
+    rows = {r["ifindex"]: r for r in si.build_poe_ports(walks)}
+    # 2:2 reads detection status 0 -> not PoE-capable -> skipped entirely.
+    assert set(rows) == {1001, 1002}
+    p = rows[1001]  # delivering: real values from the owner's walk
+    assert p["poe_delivering"] == 1 and p["poe_admin"] == 1
+    assert p["poe_class"] == "class3"       # enum 4 -> IEEE class 3
+    assert p["poe_watts"] == 5.3            # 5300 mW
+    q = rows[1002]  # searching
+    assert q["poe_delivering"] == 0 and q["poe_class"] == "class0"
+    assert q["poe_watts"] == 0
+
+
+def test_build_poe_slots():
+    walks = {k: si.parse_walk(POE_FIXTURE, si.OID[k]) for k in si._SWEEP_OIDS["poe"][2]}
+    rows = {r["slot"]: r for r in si.build_poe_slots(walks)}
+    assert set(rows) == {1, 2}
+    s1 = rows[1]
+    assert s1["poe_status"] == "operational"
+    assert s1["poe_budget_w"] == 380 and s1["poe_avail_w"] == 380
+    assert s1["poe_capacity_w"] == 720
+    assert s1["poe_alloc_w"] == 45 and s1["poe_measured_w"] == 39
+    assert rows[2]["poe_status"] == "notOperational"
+
+
 def test_build_stack():
     rows = si.build_stack(_walks(si._SWEEP_OIDS["stack"][2]))
     assert len(rows) == 1
@@ -151,7 +179,9 @@ def _collector(engine):
 
     async def fake_walk(host, roots):
         assert host == "192.0.2.2"  # only the snmp-capable switch is swept
-        return {root: FIXTURE for root in roots}
+        # parse_walk filters by root, so serving the combined text for every
+        # root mimics a real device answering all tables.
+        return {root: ALL_FIXTURES for root in roots}
 
     c = si.SnmpInventory(engine, cfg, PollerConfig(snmp_community="test-ro"), walk_fn=fake_walk)
     c._force_all = True
@@ -162,7 +192,8 @@ def test_run_once_populates_all_tables(tmp_path):
     engine = _engine_with_switch(tmp_path)
     c = _collector(engine)
     written = asyncio.run(c.run_once())
-    assert written == 2 + 2 + 1 + 2 + 1  # ports + fdb + lldp + vlans + stack
+    # ports + fdb + lldp + vlans + stack + poe (2 port updates + 2 slot rows)
+    assert written == 2 + 2 + 1 + 2 + 1 + 4
 
     ports = db.fetch_all(engine, "SELECT * FROM switch_ports WHERE device_id=1 ORDER BY ifindex")
     assert [p["oper_state"] for p in ports] == ["up", "down"]
@@ -176,6 +207,29 @@ def test_run_once_populates_all_tables(tmp_path):
     # First sweep leaves rates NULL (no prior sample) but stores prev_counters.
     assert ports[0]["in_kbps"] is None
     assert json.loads(ports[0]["prev_counters"])["in_octets"] == 1000000
+
+    # PoE landed on the port rows (1:1 delivering 5.3 W) and the stack slot.
+    assert ports[0]["poe_delivering"] == 1 and ports[0]["poe_watts"] == 5.3
+    assert ports[0]["poe_class"] == "class3"
+    assert ports[1]["poe_delivering"] == 0
+    assert stack["poe_status"] == "operational" and stack["poe_budget_w"] == 380
+    assert stack["poe_measured_w"] == 39
+
+
+def test_poe_update_never_bumps_owning_sweep_freshness(tmp_path):
+    """The PoE pass partially updates rows the ports sweep owns — it must not
+    refresh updated_at, or a stalled ports sweep would look fresh (§4.5)."""
+    engine = _engine_with_switch(tmp_path)
+    asyncio.run(_collector(engine).run_once())
+    before = db.fetch_one(
+        engine, "SELECT updated_at, poe_watts FROM switch_ports WHERE ifindex = 1001")
+    c2 = _collector(engine)
+    c2._write_poe(1, [{"ifindex": 1001, "poe_admin": 1, "poe_delivering": 1,
+                       "poe_class": "class3", "poe_watts": 7.7}], [])
+    after = db.fetch_one(
+        engine, "SELECT updated_at, poe_watts FROM switch_ports WHERE ifindex = 1001")
+    assert after["poe_watts"] == 7.7            # PoE data refreshed…
+    assert after["updated_at"] == before["updated_at"]  # …freshness untouched
 
 
 def test_run_once_prunes_disappeared_rows(tmp_path):

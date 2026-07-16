@@ -131,6 +131,8 @@ run_timeout_s = 900
 # Per-sweep enable flags + cadence (seconds). Ports fastest; FDB heaviest/slowest.
 sweep_ports = true
 ports_interval_s = 120
+sweep_poe = true
+poe_interval_s = 300
 sweep_fdb = true
 fdb_interval_s = 900
 sweep_lldp = true

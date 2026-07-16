@@ -126,6 +126,8 @@ class SnmpInventoryConfig:
     # per-sweep enable + interval (seconds)
     sweep_ports: bool = True
     ports_interval_s: int = 120
+    sweep_poe: bool = True
+    poe_interval_s: int = 300
     sweep_fdb: bool = True
     fdb_interval_s: int = 900
     sweep_lldp: bool = True
@@ -340,6 +342,8 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         run_timeout_s=_sint("run_timeout_s", 900),
         sweep_ports=_sbool("sweep_ports", True),
         ports_interval_s=_sint("ports_interval_s", 120),
+        sweep_poe=_sbool("sweep_poe", True),
+        poe_interval_s=_sint("poe_interval_s", 300),
         sweep_fdb=_sbool("sweep_fdb", True),
         fdb_interval_s=_sint("fdb_interval_s", 900),
         sweep_lldp=_sbool("sweep_lldp", True),

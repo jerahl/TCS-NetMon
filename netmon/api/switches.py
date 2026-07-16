@@ -65,7 +65,9 @@ def switch_detail(
     sw["stack"] = [dict(r) for r in db.fetch_all(
         engine,
         "SELECT slot, role, status, serial, fw_version, uptime_s, cpu_pct, mem_pct, "
-        "temp_c, fans, psus, warn_msg, updated_at FROM stack_members "
+        "temp_c, fans, psus, warn_msg, "
+        "poe_status, poe_budget_w, poe_alloc_w, poe_avail_w, poe_capacity_w, "
+        "poe_measured_w, updated_at FROM stack_members "
         "WHERE device_id = :d ORDER BY slot",
         {"d": sid},
     )]

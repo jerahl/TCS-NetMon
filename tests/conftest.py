@@ -274,6 +274,12 @@ CREATE TABLE stack_members (
     fans TEXT,
     psus TEXT,
     warn_msg TEXT,
+    poe_status TEXT,
+    poe_budget_w INTEGER,
+    poe_alloc_w INTEGER,
+    poe_avail_w INTEGER,
+    poe_capacity_w INTEGER,
+    poe_measured_w INTEGER,
     updated_at TIMESTAMP,
     PRIMARY KEY (device_id, slot)
 )
