@@ -265,6 +265,7 @@ CREATE TABLE stack_members (
     slot INTEGER NOT NULL,
     role TEXT,
     status TEXT,
+    model TEXT,
     serial TEXT,
     fw_version TEXT,
     uptime_s INTEGER,

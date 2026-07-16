@@ -151,6 +151,10 @@ REGISTRY: list[SettingDef] = [
     _d("snmp_inventory.sweep_stack", "bool", True, "Sweep: stack/env", attr="sweep_stack"),
     _d("snmp_inventory.stack_interval_s", "int", 300, "Stack interval (s)",
        attr="stack_interval_s", min=30),
+    _d("snmp_inventory.sweep_entity", "bool", True, "Sweep: entity inventory",
+       attr="sweep_entity"),
+    _d("snmp_inventory.entity_interval_s", "int", 3600, "Entity interval (s)",
+       attr="entity_interval_s", min=300),
 
     # --- engine ---
     _d("engine.enabled", "bool", False, "Enable alert engine", attr="enabled"),

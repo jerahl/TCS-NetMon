@@ -313,6 +313,10 @@ function VlansTab({ switchId }) {
   );
 }
 
+function parseJsonList(s) {
+  try { const v = JSON.parse(s); return Array.isArray(v) ? v : null; } catch { return null; }
+}
+
 function StackTab({ stack }) {
   if (!stack || stack.length === 0) {
     return <Card kicker="Stack"><EmptySweep what="stack-member" /></Card>;
@@ -321,30 +325,39 @@ function StackTab({ stack }) {
     <Card kicker={staleKicker(stack, "stack member(s)")}>
       <table className="grid">
         <thead>
-          <tr><th>Slot</th><th>Role</th><th>Status</th><th>Serial</th><th>Firmware</th>
-              <th>Uptime</th><th>CPU</th><th>Mem</th><th>Temp</th><th>Note</th></tr>
+          <tr><th>Slot</th><th>Role</th><th>Status</th><th>Model</th><th>Serial</th><th>EXOS</th>
+              <th>Uptime</th><th>CPU</th><th>Mem</th><th>Temp</th><th>Fans</th><th>PSUs</th><th>Note</th></tr>
         </thead>
         <tbody>
-          {stack.map((m) => (
-            <tr key={m.slot}>
-              <td className="mono">{m.slot}</td>
-              <td>{m.role || "—"}</td>
-              <td style={m.status && m.status !== "active" && m.status !== "up" ? { color: sevColor("warn") } : undefined}>
-                {m.status || "—"}</td>
-              <td className="mono dim">{m.serial || "—"}</td>
-              <td className="mono dim">{m.fw_version || "—"}</td>
-              <td className="mono">{fmtUptime(m.uptime_s)}</td>
-              <td className="mono">{m.cpu_pct !== null && m.cpu_pct !== undefined ? `${m.cpu_pct}%` : "—"}</td>
-              <td className="mono">{m.mem_pct !== null && m.mem_pct !== undefined ? `${m.mem_pct}%` : "—"}</td>
-              <td className="mono">{m.temp_c !== null && m.temp_c !== undefined ? `${m.temp_c}°C` : "—"}</td>
-              <td className="dim">{m.warn_msg || "—"}</td>
-            </tr>
-          ))}
+          {stack.map((m) => {
+            const fans = parseJsonList(m.fans);
+            const psus = parseJsonList(m.psus);
+            return (
+              <tr key={m.slot}>
+                <td className="mono">{m.slot}</td>
+                <td>{m.role || "—"}</td>
+                <td style={m.status && m.status !== "active" && m.status !== "up" ? { color: sevColor("warn") } : undefined}>
+                  {m.status || "—"}</td>
+                <td>{m.model || "—"}</td>
+                <td className="mono dim">{m.serial || "—"}</td>
+                <td className="mono dim">{m.fw_version || "—"}</td>
+                <td className="mono">{fmtUptime(m.uptime_s)}</td>
+                <td className="mono">{m.cpu_pct !== null && m.cpu_pct !== undefined ? `${m.cpu_pct}%` : "—"}</td>
+                <td className="mono">{m.mem_pct !== null && m.mem_pct !== undefined ? `${m.mem_pct}%` : "—"}</td>
+                <td className="mono">{m.temp_c !== null && m.temp_c !== undefined ? `${m.temp_c}°C` : "—"}</td>
+                <td className="mono dim" title={fans ? fans.join(", ") : undefined}>
+                  {fans ? fans.length : "—"}</td>
+                <td className="mono dim" title={psus ? psus.join(", ") : undefined}>
+                  {psus ? psus.length : "—"}</td>
+                <td className="dim">{m.warn_msg || "—"}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
       <div className="dim pd-note">
-        Serial / firmware / fans / PSUs populate when the ENTITY-MIB sweep lands
-        (deferred 10.1 slice — spec 10 progress log).
+        Model / serial / EXOS / fan+PSU presence come from the hourly ENTITY
+        sweep; fan RPM / PSU wattage sensors are a later Extreme-MIB extra.
       </div>
     </Card>
   );

@@ -15,7 +15,8 @@ from tests.conftest import create_core_tables
 
 FIXTURE = (Path(__file__).parent / "fixtures" / "snmp_exos_stack.txt").read_text()
 POE_FIXTURE = (Path(__file__).parent / "fixtures" / "snmp_exos_poe.txt").read_text()
-ALL_FIXTURES = FIXTURE + "\n" + POE_FIXTURE
+ENTITY_FIXTURE = (Path(__file__).parent / "fixtures" / "snmp_exos_entity.txt").read_text()
+ALL_FIXTURES = FIXTURE + "\n" + POE_FIXTURE + "\n" + ENTITY_FIXTURE
 
 
 def _walks(keys):
@@ -121,6 +122,23 @@ def test_build_poe_slots():
     assert rows[2]["poe_status"] == "notOperational"
 
 
+def test_build_entity_slots():
+    walks = {k: si.parse_walk(ENTITY_FIXTURE, si.OID[k]) for k in si._SWEEP_OIDS["entity"][2]}
+    rows = {r["slot"]: r for r in si.build_entity_slots(walks)}
+    assert set(rows) == {1, 2}
+    s1 = rows[1]
+    assert s1["model"] == "X465-48P"          # module descr, not the part number
+    assert s1["serial"] == "0000F-00001"
+    assert s1["fw_version"] == "33.5.1.6"
+    assert s1["fans"] == ["FanTray 1", "FanTray 2"]
+    assert s1["psus"] == ["bay 1: PowerSupply-Internal"]
+    s2 = rows[2]
+    assert s2["serial"] == "0000F-00002" and s2["fans"] == ["FanTray 1"]
+    # The VIM option module (class 9 in an "Option Slot" container) must not
+    # have overwritten any slot's identity.
+    assert all(r["model"] == "X465-48P" for r in rows.values())
+
+
 def test_build_stack():
     rows = si.build_stack(_walks(si._SWEEP_OIDS["stack"][2]))
     assert len(rows) == 1
@@ -192,8 +210,9 @@ def test_run_once_populates_all_tables(tmp_path):
     engine = _engine_with_switch(tmp_path)
     c = _collector(engine)
     written = asyncio.run(c.run_once())
-    # ports + fdb + lldp + vlans + stack + poe (2 port updates + 2 slot rows)
-    assert written == 2 + 2 + 1 + 2 + 1 + 4
+    # ports + fdb + lldp + vlans + stack + poe (2 ports + 2 slots)
+    # + entity (2 slots)
+    assert written == 2 + 2 + 1 + 2 + 1 + 4 + 2
 
     ports = db.fetch_all(engine, "SELECT * FROM switch_ports WHERE device_id=1 ORDER BY ifindex")
     assert [p["oper_state"] for p in ports] == ["up", "down"]
@@ -214,6 +233,12 @@ def test_run_once_populates_all_tables(tmp_path):
     assert ports[1]["poe_delivering"] == 0
     assert stack["poe_status"] == "operational" and stack["poe_budget_w"] == 380
     assert stack["poe_measured_w"] == 39
+
+    # Entity inventory landed on the same slot row.
+    assert stack["model"] == "X465-48P" and stack["serial"] == "0000F-00001"
+    assert stack["fw_version"] == "33.5.1.6"
+    assert json.loads(stack["fans"]) == ["FanTray 1", "FanTray 2"]
+    assert json.loads(stack["psus"]) == ["bay 1: PowerSupply-Internal"]
 
 
 def test_poe_update_never_bumps_owning_sweep_freshness(tmp_path):

@@ -141,6 +141,9 @@ sweep_vlans = true
 vlans_interval_s = 3600
 sweep_stack = true
 stack_interval_s = 300
+# ENTITY-MIB inventory (per-slot model/serial/EXOS version, fan/PSU presence).
+sweep_entity = true
+entity_interval_s = 3600
 
 [xiq]
 # ExtremeCloud IQ. Bearer token from XIQ Admin -> API Access Tokens.

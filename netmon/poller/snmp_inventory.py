@@ -82,6 +82,15 @@ OID = {
     "poe_slot_avail": "1.3.6.1.4.1.1916.1.27.1.2.1.10",
     "poe_slot_capacity": "1.3.6.1.4.1.1916.1.27.1.2.1.11",
     "poe_slot_measured": "1.3.6.1.4.1.1916.1.27.1.2.1.14",
+    # ENTITY-MIB physical inventory (fixture: snmp_exos_entity.txt). The
+    # Slot-N container (class 5) holds the switch module (class 9) whose
+    # descr is the human model and softwareRev the EXOS version; fans (7)
+    # and PSUs (6) carry their slot in descr / container descr.
+    "ent_descr": "1.3.6.1.2.1.47.1.1.1.1.2",
+    "ent_contained": "1.3.6.1.2.1.47.1.1.1.1.4",
+    "ent_class": "1.3.6.1.2.1.47.1.1.1.1.5",
+    "ent_sw": "1.3.6.1.2.1.47.1.1.1.1.10",
+    "ent_serial": "1.3.6.1.2.1.47.1.1.1.1.11",
     # Extreme stacking + per-slot sensors:
     "stack_status": "1.3.6.1.4.1.1916.1.33.2.1.3",
     "stack_temp": "1.3.6.1.4.1.1916.1.33.2.1.21",
@@ -350,6 +359,60 @@ def build_poe_slots(walks: dict[str, dict[str, str]]) -> list[dict]:
     return rows
 
 
+_SLOT_DESCR = re.compile(r"^Slot-(\d+)$")
+_SLOT_PREFIX = re.compile(r"^Slot-(\d+)\b")
+
+
+def build_entity_slots(walks: dict[str, dict[str, str]]) -> list[dict]:
+    """ENTITY-MIB → per-slot inventory: model/serial/EXOS version + fan/PSU
+    presence lists. Slot number comes from the ``Slot-N`` container descr
+    (modules in ``Slot-N Option Slot-M`` VIM containers are naturally
+    excluded because their container descr isn't exactly ``Slot-N``)."""
+    descr = walks.get("ent_descr", {})
+    cls = walks.get("ent_class", {})
+    contained = walks.get("ent_contained", {})
+
+    def _slot(slots: dict, n: int) -> dict:
+        return slots.setdefault(n, {"slot": n, "model": None, "serial": None,
+                                    "fw_version": None, "fans": [], "psus": []})
+
+    # class-5 containers whose descr is exactly "Slot-N" -> slot number.
+    container_slot: dict[str, int] = {}
+    for idx, d in descr.items():
+        m = _SLOT_DESCR.match((d or "").strip())
+        if m and _enum_int(cls.get(idx)) == "5":
+            container_slot[idx] = int(m.group(1))
+
+    slots: dict[int, dict] = {}
+    for idx, raw_cls in cls.items():
+        c = _enum_int(raw_cls)
+        if c == "9":  # module — the switch itself when directly in a Slot-N container
+            parent = str(_to_int(contained.get(idx)) or "")
+            if parent in container_slot:
+                s = _slot(slots, container_slot[parent])
+                s["model"] = (descr.get(idx) or "").strip() or None
+                s["serial"] = (walks.get("ent_serial", {}).get(idx) or "").strip() or None
+                s["fw_version"] = (walks.get("ent_sw", {}).get(idx) or "").strip() or None
+        elif c == "7":  # fan — "Slot-N FanTray M"
+            d = (descr.get(idx) or "").strip()
+            m = _SLOT_PREFIX.match(d)
+            if m:
+                _slot(slots, int(m.group(1)))["fans"].append(
+                    d[m.end():].strip() or d)
+        elif c == "6":  # PSU — slot + bay from its container's descr
+            parent = str(_to_int(contained.get(idx)) or "")
+            pd = (descr.get(parent) or "").strip()
+            m = _SLOT_PREFIX.match(pd)
+            if m:
+                bay = pd.rsplit(" ", 1)[-1]
+                label = (descr.get(idx) or "").strip() or "PSU"
+                _slot(slots, int(m.group(1)))["psus"].append(f"bay {bay}: {label}")
+    for s in slots.values():
+        s["fans"].sort()
+        s["psus"].sort()
+    return [slots[k] for k in sorted(slots)]
+
+
 def build_stack(walks: dict[str, dict[str, str]]) -> list[dict]:
     slots = set()
     for k in ("stack_status", "stack_temp", "cpu_5m", "mem_total"):
@@ -442,6 +505,8 @@ _SWEEP_OIDS = {
     "lldp": ("sweep_lldp", "lldp_interval_s",
              ["lldp_sysname", "lldp_portid", "lldp_portdesc", "lldp_sysdesc", "lldp_chassis"]),
     "vlans": ("sweep_vlans", "vlans_interval_s", ["vlan_name", "vlan_vid", "vlan_admin"]),
+    "entity": ("sweep_entity", "entity_interval_s",
+               ["ent_descr", "ent_contained", "ent_class", "ent_sw", "ent_serial"]),
     "stack": ("sweep_stack", "stack_interval_s",
               ["stack_status", "stack_temp", "cpu_5m", "mem_total", "mem_avail"]),
 }
@@ -468,6 +533,7 @@ class SnmpInventory:
         self.interval_s = float(min(
             cfg.ports_interval_s, cfg.poe_interval_s, cfg.fdb_interval_s,
             cfg.lldp_interval_s, cfg.vlans_interval_s, cfg.stack_interval_s,
+            cfg.entity_interval_s,
         ))
         # The run budget is deliberately NOT the fastest interval: the first
         # run has every sweep due at once (~29 bulkwalks/switch fleet-wide)
@@ -527,7 +593,7 @@ class SnmpInventory:
     # Fleet-pass order when several sweeps are due at once: cheap/high-cadence
     # first, so a cancelled run has already banked the data operators watch
     # most (ports, stack) before the heavy FDB walk starts.
-    _SWEEP_ORDER = ("ports", "stack", "poe", "fdb", "lldp", "vlans")
+    _SWEEP_ORDER = ("ports", "stack", "poe", "fdb", "lldp", "vlans", "entity")
 
     def _check_credentials(self) -> None:
         """Fail loud on credentials that can only produce fleet-wide silent
@@ -627,6 +693,9 @@ class SnmpInventory:
         if "vlans" in due:
             walks = await self._walk_keys(host, _SWEEP_OIDS["vlans"][2])
             written += self._replace(dev_id, "switch_vlans", "vlan_id", build_vlans(walks))
+        if "entity" in due:
+            walks = await self._walk_keys(host, _SWEEP_OIDS["entity"][2])
+            written += self._write_entity(dev_id, build_entity_slots(walks))
         if "stack" in due:
             walks = await self._walk_keys(host, _SWEEP_OIDS["stack"][2])
             written += self._replace(dev_id, "stack_members", "slot", build_stack(walks))
@@ -710,6 +779,26 @@ class SnmpInventory:
                     [{**r, "device_id": dev_id} for r in slot_rows],
                 )
         return len(port_rows) + len(slot_rows)
+
+    def _write_entity(self, dev_id: int, slot_rows: list[dict]) -> int:
+        """Partial UPDATEs of stack_members inventory columns (same contract
+        as _write_poe: no insert, no prune, no updated_at bump — the stack
+        sweep owns the rows and their freshness)."""
+        if not slot_rows:
+            return 0
+        params = [{
+            "device_id": dev_id, "slot": r["slot"], "model": r["model"],
+            "serial": r["serial"], "fw_version": r["fw_version"],
+            "fans": json.dumps(r["fans"]), "psus": json.dumps(r["psus"]),
+        } for r in slot_rows]
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("UPDATE stack_members SET model = :model, serial = :serial, "
+                     "fw_version = :fw_version, fans = :fans, psus = :psus "
+                     "WHERE device_id = :device_id AND slot = :slot"),
+                params,
+            )
+        return len(slot_rows)
 
     def _write_ports(self, dev_id: int, rows: list[dict]) -> int:
         now, now_ts = self._now(), time.time()

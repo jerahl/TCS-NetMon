@@ -403,7 +403,8 @@ Source: owner's "Extreme EXOS by SNMP" Zabbix 7.4 template. Numeric roots the
 | vlans | extremeVlan VID `1.3.6.1.4.1.1916.1.2.1.2.1.10`, name `…1.2.1.2.1.2`, admin `…1.2.1.2.1.12` |
 | stack | member status `1.3.6.1.4.1.1916.1.33.2.1.3`, temp `…33.2.1.21`, CPU-5m `…32.1.4.1.9`, memTotal `…32.2.2.1.2`, memAvail `…32.2.2.1.3` |
 | poe | pethPsePort admin `1.3.6.1.2.1.105.1.1.1.3`, detect `…6`, class `…10` (index slot.port → ifIndex slot*1000+port); Extreme per-port measured **mW** `1.3.6.1.4.1.1916.1.27.2.1.1.6`; extremePethPseSlotTable (index slot, **W**): budget `…1.27.1.2.1.2`, allocated `…3`, status `…8`, available `…10`, capacity `…11`, measured `…14` |
-| (not yet) | ENTITY serial/model/fw `1.3.6.1.2.1.47.1.1.1.1.{11,2,9}`; fans `…1916.1.1.1.9.1.*`, PSUs `…1916.1.1.1.27.1.*` |
+| entity | ENTITY-MIB descr `1.3.6.1.2.1.47.1.1.1.1.2`, containedIn `…4`, class `…5`, softwareRev `…10` (EXOS version), serial `…11`. Tree (from the live walk): Stack(11) → `Slot-N` container(5) → module(9, descr = human model); PSUs class 6 in `Slot-N PowerSupply Slot M` containers; fans class 7 descr `Slot-N FanTray M`; VIM modules sit in `Option Slot` containers (excluded by exact `Slot-N` match) |
+| (not yet) | Extreme fan RPM `…1916.1.1.1.9.1.*` / PSU wattage `…1916.1.1.1.27.1.*` sensors (presence now comes from ENTITY); extremeStackMemberStatus enum mapping (raw value stored — confirm enum on a real stack) |
 
 **EXOS ifIndex semantics** (owner, 2026-07-16, from the live fleet): front-panel
 ports are `slot*1000 + port` with port 1–199 (e.g. `1001` = 1:1). Excluded from
@@ -499,15 +500,24 @@ draw/budget. Fixture `snmp_exos_poe.txt` (per-port lines verbatim from the
 owner's walk; slot lines template-derived — swap in a real
 `snmpbulkwalk -On <switch> 1.3.6.1.4.1.1916.1.27.1.2.1` when captured).
 
+**2026-07-16 — entity sweep landed** (owner captured the ENTITY-MIB walk from
+the live 8-slot X465 stack). New `entity` sweep (1 h default, own flag):
+per-slot model (module descr), serial, EXOS version (softwareRev), and
+fan/PSU presence lists → `stack_members` (`model` via migration `010`;
+fans/psus fill the existing JSON columns). Same partial-update contract as
+the PoE pass (no insert/prune/updated_at). Stack tab shows
+Model/Serial/EXOS/fan+PSU counts (hover for detail). Fixture
+`snmp_exos_entity.txt` (shape verbatim, serials faked). **Phase 10.1 is now
+feature-complete**; remaining polish is sensor detail + the enum note below.
+
 ## Next session
 
-- **Remaining 10.1 extras**: ENTITY serial/model/fw, fans/PSUs (fixture
-  needed: `snmpbulkwalk -On <switch> 1.3.6.1.2.1.47.1.1.1.1`); Q-BRIDGE
-  per-VLAN FDB walk if VLAN-scoped FDB is wanted; capture a real
-  extremePethPseSlotTable walk to replace the template-derived fixture lines.
-- Owner: set `run_timeout_s` from the measured `--once` duration at fleet
-  size once the batched writes land (expect ports-only ticks well under 30s
-  at 69 switches).
+- **10.1 leftovers (small)**: capture a real extremePethPseSlotTable walk
+  (`snmpbulkwalk -On <switch> 1.3.6.1.4.1.1916.1.27.1.2.1`) to replace the
+  template-derived PoE fixture lines; confirm the extremeStackMemberStatus
+  enum on a real stack (the Stack tab currently shows the raw value); Extreme
+  fan-RPM/PSU-wattage sensors + Q-BRIDGE per-VLAN FDB if wanted.
+- Owner: set `run_timeout_s` from a measured `--once` at fleet size.
 - Then **Phase 10.2 Wireless** (XIQ detail/clients/SSID cycles, wireless API,
   XIQ page + AP Detail).
 - **Phase 10.3 unlocks the FDB⋈PF join**: once `pf_nodes` exists, extend

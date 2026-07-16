@@ -136,6 +136,8 @@ class SnmpInventoryConfig:
     vlans_interval_s: int = 3600
     sweep_stack: bool = True
     stack_interval_s: int = 300
+    sweep_entity: bool = True
+    entity_interval_s: int = 3600
 
 
 @dataclass(frozen=True)
@@ -352,6 +354,8 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         vlans_interval_s=_sint("vlans_interval_s", 3600),
         sweep_stack=_sbool("sweep_stack", True),
         stack_interval_s=_sint("stack_interval_s", 300),
+        sweep_entity=_sbool("sweep_entity", True),
+        entity_interval_s=_sint("entity_interval_s", 3600),
     )
     if snmp_inventory.enabled and snmp_inventory.concurrency < 1:
         raise ConfigError("[snmp_inventory] concurrency must be >= 1")

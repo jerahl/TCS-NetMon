@@ -107,6 +107,12 @@ def test_009_adds_stack_poe_columns():
         assert f"ADD COLUMN {col}" in sql, f"missing column {col}"
 
 
+def test_010_adds_stack_model_column():
+    migs = {m.version: m for m in discover_migrations()}
+    assert "010" in migs, "expected 010 stack-model migration"
+    assert "ADD COLUMN model" in migs["010"].path.read_text()
+
+
 def test_every_migration_has_rollback_note():
     for mig in discover_migrations():
         text_ = mig.path.read_text().lower()
