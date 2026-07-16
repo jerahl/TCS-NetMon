@@ -115,7 +115,7 @@ netmon/
 
 ## 7. Milestones and phases
 
-**Delivered:** Phases 0–4, 6, 9 (foundation, poller, XIQ status collector, first UI port, alert engine in shadow, site map); Phases 5/7 collectors at state-level (PF snapshot, Milestone Config-API poll, 3CX trunks, rConfig freshness); **Phase 10.0 complete** (2026-07-16, incl. the spec-11 amendments: NetMon Status page, seed `--sites-from-db`, nav disposition, DB-backed sessions); Phase 10.1 collection foundation (SNMP sweeps + switch API) with the Switches page UI remaining. Phase 8 (cutover) remains owner-gated at the end.
+**Delivered:** Phases 0–4, 6, 9 (foundation, poller, XIQ status collector, first UI port, alert engine in shadow, site map); Phases 5/7 collectors at state-level (PF snapshot, Milestone Config-API poll, 3CX trunks, rConfig freshness); **Phase 10.0 complete** (2026-07-16, incl. the spec-11 amendments: NetMon Status page, seed `--sites-from-db`, nav disposition, DB-backed sessions); **Phase 10.1 at parity level** (SNMP sweeps + switch API 2026-07-15; 8-tab Switches page UI 2026-07-16; PoE/ENTITY sweeps deferred pending fixtures). Phase 8 (cutover) remains owner-gated at the end.
 
 **Forward plan (spec 11 §7 — work phase-by-phase; do not start a phase until the prior phase's DoD is met and committed):**
 

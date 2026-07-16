@@ -19,7 +19,7 @@ import { SettingsPage } from "./pages/settings.jsx";
 // server-side per-page routing, no external navigation).
 function parseRoute() {
   const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
-  if (parts[0] === "switches") return { name: "switches" };
+  if (parts[0] === "switches") return { name: "switches", id: parts[1] || null };
   if (parts[0] === "nac") return { name: "nac" };
   if (parts[0] === "surveillance") return { name: "surveillance" };
   if (parts[0] === "events") return { name: "events" };
@@ -47,7 +47,7 @@ function useRoute() {
 function App() {
   const route = useRoute();
   let page, active;
-  if (route.name === "switches") { page = <SwitchesPage />; active = "switches"; }
+  if (route.name === "switches") { page = <SwitchesPage id={route.id} />; active = "switches"; }
   else if (route.name === "nac") { page = <NacPage />; active = "nac"; }
   else if (route.name === "surveillance") { page = <SurveillancePage />; active = "surveillance"; }
   else if (route.name === "events") { page = <EventsPage />; active = "events"; }

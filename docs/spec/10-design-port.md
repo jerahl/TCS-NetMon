@@ -3,7 +3,7 @@
 **2026-07-15:** adopted into the standalone-scope revision — `docs/spec/11-standalone-scope.md` is the plan of
 record; it amends the phases below (adds NetMon Status page, seed `--sites-from-db`, 10.6 history buffer,
 11.x post-parity bucket) and records recommendations for this spec's §10 open questions as decisions D1–D9.
-**Status:** IN PROGRESS — Phase 10.0 complete including the spec-11 amendments (NetMon Status page, seed `--sites-from-db`, nav disposition, debt items — 2026-07-16); Phase 10.1 collection foundation complete (SNMP sweeps + switch API + tests, 2026-07-15) with the Switches page UI remaining; Phases 10.2–10.5 pending. Originated as the design-analysis session deliverable (2026-07-14).
+**Status:** IN PROGRESS — Phase 10.0 complete including the spec-11 amendments (NetMon Status page, seed `--sites-from-db`, nav disposition, debt items — 2026-07-16); Phase 10.1 complete at parity level (SNMP sweeps + switch API 2026-07-15; **Switches page UI 2026-07-16**) with the PoE/ENTITY sweeps deferred pending fixtures; Phases 10.2–10.5 pending. Originated as the design-analysis session deliverable (2026-07-14).
 **Design source:** `Zabbix_Extreme.zip` (Claude Design handoff: 18 HTML pages + ~50 JSX/CSS modules). Keep the
 archive out of the repo (it contains real hostnames/IPs in mock data); extract locally when implementing.
 **Goal:** make NetMon's UI match this design, and build the data layer the pages need — **cache current
@@ -444,12 +444,29 @@ console errors, no external fetches).
   token-never-at-rest, +portable-upsert + `--sites-from-db` seed tests,
   +migration `007` assertions. Full suite green (162).
 
+**2026-07-16 — Phase 10.1 Switches page UI landed.** The 8-tab dashboard
+(`frontend/src/pages/switches.jsx`, route `#/switches[/{id}]` — deep-linkable):
+site-grouped navigator with port roll-ups, header pills, KPI strip, **port
+faceplate** (odd/even rows per stack member, state/speed/PoE/error/selected
+styling from the design), **port-detail pane** (state/speed/duplex/util, rate
+bars, error/discard deltas, PoE, and the FDB MAC list — the PF identity join
+slot is labeled for 10.3), top-talkers table, and FDB (filter, capped at 500
+rows) / Topology (LLDP) / VLANs / Stack / PoE / Triggers / Backups tabs.
+API additions: `GET /api/switches/{id}/backups` (config_backups list, §6) and
+`device_id` filter on `GET /api/alerts` (Triggers tab). Staleness badged from
+row `updated_at` everywhere ("cache Xm old"); a switch the sweep hasn't
+reached renders explicit "no sweep data yet" states — never fabricated rows.
+PoE tab and stack serial/fw/fans/PSUs columns render "—"/empty-state until the
+deferred sweeps land. Verified headlessly against a seeded 2-member/104-port
+stack: faceplate, port click → FDB MACs, all tabs, empty-state switch, no
+console errors. Full suite green.
+
 ## Next session
 
-- **Finish Phase 10.1**: build the **Switches page UI** (navigator, port faceplate,
-  port-detail FDB pane, stack/VLAN/LLDP/topology tabs) on the switch API above;
-  add the deferred sweeps (PoE, ENTITY serial/fw, fans/PSUs) once a PoE fixture is
-  captured; add the Q-BRIDGE per-VLAN FDB walk if VLAN-scoped FDB is wanted.
+- **Finish the deferred 10.1 sweeps**: PoE (needs a PoE fixture from a real
+  stack), ENTITY serial/fw, fans/PSUs; add the Q-BRIDGE per-VLAN FDB walk if
+  VLAN-scoped FDB is wanted. The page renders them the moment the columns
+  populate.
 - **Phase 10.3 unlocks the FDB⋈PF join**: once `pf_nodes` exists, extend
   `/api/switches/{id}/ports/{ifindex}` to enrich each MAC with PF identity
   (LEFT JOIN `pf_nodes` ON mac) — the design's marquee port-detail feature.

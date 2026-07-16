@@ -162,3 +162,21 @@ def switch_vlans(
         "FROM switch_vlans WHERE device_id = :d ORDER BY vlan_id",
         {"d": sid},
     )]
+
+
+@router.get("/{sid}/backups")
+def switch_backups(
+    sid: int,
+    engine: Engine = Depends(get_engine),
+    _user=Depends(require_role(Role.viewer)),
+) -> list[dict]:
+    """rConfig backup metadata (spec 10 §6) — list only; the diff pane is a
+    user-initiated read-through or link-out (§10 Q5), never a render-loop
+    fetch. Rows are written by the rconfig collector into `config_backups`."""
+    _switch_or_404(engine, sid)
+    return [dict(r) for r in db.fetch_all(
+        engine,
+        "SELECT taken_at, size_bytes, hash, note, updated_at "
+        "FROM config_backups WHERE device_id = :d ORDER BY taken_at DESC",
+        {"d": sid},
+    )]

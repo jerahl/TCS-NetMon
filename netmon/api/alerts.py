@@ -20,8 +20,17 @@ def list_alerts(
     engine: Engine = Depends(get_engine),
     _user=Depends(require_role(Role.viewer)),
     include_closed: bool = False,
+    device_id: int | None = None,
 ) -> list[dict]:
-    where = "" if include_closed else "WHERE a.closed_at IS NULL"
+    conds = []
+    params: dict = {}
+    if not include_closed:
+        conds.append("a.closed_at IS NULL")
+    if device_id is not None:
+        # Device-scoped view (the Switches page Triggers tab).
+        conds.append("a.device_id = :device_id")
+        params["device_id"] = device_id
+    where = f"WHERE {' AND '.join(conds)}" if conds else ""
     rows = db.fetch_all(
         engine,
         f"SELECT a.id, a.device_id, d.name AS device_name, r.name AS rule_name, "
@@ -31,6 +40,7 @@ def list_alerts(
         f"JOIN alert_rules r ON r.id = a.rule_id "
         f"LEFT JOIN devices d ON d.id = a.device_id {where} "
         f"ORDER BY a.opened_at DESC",
+        params,
     )
     return [dict(r) for r in rows]
 

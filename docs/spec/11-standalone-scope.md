@@ -175,9 +175,13 @@ shadow-alert diff has run clean for the agreed window.
   the D6 sweeps and D3 ring buffer on 2026-07-15, and the 10.1 sweep code is
   already on main under that amendment — reconcile this table's "open" marks
   with those resolutions when signing.)
-- Next code session: **finish Phase 10.1** — the Switches page UI (8 tabs)
-  over the existing switch API; then the deferred sweeps (PoE, ENTITY
-  serial/fw, fans/PSUs) once a PoE fixture is captured.
+- **Phase 10.1 Switches page UI landed 2026-07-16** (8 tabs, faceplate,
+  port-detail FDB pane — spec 10 progress log). Remaining 10.1 slices: the
+  deferred sweeps (PoE, ENTITY serial/fw, fans/PSUs) once a PoE fixture is
+  captured; validation against a real stack at fleet scale.
+- Next code session: **Phase 10.2 Wireless** — XIQ detail/clients/SSID cycles
+  (verify the ≈1.3–1.6k calls/h budget), 005 wireless tables, wireless API,
+  XIQ page + AP Detail.
 - Capture SNMP fixture walks from one lab EXOS stack (ports/FDB/LLDP/stack)
   into `tests/fixtures/`.
 - 2026-07-15 (owner-requested, out of phase order): settings engine shipped —

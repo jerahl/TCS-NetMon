@@ -33,6 +33,8 @@ def _seed(url):
               {"name": "Data", "admin_up": 1, "updated_at": now})
     db.upsert(engine, "stack_members", {"device_id": 1, "slot": 1},
               {"cpu_pct": 12, "mem_pct": 40.0, "temp_c": 38, "updated_at": now})
+    db.upsert(engine, "config_backups", {"device_id": 1, "taken_at": now},
+              {"size_bytes": 24576, "hash": "abc123", "updated_at": now})
     engine.dispose()
 
 
@@ -68,6 +70,9 @@ def test_switch_detail_and_tabs(tmp_path):
         assert client.get("/api/switches/1/fdb").json()[0]["ifindex"] == 1001
         assert client.get("/api/switches/1/lldp").json()[0]["remote_sysname"] == "core-1"
         assert client.get("/api/switches/1/vlans").json()[0]["vlan_id"] == 100
+
+        backups = client.get("/api/switches/1/backups").json()
+        assert backups[0]["size_bytes"] == 24576 and backups[0]["hash"] == "abc123"
 
 
 def test_switch_404s(tmp_path):
