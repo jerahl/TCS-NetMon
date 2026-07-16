@@ -1,12 +1,17 @@
 """One-shot device-registry seed from XIQ + PacketFence exports.
 
 Parses fixture/export JSON into reconciled ``devices`` rows per the rules in
-``docs/spec/00-sources.md`` and upserts them. ``site`` is assigned from a Zabbix
-``Site/<name>`` host-group export (``--sites``) — the same source of truth the
-retiring Zabbix add-on uses; devices in no ``Site/`` group become
-``Unassigned``. The reconciliation functions are pure (no DB, no network) so
-they are unit-tested directly; ``upsert_devices`` and ``main`` handle the DB
-side.
+``docs/spec/00-sources.md`` and upserts them. ``site`` is assigned from either:
+
+- ``--sites-from-db`` (spec 11 D9, the durable path): the site assignments
+  already in NetMon's own ``devices`` table, so a re-seed never needs Zabbix;
+- ``--sites``: a Zabbix ``Site/<name>`` host-group export — the bootstrap path
+  used for the very first seed while Zabbix still exists.
+
+Both may be given; the file overrides the DB for hosts present in both.
+Devices in neither source become ``Unassigned`` — never guessed. The
+reconciliation functions are pure (no DB, no network) so they are unit-tested
+directly; ``upsert_devices`` and ``main`` handle the DB side.
 
 Runnable as ``python -m netmon.seed`` or via the ``netmon-seed`` entry point.
 """
@@ -102,6 +107,23 @@ def load_site_index(path: str | Path, prefix: str = SITE_GROUP_PREFIX) -> dict[s
             return {str(k): v for k, v in strvals.items() if v}
         data = data.get("result") or data.get("data") or data.get("items") or []
     return build_site_index(list(data), prefix)
+
+
+def site_index_from_db(engine) -> dict[str, str]:
+    """Map device name → site from NetMon's own registry (spec 11 D9).
+
+    Makes the ``devices``/``sites`` tables the durable source of truth for
+    site membership: once seeded, re-running the seed with fresh XIQ/PF
+    exports preserves the assignments without a Zabbix export. Unassigned
+    rows are skipped so they can still pick a site up from ``--sites``.
+    """
+    rows = db.fetch_all(
+        engine,
+        "SELECT name, site FROM devices "
+        "WHERE site IS NOT NULL AND site != '' AND site != :unassigned",
+        {"unassigned": UNASSIGNED_SITE},
+    )
+    return {r["name"]: r["site"] for r in rows}
 
 
 def assign_sites(devices: list[Device], index: dict[str, str]) -> list[Device]:
@@ -206,35 +228,47 @@ def load_fixture(path: str | Path) -> list[dict[str, Any]]:
 
 
 def upsert_devices(engine, devices: list[Device]) -> int:
-    """Insert-or-update by unique ``name``. Returns rows written."""
-    sql = (
+    """Insert-or-update by unique ``name``. Returns rows written.
+
+    Portable (runs on MariaDB and the SQLite test DB — spec 11 §8 debt item;
+    was MariaDB-only ``ON DUPLICATE KEY UPDATE``). Update semantics preserved:
+    ``site``/``device_type``/``mgmt_ip``/``snmp_capable`` follow the fresh
+    export; the per-source keys never regress to NULL when a source drops a
+    device from one export; an operator's ``enabled`` flag is insert-only.
+    """
+    # Existence is probed with a SELECT rather than trusting UPDATE's rowcount:
+    # under PyMySQL's default "changed rows" semantics an idempotent re-seed
+    # would report 0 and mis-route to INSERT. Single-writer CLI — no race.
+    update_sql = (
+        "UPDATE devices SET site=:site, device_type=:device_type, "
+        " mgmt_ip=:mgmt_ip, snmp_capable=:snmp_capable, "
+        " xiq_device_id=COALESCE(:xiq_device_id, xiq_device_id), "
+        " pf_node_mac=COALESCE(:pf_node_mac, pf_node_mac) "
+        "WHERE name=:name"
+    )
+    insert_sql = (
         "INSERT INTO devices "
         "(name, site, device_type, mgmt_ip, snmp_capable, enabled, "
         " xiq_device_id, pf_node_mac) "
         "VALUES (:name, :site, :device_type, :mgmt_ip, :snmp_capable, :enabled, "
-        " :xiq_device_id, :pf_node_mac) "
-        "ON DUPLICATE KEY UPDATE "
-        " site=VALUES(site), device_type=VALUES(device_type), mgmt_ip=VALUES(mgmt_ip), "
-        " snmp_capable=VALUES(snmp_capable), "
-        " xiq_device_id=COALESCE(VALUES(xiq_device_id), xiq_device_id), "
-        " pf_node_mac=COALESCE(VALUES(pf_node_mac), pf_node_mac)"
+        " :xiq_device_id, :pf_node_mac)"
     )
     count = 0
     for d in devices:
-        db.execute(
-            engine,
-            sql,
-            {
-                "name": d.name,
-                "site": d.site,
-                "device_type": d.device_type.value,
-                "mgmt_ip": d.mgmt_ip,
-                "snmp_capable": int(d.snmp_capable),
-                "enabled": int(d.enabled),
-                "xiq_device_id": d.xiq_device_id,
-                "pf_node_mac": d.pf_node_mac,
-            },
+        params = {
+            "name": d.name,
+            "site": d.site,
+            "device_type": d.device_type.value,
+            "mgmt_ip": d.mgmt_ip,
+            "snmp_capable": int(d.snmp_capable),
+            "enabled": int(d.enabled),
+            "xiq_device_id": d.xiq_device_id,
+            "pf_node_mac": d.pf_node_mac,
+        }
+        exists = db.fetch_one(
+            engine, "SELECT 1 FROM devices WHERE name = :name", {"name": d.name}
         )
+        db.execute(engine, update_sql if exists else insert_sql, params)
         count += 1
     return count
 
@@ -248,6 +282,11 @@ def main(argv: list[str] | None = None) -> int:
         "--sites", help="path to Zabbix Site/ host-group export JSON (host.get)"
     )
     parser.add_argument(
+        "--sites-from-db", action="store_true",
+        help="assign sites from the existing devices registry (re-seed without "
+             "Zabbix — spec 11 D9); combinable with --sites, which overrides",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true", help="print reconciled devices, write nothing"
     )
     args = parser.parse_args(argv)
@@ -256,12 +295,24 @@ def main(argv: list[str] | None = None) -> int:
     pf_rows = normalize_pf(load_fixture(args.pf)) if args.pf else []
     devices = reconcile(xiq_rows, pf_rows)
 
-    site_index = load_site_index(args.sites) if args.sites else {}
+    engine = None
+    if args.sites_from_db or not args.dry_run:
+        from netmon.config import load_config
+
+        cfg = load_config(args.config)
+        engine = db.make_engine(cfg.db.url)
+
+    site_index: dict[str, str] = {}
+    if args.sites_from_db:
+        site_index.update(site_index_from_db(engine))
+    if args.sites:
+        site_index.update(load_site_index(args.sites))
     assign_sites(devices, site_index)
 
     unassigned = sum(1 for d in devices if d.site == UNASSIGNED_SITE)
-    if not args.sites:
-        print("NOTE: no --sites export given; every device is Unassigned.")
+    if not args.sites and not args.sites_from_db:
+        print("NOTE: no --sites export or --sites-from-db given; "
+              "every device is Unassigned.")
     print(f"reconciled {len(devices)} device(s) "
           f"({len(xiq_rows)} XIQ, {len(pf_rows)} PF; {unassigned} unassigned)")
 
@@ -271,10 +322,6 @@ def main(argv: list[str] | None = None) -> int:
                   f"{d.mgmt_ip or '-':15} xiq={d.xiq_device_id or '-'} pf={d.pf_node_mac or '-'}")
         return 0
 
-    from netmon.config import load_config
-
-    cfg = load_config(args.config)
-    engine = db.make_engine(cfg.db.url)
     written = upsert_devices(engine, devices)
     print(f"upserted {written} device(s) into the registry")
     return 0
