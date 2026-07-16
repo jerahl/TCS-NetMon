@@ -129,6 +129,10 @@ REGISTRY: list[SettingDef] = [
     # --- snmp_inventory ---
     _d("snmp_inventory.enabled", "bool", False, "Enable inventory sweeps", attr="enabled"),
     _d("snmp_inventory.concurrency", "int", 8, "Switches in flight", attr="concurrency", min=1),
+    _d("snmp_inventory.run_timeout_s", "int", 900, "Run budget (s)",
+       "Hard cap for one full run (all due sweeps, whole fleet). A run that "
+       "merely outlives the fastest interval delays the next tick; it is only "
+       "cancelled past this budget.", attr="run_timeout_s", min=60),
     _d("snmp_inventory.sweep_ports", "bool", True, "Sweep: ports/PoE", attr="sweep_ports"),
     _d("snmp_inventory.ports_interval_s", "int", 120, "Ports interval (s)",
        attr="ports_interval_s", min=30),

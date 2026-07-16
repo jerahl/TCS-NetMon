@@ -118,6 +118,11 @@ class SnmpInventoryConfig:
     enabled: bool = False
     snmpbulkwalk_path: str = "snmpbulkwalk"
     concurrency: int = 8  # switches in flight
+    # Hard budget for ONE supervised run (all due sweeps across the fleet).
+    # Deliberately decoupled from the sweep intervals: a run that overruns the
+    # fastest interval just delays the next tick (cadence slips honestly); it
+    # is only cancelled when it exceeds this budget.
+    run_timeout_s: int = 900
     # per-sweep enable + interval (seconds)
     sweep_ports: bool = True
     ports_interval_s: int = 120
@@ -332,6 +337,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         enabled=_sbool("enabled", False),
         snmpbulkwalk_path=parser.get("snmp_inventory", "snmpbulkwalk_path", fallback="snmpbulkwalk").strip(),
         concurrency=_sint("concurrency", 8),
+        run_timeout_s=_sint("run_timeout_s", 900),
         sweep_ports=_sbool("sweep_ports", True),
         ports_interval_s=_sint("ports_interval_s", 120),
         sweep_fdb=_sbool("sweep_fdb", True),
@@ -345,6 +351,8 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
     )
     if snmp_inventory.enabled and snmp_inventory.concurrency < 1:
         raise ConfigError("[snmp_inventory] concurrency must be >= 1")
+    if snmp_inventory.enabled and snmp_inventory.run_timeout_s < 60:
+        raise ConfigError("[snmp_inventory] run_timeout_s must be >= 60")
 
     # --- [engine] ---
     engine = EngineConfig(

@@ -122,6 +122,12 @@ enabled = false
 # snmpbulkwalk_path = snmpbulkwalk
 # Switches swept concurrently (bounded so a fleet sweep finishes in-interval).
 concurrency = 8
+# Hard budget (seconds) for ONE full run — all due sweeps across the fleet.
+# The first run after startup has every sweep due at once and legitimately
+# outlives ports_interval_s; overrunning an interval just delays the next
+# tick, only this budget cancels the run. Size it from a measured
+# `python -m netmon.poller.snmp_inventory --once` at your fleet size.
+run_timeout_s = 900
 # Per-sweep enable flags + cadence (seconds). Ports fastest; FDB heaviest/slowest.
 sweep_ports = true
 ports_interval_s = 120

@@ -183,3 +183,51 @@ def test_all_switches_failing_records_error(tmp_path):
     asyncio.run(c.run_guarded())  # guarded: records error, does not raise
     h = db.fetch_one(engine, "SELECT * FROM collector_health WHERE name='snmp_inventory'")
     assert h["consecutive_failures"] == 1 and "timeout" in (h["last_error"] or "")
+
+
+# ---- run budget / cancellation (the 120s-timeout regression) ----------------
+
+def test_run_timeout_decoupled_from_fastest_interval():
+    """The supervised timeout is the run budget, never the fastest interval —
+    the first full-fleet run (all sweeps due) legitimately outlives 120s."""
+    cfg = SnmpInventoryConfig(enabled=True)  # ports_interval_s=120, run_timeout_s=900
+    c = si.SnmpInventory(None, cfg, PollerConfig(), walk_fn=lambda h, r: None)
+    assert c.interval_s == 120.0
+    assert c.timeout_s == 900.0
+    # A budget below the fastest interval is nonsense — the interval wins.
+    small = SnmpInventoryConfig(enabled=True, run_timeout_s=60)
+    c2 = si.SnmpInventory(None, small, PollerConfig(), walk_fn=lambda h, r: None)
+    assert c2.timeout_s == c2.interval_s == 120.0
+
+
+def test_cancelled_run_keeps_completed_sweeps_and_records_health(tmp_path):
+    """Cancellation mid-run (the supervisor budget) must (a) keep _last_run
+    for sweeps whose fleet pass finished — no all-due retry loop — and
+    (b) land in collector_health as an error, never a silently green pill."""
+    engine = _engine_with_switch(tmp_path)
+    cfg = SnmpInventoryConfig(enabled=True)
+
+    async def walk_until_fdb(host, roots):
+        # ports and stack pass normally; the heavy fdb pass gets "cancelled"
+        # exactly as asyncio.wait_for would cancel the awaited walk.
+        if si.OID["fdb_port"] in roots:
+            raise asyncio.CancelledError()
+        return {root: FIXTURE for root in roots}
+
+    c = si.SnmpInventory(engine, cfg, PollerConfig(), walk_fn=walk_until_fdb)
+    c._force_all = True
+
+    import pytest
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(c.run_guarded())
+
+    # ports + stack fleet passes completed before the cancel → marked done;
+    # fdb (and the passes after it) did not.
+    assert "ports" in c._last_run and "stack" in c._last_run
+    assert "fdb" not in c._last_run and "lldp" not in c._last_run
+    # The completed passes' data is in the DB.
+    assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM switch_ports")["n"] == 2
+    # And the cancellation is loud in collector_health (§4.5).
+    h = db.fetch_one(engine, "SELECT * FROM collector_health WHERE name='snmp_inventory'")
+    assert h["consecutive_failures"] == 1
+    assert "cancelled" in (h["last_error"] or "")

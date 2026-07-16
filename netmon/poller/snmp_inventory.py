@@ -365,7 +365,11 @@ class SnmpInventory:
             cfg.ports_interval_s, cfg.fdb_interval_s, cfg.lldp_interval_s,
             cfg.vlans_interval_s, cfg.stack_interval_s,
         ))
-        self.timeout_s = self.interval_s
+        # The run budget is deliberately NOT the fastest interval: the first
+        # run has every sweep due at once (~29 bulkwalks/switch fleet-wide)
+        # and legitimately outlives ports_interval_s. Overrunning the interval
+        # just delays the next supervisor tick; only run_timeout_s cancels.
+        self.timeout_s = float(max(cfg.run_timeout_s, self.interval_s))
         self._last_run: dict[str, float] = {}
         self._force_all = False
 
@@ -409,31 +413,43 @@ class SnmpInventory:
         raw = await self._walk(host, roots)
         return {k: parse_walk(raw.get(OID[k], ""), OID[k]) for k in keys}
 
+    # Fleet-pass order when several sweeps are due at once: cheap/high-cadence
+    # first, so a cancelled run has already banked the data operators watch
+    # most (ports, stack) before the heavy FDB walk starts.
+    _SWEEP_ORDER = ("ports", "stack", "fdb", "lldp", "vlans")
+
     async def run_once(self) -> int:
         now = time.monotonic()
-        due = [s for s in _SWEEP_OIDS if self._due(s, now)]
+        due = [s for s in self._SWEEP_ORDER if self._due(s, now)]
         if not due:
             return 0
         switches = db.fetch_all(self.engine, _SWITCHES_SQL)
-        sem = asyncio.Semaphore(max(1, self.cfg.concurrency))
-        errors: list[str] = []
+        total = 0
+        # One fleet pass per due sweep, marking _last_run as each pass
+        # completes — a run cancelled mid-way (supervisor budget) keeps the
+        # finished sweeps' timestamps instead of re-queuing everything, so a
+        # slow fleet converges sweep by sweep rather than looping on timeout.
+        for sweep in due:
+            sem = asyncio.Semaphore(max(1, self.cfg.concurrency))
+            errors: list[str] = []
 
-        async def one(sw) -> int:
-            async with sem:
-                try:
-                    return await self._sweep_switch(sw, due)
-                except Exception as exc:  # isolate — one dead switch never fails the fleet
-                    log.warning("snmp_inventory: %s (%s) failed: %r", sw["name"], sw["mgmt_ip"], exc)
-                    errors.append(f"{sw['name']}: {exc!r}")
-                    return 0
+            async def one(sw, _sweep=sweep) -> int:
+                async with sem:
+                    try:
+                        return await self._sweep_switch(sw, [_sweep])
+                    except Exception as exc:  # isolate — one dead switch never fails the fleet
+                        log.warning("snmp_inventory: %s %s (%s) failed: %r",
+                                    _sweep, sw["name"], sw["mgmt_ip"], exc)
+                        errors.append(f"{_sweep} {sw['name']}: {exc!r}")
+                        return 0
 
-        counts = await asyncio.gather(*(one(sw) for sw in switches))
-        for s in due:
-            self._last_run[s] = now
-        if errors and len(errors) == len(switches) and switches:
-            # every switch failed → surface as a collector failure (fail loud).
-            raise RuntimeError(f"all {len(switches)} switches failed: {errors[0]}")
-        return sum(counts)
+            counts = await asyncio.gather(*(one(sw) for sw in switches))
+            self._last_run[sweep] = now
+            total += sum(counts)
+            if errors and len(errors) == len(switches) and switches:
+                # every switch failed → surface as a collector failure (fail loud).
+                raise RuntimeError(f"all {len(switches)} switches failed: {errors[0]}")
+        return total
 
     async def _sweep_switch(self, sw, due: list[str]) -> int:
         host, dev_id = sw["mgmt_ip"], sw["id"]
@@ -519,6 +535,22 @@ class SnmpInventory:
         started = time.monotonic()
         try:
             written = await self.run_once()
+        except asyncio.CancelledError:
+            # The supervisor's run budget (run_timeout_s) — or shutdown —
+            # cancelled us mid-run. CancelledError is a BaseException, so
+            # without this clause the timeout would land only in supervisor
+            # stats while collector_health kept its stale last_success and the
+            # source pill stayed green (§4.5 violation). Record, then re-raise:
+            # cancellation must still propagate.
+            elapsed = time.monotonic() - started
+            health.record_error(
+                self.engine, self.name,
+                message=f"run cancelled after {elapsed:.0f}s "
+                        f"(run_timeout_s={self.timeout_s:.0f} or shutdown); "
+                        f"completed sweeps kept, rest retry next tick",
+                duration_ms=int(elapsed * 1000),
+            )
+            raise
         except Exception as exc:
             health.record_error(self.engine, self.name, message=repr(exc),
                                 duration_ms=int((time.monotonic() - started) * 1000))

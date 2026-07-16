@@ -461,12 +461,29 @@ deferred sweeps land. Verified headlessly against a seeded 2-member/104-port
 stack: faceplate, port click → FDB MACs, all tabs, empty-state switch, no
 console errors. Full suite green.
 
+**2026-07-16 — sweep run-budget fix** (field report: first live run timed out
+at 120s). The supervised timeout was wired to the *fastest sweep interval*, so
+the first run — every sweep due at once, ~29 bulkwalks/switch fleet-wide —
+was cancelled, marked nothing done, re-queued everything, and (worse) the
+cancellation bypassed `run_guarded`'s `except Exception`, leaving
+`collector_health` stale-green while only supervisor stats showed the failure.
+Fixes: new `[snmp_inventory] run_timeout_s` (default 900, floor = fastest
+interval) decouples the budget from cadence — an over-interval run now just
+delays the next tick; `run_once` executes one fleet pass per due sweep in
+cheap-first order (ports, stack, fdb, lldp, vlans) and marks `_last_run` per
+pass, so a cancelled run keeps its completed sweeps and converges instead of
+looping; `run_guarded` catches `CancelledError`, records it into
+`collector_health`, and re-raises (§4.5). Web-editable via the settings
+registry. Regression tests cover all three.
+
 ## Next session
 
 - **Finish the deferred 10.1 sweeps**: PoE (needs a PoE fixture from a real
   stack), ENTITY serial/fw, fans/PSUs; add the Q-BRIDGE per-VLAN FDB walk if
   VLAN-scoped FDB is wanted. The page renders them the moment the columns
   populate.
+- Owner: after the fix, run `python -m netmon.poller.snmp_inventory --once`
+  at fleet size and set `run_timeout_s` from the measured duration.
 - **Phase 10.3 unlocks the FDB⋈PF join**: once `pf_nodes` exists, extend
   `/api/switches/{id}/ports/{ifindex}` to enrich each MAC with PF identity
   (LEFT JOIN `pf_nodes` ON mac) — the design's marquee port-detail feature.
