@@ -404,6 +404,14 @@ Source: owner's "Extreme EXOS by SNMP" Zabbix 7.4 template. Numeric roots the
 | stack | member status `1.3.6.1.4.1.1916.1.33.2.1.3`, temp `…33.2.1.21`, CPU-5m `…32.1.4.1.9`, memTotal `…32.2.2.1.2`, memAvail `…32.2.2.1.3` |
 | (not yet) | PoE `1.3.6.1.2.1.105.1.1.1.{6 detect,10 class}` + Extreme measured `1.3.6.1.4.1.1916.1.27.2.1.1.6`; ENTITY serial/model/fw `1.3.6.1.2.1.47.1.1.1.1.{11,2,9}`; fans `…1916.1.1.1.9.1.*`, PSUs `…1916.1.1.1.27.1.*` |
 
+**EXOS ifIndex semantics** (owner, 2026-07-16, from the live fleet): front-panel
+ports are `slot*1000 + port` with port 1–199 (e.g. `1001` = 1:1). Excluded from
+the port inventory (`is_physical_port` in `snmp_inventory.py`): `slot*1000`
+(the slot's mgmt port, e.g. `1000`), port part `2xx` (stacking ports, e.g.
+`1257`/`2258`), and `>= 1_000_000` (VLAN/routing interfaces — on a
+many-VLAN fleet these were roughly a third of the ifTable and the bulk of the
+ports-pass write load).
+
 **2026-07-16 — Phase 10.0 spec-11 amendments landed** (all ungated: read-only,
 DB-only, no new deps). Phase 10.0 is now complete *including* the spec-11
 additions; verified end-to-end (uvicorn + headless-Chromium on a seeded DB:

@@ -40,6 +40,32 @@ def test_build_ports():
     assert rows[1002]["oper_state"] == "down" and rows[1002]["duplex"] == "half"
 
 
+def test_is_physical_port_exos_semantics():
+    """Owner-supplied EXOS ifIndex rules (2026-07-16): VLAN interfaces
+    (>=1M), slot mgmt ports (x000), stacking ports (x2xx) are not
+    front-panel ports."""
+    assert si.is_physical_port(1001)          # slot 1 port 1
+    assert si.is_physical_port(2048)          # slot 2 port 48
+    assert si.is_physical_port(1199)          # top of the front-panel range
+    assert not si.is_physical_port(1000)      # slot 1 mgmt
+    assert not si.is_physical_port(2000)      # slot 2 mgmt
+    assert not si.is_physical_port(1257)      # stacking
+    assert not si.is_physical_port(2258)      # stacking
+    assert not si.is_physical_port(1000001)   # VLAN interface
+    assert not si.is_physical_port(1203960)   # VLAN interface
+
+
+def test_build_ports_drops_non_physical_interfaces():
+    oper_root = si.OID["if_oper"]
+    text = "\n".join(
+        f".{oper_root}.{idx} = INTEGER: up(1)"
+        for idx in (1001, 1000, 1257, 1000001)
+    )
+    walks = {"if_oper": si.parse_walk(text, oper_root)}
+    rows = si.build_ports(walks)
+    assert [r["ifindex"] for r in rows] == [1001]
+
+
 def test_build_fdb_maps_mac_to_ifindex():
     w = _walks(si._SWEEP_OIDS["fdb"][2])
     rows = si.build_fdb(w["fdb_port"], w["base_port_ifindex"])

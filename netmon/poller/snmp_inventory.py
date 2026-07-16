@@ -170,13 +170,37 @@ def mac_from_fdb_suffix(suffix: str) -> str | None:
 
 # --- pure sweep parsers: raw walk dicts -> list[row dict] -------------------
 
+def is_physical_port(ifindex: int) -> bool:
+    """EXOS ifIndex semantics (owner, 2026-07-16): the ifTable carries far
+    more than front-panel ports. Excluded from the port inventory:
+
+    - ``>= 1_000_000``  — VLAN/routing interfaces, one per VLAN;
+    - ``slot*1000``     — the slot's management port (1000, 2000, …);
+    - port part 2xx     — stacking ports (1257, 2258, …).
+
+    Front-panel ports are ``slot*1000 + port`` with port 1–199.
+    """
+    if ifindex >= 1_000_000:
+        return False
+    port = ifindex % 1000
+    if port == 0:
+        return False
+    if 200 <= port <= 299:
+        return False
+    return True
+
+
 def build_ports(walks: dict[str, dict[str, str]]) -> list[dict]:
-    """Combine the per-column IF-MIB walks into one row per ifIndex."""
+    """Combine the per-column IF-MIB walks into one row per *physical* ifIndex
+    (VLAN/mgmt/stacking interfaces are dropped — ``is_physical_port``)."""
     ifindexes: set[str] = set()
     for key in ("if_oper", "if_name", "if_descr", "if_type"):
         ifindexes.update(walks.get(key, {}))
     rows: list[dict] = []
     for idx in sorted(ifindexes, key=lambda s: _to_int(s) or 0):
+        n = _to_int(idx)
+        if n is None or not is_physical_port(n):
+            continue
         name = walks.get("if_name", {}).get(idx) or walks.get("if_descr", {}).get(idx)
         rows.append({
             "ifindex": _to_int(idx),
