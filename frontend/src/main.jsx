@@ -12,7 +12,7 @@ import { ProblemsPage } from "./pages/problems.jsx";
 import { VoipPage } from "./pages/voip.jsx";
 import { MapPage } from "./pages/map.jsx";
 import { NetmonStatusPage } from "./pages/netmon_status.jsx";
-import { PlannedPage } from "./pages/planned.jsx";
+import { XiqPage } from "./pages/xiq.jsx";
 import { SettingsPage } from "./pages/settings.jsx";
 
 // Hash router — one index.html serves every route (deep links never 404, no
@@ -55,16 +55,8 @@ function App() {
   else if (route.name === "voip") { page = <VoipPage />; active = "voip"; }
   else if (route.name === "map") { page = <MapPage />; active = "map"; }
   else if (route.name === "netmon-status") { page = <NetmonStatusPage />; active = "netmon-status"; }
-  else if (route.name === "xiq") {
-    page = <PlannedPage title="XIQ · Wireless Status" phase="10.2"
-                        note="Fleet status/detail lives in ExtremeCloud IQ until then." />;
-    active = "xiq";
-  }
-  else if (route.name === "wireless") {
-    page = <PlannedPage title="Wireless APs" phase="10.2"
-                        note="Per-AP detail is reachable now via device links (#/ap/…)." />;
-    active = "wireless";
-  }
+  else if (route.name === "xiq") { page = <XiqPage />; active = "xiq"; }
+  else if (route.name === "wireless") { page = <XiqPage />; active = "wireless"; }
   else if (route.name === "settings") { page = <SettingsPage />; active = "settings"; }
   else if (route.name === "ap") { page = <ApDetailPage id={route.id} />; active = "wireless"; }
   else { page = <GlobalPage />; active = "global"; }

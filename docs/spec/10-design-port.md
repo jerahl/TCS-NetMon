@@ -3,7 +3,7 @@
 **2026-07-15:** adopted into the standalone-scope revision — `docs/spec/11-standalone-scope.md` is the plan of
 record; it amends the phases below (adds NetMon Status page, seed `--sites-from-db`, 10.6 history buffer,
 11.x post-parity bucket) and records recommendations for this spec's §10 open questions as decisions D1–D9.
-**Status:** IN PROGRESS — Phase 10.0 complete including the spec-11 amendments (NetMon Status page, seed `--sites-from-db`, nav disposition, debt items — 2026-07-16); Phase 10.1 complete at parity level (SNMP sweeps + switch API 2026-07-15; **Switches page UI 2026-07-16**) with the PoE/ENTITY sweeps deferred pending fixtures; Phases 10.2–10.5 pending. Originated as the design-analysis session deliverable (2026-07-14).
+**Status:** IN PROGRESS — Phase 10.0 complete incl. the spec-11 amendments (2026-07-16); Phase 10.1 **feature-complete** (SNMP sweeps + switch API + 8-tab UI + PoE/entity sweeps, 2026-07-15/16); Phase 10.2 **built** (wireless tables + XIQ cycles + wireless API + XIQ/AP-Detail pages, 2026-07-16 — live-fleet validation of the FULL/clients payload shapes pending); Phases 10.3–10.5 pending. Originated as the design-analysis session deliverable (2026-07-14).
 **Design source:** `Zabbix_Extreme.zip` (Claude Design handoff: 18 HTML pages + ~50 JSX/CSS modules). Keep the
 archive out of the repo (it contains real hostnames/IPs in mock data); extract locally when implementing.
 **Goal:** make NetMon's UI match this design, and build the data layer the pages need — **cache current
@@ -510,8 +510,31 @@ Model/Serial/EXOS/fan+PSU counts (hover for detail). Fixture
 `snmp_exos_entity.txt` (shape verbatim, serials faked). **Phase 10.1 is now
 feature-complete**; remaining polish is sensor detail + the enum note below.
 
+**2026-07-16 — Phase 10.2 Wireless built.** Migration `011` (`ap_details`,
+`ap_radios` — PK (device_id, radio), band from the radio's own field per G10,
+`wireless_clients`, `ssids`); XIQ collector cycles inside the one supervised
+task, each independently intervalled + disableable: detail 5 min
+(`views=FULL`, and when due the same fetch serves the status cycle — no
+double sweep), clients 10 min (`/clients/active?views=FULL`; PII per Q8 —
+`clients_enabled=false` stops persisting), SSIDs 30 min (network-policies →
+per-policy list). Budget ≈1.3–1.6k calls/h at fleet scale. Generic batched
+`db.replace_rows` (portable, one txn per refresh) powers the writers.
+Wireless API (`/api/wireless/summary|aps|aps/{id}|ssids|clients?q=`); XIQ
+fleet page (`#/xiq`, also `#/wireless`) with KPI strip/site filter/search/
+firmware compliance/SSID roll-up; AP Detail gains detail-KV, radios, clients
+sections (PF join slot labeled for 10.3). Fixtures `xiq_devices_full.json`/
+`xiq_clients_active.json`/`xiq_ssids.json` are shaped from the reference
+client's documented fields — **replace with captured exports and confirm the
+FULL view's radio fields on the live tenant before trusting `ap_radios`.**
+Verified headlessly on seeded data end-to-end; suite green.
+
 ## Next session
 
+- **10.2 validation on the live fleet**: capture real FULL/clients payloads
+  (extend `scripts/xiq_export.py` or curl), diff against the fixtures —
+  especially the `radios` field coverage — and measure the actual call rate
+  against the ≈1.6k/h budget. Owner: decide spec 10 **Q8** (wireless_clients
+  PII) — the cycle ships enabled but is one config flip to stop.
 - **10.1 leftovers (small)**: capture a real extremePethPseSlotTable walk
   (`snmpbulkwalk -On <switch> 1.3.6.1.4.1.1916.1.27.1.2.1`) to replace the
   template-derived PoE fixture lines; confirm the extremeStackMemberStatus

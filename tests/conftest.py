@@ -310,6 +310,67 @@ CREATE TABLE settings_audit (
 """
 
 
+AP_DETAILS_DDL_SQLITE = """
+CREATE TABLE ap_details (
+    device_id INTEGER PRIMARY KEY,
+    model TEXT,
+    serial TEXT,
+    mgmt_mac TEXT,
+    fw_version TEXT,
+    ip TEXT,
+    network_policy TEXT,
+    uptime_s INTEGER,
+    clients_total INTEGER,
+    cpu_pct REAL,
+    mem_pct REAL,
+    updated_at TIMESTAMP
+)
+"""
+
+AP_RADIOS_DDL_SQLITE = """
+CREATE TABLE ap_radios (
+    device_id INTEGER NOT NULL,
+    radio TEXT NOT NULL,
+    band TEXT,
+    channel INTEGER,
+    width_mhz INTEGER,
+    tx_power_dbm INTEGER,
+    util_pct REAL,
+    noise_dbm INTEGER,
+    clients INTEGER,
+    updated_at TIMESTAMP,
+    PRIMARY KEY (device_id, radio)
+)
+"""
+
+WIRELESS_CLIENTS_DDL_SQLITE = """
+CREATE TABLE wireless_clients (
+    mac TEXT PRIMARY KEY,
+    device_id INTEGER,
+    ssid TEXT,
+    band TEXT,
+    rssi_dbm INTEGER,
+    snr_db INTEGER,
+    os TEXT,
+    hostname TEXT,
+    username TEXT,
+    ip TEXT,
+    connected_since TIMESTAMP,
+    updated_at TIMESTAMP
+)
+"""
+
+SSIDS_DDL_SQLITE = """
+CREATE TABLE ssids (
+    name TEXT PRIMARY KEY,
+    auth TEXT,
+    enabled INTEGER,
+    network_policy TEXT,
+    updated_at TIMESTAMP
+)
+"""
+
+
 def create_core_tables(engine) -> None:
     """Create the tables the poller / collectors / engine / API touch (SQLite)."""
     from sqlalchemy import text
@@ -334,6 +395,10 @@ def create_core_tables(engine) -> None:
             LLDP_NEIGHBORS_DDL_SQLITE,
             SWITCH_VLANS_DDL_SQLITE,
             STACK_MEMBERS_DDL_SQLITE,
+            AP_DETAILS_DDL_SQLITE,
+            AP_RADIOS_DDL_SQLITE,
+            WIRELESS_CLIENTS_DDL_SQLITE,
+            SSIDS_DDL_SQLITE,
             APP_SETTINGS_DDL_SQLITE,
             SETTINGS_AUDIT_DDL_SQLITE,
         ):

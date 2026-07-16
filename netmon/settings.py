@@ -172,6 +172,13 @@ REGISTRY: list[SettingDef] = [
     _d("xiq.api_token", "secret", "", "API token", "Write-only bearer token."),
     _d("xiq.base_url", "str", "https://api.extremecloudiq.com", "Base URL"),
     _d("xiq.status_interval_s", "int", 180, "Status interval (s)", min=30),
+    _d("xiq.detail_enabled", "bool", True, "Cycle: AP detail (views=FULL)"),
+    _d("xiq.detail_interval_s", "int", 300, "Detail interval (s)", min=60),
+    _d("xiq.clients_enabled", "bool", True, "Cycle: wireless clients",
+       "Stores usernames/MACs (PII — spec 10 Q8). Disable to stop persisting."),
+    _d("xiq.clients_interval_s", "int", 600, "Clients interval (s)", min=60),
+    _d("xiq.ssids_enabled", "bool", True, "Cycle: SSIDs"),
+    _d("xiq.ssids_interval_s", "int", 1800, "SSIDs interval (s)", min=300),
 
     _d("packetfence.enabled", "bool", False, "Enable PacketFence collector"),
     _d("packetfence.url", "str", "", "Base URL"),

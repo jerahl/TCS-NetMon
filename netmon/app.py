@@ -26,7 +26,7 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 
 from netmon import __version__, db, migrate
 from netmon import settings as settings_engine
-from netmon.api import alerts, auth_routes, devices, events, health, nac, settings, sites, status, switches
+from netmon.api import alerts, auth_routes, devices, events, health, nac, settings, sites, status, switches, wireless
 from netmon.auth.sessions import DbSessionStore, SessionStore
 from netmon.engine.engine import AlertEngine
 from netmon.collectors.milestone import MilestoneCollector, MilestoneError
@@ -206,6 +206,7 @@ def create_app(
     app.include_router(sites.router)
     app.include_router(events.router)
     app.include_router(switches.router)
+    app.include_router(wireless.router)
     app.include_router(nac.router)
     app.include_router(alerts.router)
     app.include_router(settings.router)

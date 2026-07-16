@@ -151,6 +151,17 @@ entity_interval_s = 3600
 enabled = false
 # api_token = REPLACE_WITH_XIQ_API_TOKEN
 base_url = https://api.extremecloudiq.com
+# Phase 10.2 cycles (each independently disableable; ~1.3-1.6k calls/h total
+# at fleet scale, well inside the 7,500/h tenant quota):
+# status_interval_s = 180
+detail_enabled = true
+detail_interval_s = 300
+# The clients cycle stores usernames + MACs (PII — spec 10 Q8); flip off to
+# stop persisting them (the XIQ page then shows counts from AP rows only).
+clients_enabled = true
+clients_interval_s = 600
+ssids_enabled = true
+ssids_interval_s = 1800
 
 [packetfence]
 enabled = false

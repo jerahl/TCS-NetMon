@@ -1,0 +1,22 @@
+{
+  "_note": "SANITIZED sample of GET /network-policies (policies) + GET /network-policies/{id}/ssids (ssids key). Shapes per reference/lib/XIQClient.php getPolicySsids: id, name, broadcast_name, enabled, access_security.security_type.",
+  "policies": {
+    "data": [
+      {"id": 7001, "name": "TCS-Schools"}
+    ],
+    "total_pages": 1
+  },
+  "ssids": {
+    "7001": {
+      "data": [
+        {"id": 9001, "name": "tcs-student", "broadcast_name": "TCS-Student", "enabled": true,
+         "access_security": {"security_type": "WPA2_PSK"}},
+        {"id": 9002, "name": "tcs-staff", "broadcast_name": "TCS-Staff", "enabled": true,
+         "access_security": {"security_type": "WPA2_ENTERPRISE"}},
+        {"id": 9003, "name": "tcs-iot", "broadcast_name": "TCS-IoT", "enabled": true,
+         "access_security": {"security_type": "WPA2_PSK"}}
+      ],
+      "total_pages": 1
+    }
+  }
+}

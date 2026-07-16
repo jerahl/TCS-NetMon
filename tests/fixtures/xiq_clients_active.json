@@ -1,0 +1,45 @@
+{
+  "_note": "SANITIZED sample of GET /clients/active?views=FULL. Field names per reference/lib/XIQClient.php normaliseClient (mac_address, hostname, ip_address, username, ssid, rssi, snr, os_type, connection_duration ms, device_id = the AP's XIQ id, radio_type). Fake MACs/users, RFC 5737 IPs.",
+  "data": [
+    {
+      "mac_address": "AABBCC000101",
+      "hostname": "student-chromebook-1",
+      "ip_address": "192.0.2.101",
+      "username": "student1@example.org",
+      "ssid": "TCS-Student",
+      "rssi": -54,
+      "snr": 38,
+      "os_type": "Chrome OS",
+      "connection_duration": 5400000,
+      "device_id": 100001,
+      "radio_type": "5G"
+    },
+    {
+      "mac_address": "AABBCC000102",
+      "hostname": "staff-laptop-9",
+      "ip_address": "192.0.2.102",
+      "username": "teacher9@example.org",
+      "ssid": "TCS-Staff",
+      "rssi": -61,
+      "snr": 31,
+      "os_type": "Windows",
+      "connection_duration": 120000,
+      "device_id": 100001,
+      "radio_type": "2.4G"
+    },
+    {
+      "mac_address": "AABBCC000103",
+      "hostname": "",
+      "ip_address": "192.0.2.103",
+      "username": "",
+      "ssid": "TCS-IoT",
+      "rssi": -70,
+      "snr": 22,
+      "os_type": "",
+      "connection_duration": 990000000,
+      "device_id": 999999,
+      "radio_type": "2.4G"
+    }
+  ],
+  "total_pages": 1
+}

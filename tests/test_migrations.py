@@ -113,6 +113,14 @@ def test_010_adds_stack_model_column():
     assert "ADD COLUMN model" in migs["010"].path.read_text()
 
 
+def test_011_creates_wireless_tables():
+    migs = {m.version: m for m in discover_migrations()}
+    assert "011" in migs, "expected 011 wireless-inventory migration"
+    sql = migs["011"].path.read_text()
+    for table in ("ap_details", "ap_radios", "wireless_clients", "ssids"):
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in sql, f"missing table {table}"
+
+
 def test_every_migration_has_rollback_note():
     for mig in discover_migrations():
         text_ = mig.path.read_text().lower()

@@ -1,13 +1,14 @@
 import React from "react";
 import { getJSON } from "../api.js";
-import { Card, Badge, Loading, ErrorMsg } from "../primitives.jsx";
+import { Card, Badge, Loading, ErrorMsg, sevColor } from "../primitives.jsx";
 
-// Device detail (AP / switch / any): registry fields + live state.
-// Per-device XIQ live detail (ports/PoE/clients) is a later passthrough
-// endpoint; this page shows what the core model + poller/XIQ collector store.
+// Device detail (AP / switch / any): registry fields + live state; APs get
+// the Phase 10.2 wireless sections (detail KV, radios, clients) from
+// /api/wireless/aps/{id} — NetMon's own tables, zero XIQ calls at render.
 export function ApDetailPage({ id }) {
   const [device, setDevice] = React.useState(null);
   const [status, setStatus] = React.useState(null);
+  const [wireless, setWireless] = React.useState(null);
   const [error, setError] = React.useState(null);
 
   React.useEffect(() => {
@@ -17,6 +18,11 @@ export function ApDetailPage({ id }) {
         if (!live) return;
         setDevice(dev);
         setStatus(rows.find((r) => String(r.id) === String(id)) || null);
+        if (dev.device_type === "ap") {
+          getJSON(`/api/wireless/aps/${id}`)
+            .then((w) => live && setWireless(w))
+            .catch(() => { /* wireless sections stay hidden */ });
+        }
       })
       .catch((e) => live && setError(e));
     return () => { live = false; };
@@ -57,6 +63,69 @@ export function ApDetailPage({ id }) {
           </tbody>
         </table>
       </Card>
+
+      {wireless?.detail && (
+        <Card title="Access point" kicker={`XIQ detail cache · ${wireless.detail.updated_at || ""}`}>
+          <table className="grid kv">
+            <tbody>
+              <tr><td>Model</td><td>{wireless.detail.model || "—"}</td></tr>
+              <tr><td>Serial</td><td className="mono">{wireless.detail.serial || "—"}</td></tr>
+              <tr><td>Firmware</td><td className="mono">{wireless.detail.fw_version || "—"}</td></tr>
+              <tr><td>Base MAC</td><td className="mono">{wireless.detail.mgmt_mac || "—"}</td></tr>
+              <tr><td>IP</td><td className="mono">{wireless.detail.ip || "—"}</td></tr>
+              <tr><td>Network policy</td><td>{wireless.detail.network_policy || "—"}</td></tr>
+              <tr><td>Uptime</td><td>{wireless.detail.uptime_s ? `${Math.floor(wireless.detail.uptime_s / 86400)}d ${Math.floor((wireless.detail.uptime_s % 86400) / 3600)}h` : "—"}</td></tr>
+              <tr><td>Clients</td><td className="mono">{wireless.detail.clients_total ?? "—"}</td></tr>
+            </tbody>
+          </table>
+        </Card>
+      )}
+
+      {wireless && wireless.radios?.length > 0 && (
+        <Card title="Radios">
+          <table className="grid">
+            <thead><tr><th>Radio</th><th>Band</th><th>Channel</th><th>Width</th><th>TX power</th><th>Clients</th></tr></thead>
+            <tbody>
+              {wireless.radios.map((r) => (
+                <tr key={r.radio}>
+                  <td className="mono">{r.radio}</td>
+                  <td className="mono">{r.band ? `${r.band} GHz` : "—"}</td>
+                  <td className="mono">{r.channel ?? "—"}</td>
+                  <td className="mono dim">{r.width_mhz ? `${r.width_mhz} MHz` : "—"}</td>
+                  <td className="mono dim">{r.tx_power_dbm !== null && r.tx_power_dbm !== undefined ? `${r.tx_power_dbm} dBm` : "—"}</td>
+                  <td className="mono">{r.clients ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+
+      {wireless && wireless.clients?.length > 0 && (
+        <Card title="Connected clients" kicker={`${wireless.clients.length} client(s) · cache cadence`}>
+          <table className="grid">
+            <thead><tr><th>MAC</th><th>Hostname</th><th>User</th><th>SSID</th><th>Band</th><th>RSSI</th><th>OS</th><th>IP</th></tr></thead>
+            <tbody>
+              {wireless.clients.map((c) => (
+                <tr key={c.mac}>
+                  <td className="mono">{c.mac}</td>
+                  <td>{c.hostname || "—"}</td>
+                  <td className="dim">{c.username || "—"}</td>
+                  <td>{c.ssid || "—"}</td>
+                  <td className="mono dim">{c.band || "—"}</td>
+                  <td className="mono" style={c.rssi_dbm !== null && c.rssi_dbm < -70 ? { color: sevColor("warn") } : undefined}>
+                    {c.rssi_dbm !== null && c.rssi_dbm !== undefined ? `${c.rssi_dbm} dBm` : "—"}</td>
+                  <td className="dim">{c.os || "—"}</td>
+                  <td className="mono dim">{c.ip || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="dim" style={{ fontSize: 11, marginTop: 8 }}>
+            PacketFence identity/posture join lands in phase 10.3.
+          </div>
+        </Card>
+      )}
 
       {keys.length > 0 && (
         <Card title="Source keys">
