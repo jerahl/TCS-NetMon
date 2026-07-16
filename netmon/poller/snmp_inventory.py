@@ -425,11 +425,47 @@ class SnmpInventory:
     # most (ports, stack) before the heavy FDB walk starts.
     _SWEEP_ORDER = ("ports", "stack", "fdb", "lldp", "vlans")
 
+    def _check_credentials(self) -> None:
+        """Fail loud on credentials that can only produce fleet-wide silent
+        timeouts, instead of burning a full pass and reporting them as network
+        problems. A wrong-but-plausible community still times out (v2c gives
+        no error signal) — the DEBUG fingerprint below exists to compare the
+        effective value against the one that works by hand, without ever
+        logging the secret itself."""
+        community = self.poller.snmp_community
+        if not community:
+            raise RuntimeError(
+                "[poller] snmp_community is empty — the sweep reuses the "
+                "poller's SNMP credentials; every switch would silently "
+                "time out. Set it in netmon.conf (or the Settings page)."
+            )
+        if community != community.strip() or (
+            len(community) >= 2 and community[0] == community[-1] and community[0] in "\"'"
+        ):
+            # configparser keeps quotes and inline comments literally; a shell
+            # strips them — the classic "works in the CLI, times out from
+            # Python" shape. Warn, don't guess: quotes are technically legal.
+            log.warning(
+                "snmp_community looks quoted or padded (len=%d) — INI values "
+                "are taken literally; if manual snmpbulkwalk works but the "
+                "sweep times out, remove the quotes/comment in netmon.conf",
+                len(community),
+            )
+        if log.isEnabledFor(logging.DEBUG):
+            import hashlib
+            fp = hashlib.sha256(community.encode()).hexdigest()[:8]
+            log.debug(
+                "snmp credentials: -v%s, community len=%d sha256:%s "
+                "(compare: printf '%%s' '<community>' | sha256sum | cut -c1-8)",
+                self.poller.snmp_version, len(community), fp,
+            )
+
     async def run_once(self) -> int:
         now = time.monotonic()
         due = [s for s in self._SWEEP_ORDER if self._due(s, now)]
         if not due:
             return 0
+        self._check_credentials()
         switches = db.fetch_all(self.engine, _SWITCHES_SQL)
         log.info("run: sweep(s) due: %s · %d switch(es), concurrency %d",
                  ", ".join(due), len(switches), self.cfg.concurrency)

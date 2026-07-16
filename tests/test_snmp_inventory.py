@@ -127,7 +127,7 @@ def _collector(engine):
         assert host == "192.0.2.2"  # only the snmp-capable switch is swept
         return {root: FIXTURE for root in roots}
 
-    c = si.SnmpInventory(engine, cfg, PollerConfig(), walk_fn=fake_walk)
+    c = si.SnmpInventory(engine, cfg, PollerConfig(snmp_community="test-ro"), walk_fn=fake_walk)
     c._force_all = True
     return c
 
@@ -178,7 +178,7 @@ def test_all_switches_failing_records_error(tmp_path):
     async def boom(host, roots):
         raise RuntimeError("timeout")
 
-    c = si.SnmpInventory(engine, cfg, PollerConfig(), walk_fn=boom)
+    c = si.SnmpInventory(engine, cfg, PollerConfig(snmp_community="test-ro"), walk_fn=boom)
     c._force_all = True
     asyncio.run(c.run_guarded())  # guarded: records error, does not raise
     h = db.fetch_one(engine, "SELECT * FROM collector_health WHERE name='snmp_inventory'")
@@ -197,6 +197,46 @@ def test_run_once_logs_pass_progress_and_verbose_detail(tmp_path, caplog):
     assert any(m.startswith("sweep ports done:") for m in info)
     # -v detail: per-switch line names the switch and its row count.
     assert any("BHS-Core-1" in m and "row(s)" in m for m in debug)
+
+
+def test_empty_community_fails_loud_before_sweeping(tmp_path):
+    """An empty community can only produce fleet-wide silent timeouts — the
+    run must refuse with a pointed error, not burn a pass and report the
+    switches as unreachable (field regression)."""
+    engine = _engine_with_switch(tmp_path)
+    cfg = SnmpInventoryConfig(enabled=True)
+    walked = []
+
+    async def fake_walk(host, roots):
+        walked.append(host)
+        return {root: FIXTURE for root in roots}
+
+    c = si.SnmpInventory(engine, cfg, PollerConfig(), walk_fn=fake_walk)  # no community
+    c._force_all = True
+    asyncio.run(c.run_guarded())
+    assert walked == []  # refused before touching any switch
+    h = db.fetch_one(engine, "SELECT * FROM collector_health WHERE name='snmp_inventory'")
+    assert "snmp_community is empty" in (h["last_error"] or "")
+
+
+def test_quoted_community_warns_and_fingerprint_logged(tmp_path, caplog):
+    import logging as _logging
+    engine = _engine_with_switch(tmp_path)
+    cfg = SnmpInventoryConfig(enabled=True)
+
+    async def fake_walk(host, roots):
+        return {root: FIXTURE for root in roots}
+
+    c = si.SnmpInventory(engine, cfg, PollerConfig(snmp_community='"secret"'),
+                         walk_fn=fake_walk)
+    c._force_all = True
+    with caplog.at_level(_logging.DEBUG, logger="netmon.snmp_inventory"):
+        asyncio.run(c.run_once())
+    messages = [r.message for r in caplog.records]
+    assert any("looks quoted or padded" in m for m in messages)
+    # The -v fingerprint names length + sha256 prefix — never the value.
+    fp = [m for m in messages if m.startswith("snmp credentials:")]
+    assert fp and "len=8" in fp[0] and "secret" not in fp[0]
 
 
 # ---- run budget / cancellation (the 120s-timeout regression) ----------------
@@ -228,7 +268,7 @@ def test_cancelled_run_keeps_completed_sweeps_and_records_health(tmp_path):
             raise asyncio.CancelledError()
         return {root: FIXTURE for root in roots}
 
-    c = si.SnmpInventory(engine, cfg, PollerConfig(), walk_fn=walk_until_fdb)
+    c = si.SnmpInventory(engine, cfg, PollerConfig(snmp_community="test-ro"), walk_fn=walk_until_fdb)
     c._force_all = True
 
     import pytest
