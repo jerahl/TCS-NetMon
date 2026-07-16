@@ -269,23 +269,32 @@ function FdbTab({ switchId, portName }) {
 
 function TopologyTab({ switchId, portName }) {
   const [rows, setRows] = React.useState(null);
-  React.useEffect(() => { tabFetch(`/api/switches/${switchId}/lldp`, setRows); }, [switchId]);
-  if (!rows) return <Loading what="LLDP neighbors" />;
+  React.useEffect(() => { tabFetch(`/api/switches/${switchId}/neighbors`, setRows); }, [switchId]);
+  if (!rows) return <Loading what="EDP neighbors" />;
   return (
-    <Card kicker={rows.length ? staleKicker(rows, "LLDP neighbors") : "Topology"}>
-      {rows.length === 0 ? <EmptySweep what="LLDP" /> : (
+    <Card kicker={rows.length ? staleKicker(rows, "EDP neighbor(s)") : "Topology (EDP)"}>
+      {rows.length === 0 ? <EmptySweep what="EDP neighbor" /> : (
         <table className="grid">
-          <thead><tr><th>Local port</th><th>Neighbor</th><th>Neighbor port</th><th>System</th><th>Age</th></tr></thead>
+          <thead><tr><th>Local port</th><th>Neighbor</th><th>Neighbor port</th>
+                     <th>EXOS version</th><th>Proto</th><th>Entry age</th></tr></thead>
           <tbody>
-            {rows.map((r) => (
-              <tr key={r.local_ifindex}>
-                <td className="mono">{portName(r.local_ifindex)}</td>
-                <td>{r.remote_sysname || "—"}</td>
-                <td className="mono">{r.remote_port || "—"}</td>
-                <td className="dim">{(r.remote_sysdesc || "—").slice(0, 60)}</td>
-                <td className="mono dim">{ageOf(r.updated_at) || "—"}</td>
-              </tr>
-            ))}
+            {rows.map((r) => {
+              // extremeEdpEntryAge > 90s means the neighbor likely went away.
+              const stale = r.age_s !== null && r.age_s !== undefined && r.age_s > 90;
+              return (
+                <tr key={r.local_ifindex}>
+                  <td className="mono">{r.local_port || portName(r.local_ifindex)}</td>
+                  <td>{r.remote_sysname || "—"}</td>
+                  <td className="mono">{r.remote_port || "—"}</td>
+                  <td className="dim">{r.remote_sysdesc || "—"}</td>
+                  <td className="mono dim">{(r.protocol || "edp").toUpperCase()}</td>
+                  <td className="mono" style={stale ? { color: sevColor("warn") } : { color: "var(--dim)" }}>
+                    {r.age_s !== null && r.age_s !== undefined ? `${r.age_s}s` : "—"}
+                    {stale ? " ⚠" : ""}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}

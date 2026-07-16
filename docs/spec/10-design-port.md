@@ -399,7 +399,7 @@ Source: owner's "Extreme EXOS by SNMP" Zabbix 7.4 template. Numeric roots the
 |---|---|
 | ports | ifOperStatus `1.3.6.1.2.1.2.2.1.8`, ifAdminStatus `…2.2.1.7`, ifType `…2.2.1.3`, ifInErrors `…2.2.1.14`, ifOutErrors `…2.2.1.20`, ifInDiscards `…2.2.1.13`, ifOutDiscards `…2.2.1.19`, ifName `1.3.6.1.2.1.31.1.1.1.1`, ifHighSpeed `…31.1.1.1.15`, ifHCInOctets `…31.1.1.1.6`, ifHCOutOctets `…31.1.1.1.10`, dot3Duplex `1.3.6.1.2.1.10.7.2.1.19` |
 | fdb | dot1dTpFdbPort `1.3.6.1.2.1.17.4.3.1.2` (MAC in suffix) ⋈ dot1dBasePortIfIndex `1.3.6.1.2.1.17.1.4.1.2` |
-| lldp | lldpRem sysName `1.0.8802.1.1.2.1.4.1.1.9`, portId `…7`, portDesc `…8`, sysDesc `…10`, chassisId `…5` (index `timemark.localPort.remIdx`) |
+| edp *(replaced LLDP 2026-07-16)* | EXTREME-EDP-MIB extremeEdpTable (index local `slot.port` → ifIndex slot*1000+port): neighbor name `1.3.6.1.4.1.1916.1.13.2.1.3`, EXOS version `…4`, neighbor slot `…5`, neighbor port `…6`, entry age `…7`. EDP is Extreme-native (on by default on EXOS) — the owner's authoritative topology source for the all-Extreme fleet; LLDP-MIB dropped. |
 | vlans | extremeVlan VID `1.3.6.1.4.1.1916.1.2.1.2.1.10`, name `…1.2.1.2.1.2`, admin `…1.2.1.2.1.12` |
 | stack | member status `1.3.6.1.4.1.1916.1.33.2.1.3`, temp `…33.2.1.21`, CPU-5m `…32.1.4.1.9`, memTotal `…32.2.2.1.2`, memAvail `…32.2.2.1.3` |
 | poe | pethPsePort admin `1.3.6.1.2.1.105.1.1.1.3`, detect `…6`, class `…10` (index slot.port → ifIndex slot*1000+port); Extreme per-port measured **mW** `1.3.6.1.4.1.1916.1.27.2.1.1.6`; extremePethPseSlotTable (index slot, **W**): budget `…1.27.1.2.1.2`, allocated `…3`, status `…8`, available `…10`, capacity `…11`, measured `…14` |

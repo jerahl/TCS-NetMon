@@ -81,13 +81,16 @@ def test_mac_from_fdb_suffix():
     assert si.mac_from_fdb_suffix("1.2.3") is None  # wrong length
 
 
-def test_build_lldp():
-    rows = si.build_lldp(_walks(si._SWEEP_OIDS["lldp"][2]))
+def test_build_edp():
+    rows = si.build_edp(_walks(si._SWEEP_OIDS["edp"][2]))
     assert len(rows) == 1
     n = rows[0]
-    assert n["local_ifindex"] == 1001 and n["remote_sysname"] == "core-1"
-    assert n["remote_port"] == "Uplink to distribution"
-    assert n["remote_chassis"] == "00:04:96:aa:bb:cc"
+    assert n["local_ifindex"] == 1001        # local slot.port 1.1 -> 1*1000+1
+    assert n["remote_sysname"] == "core-1"
+    assert n["remote_port"] == "1:52"        # neighbor slot:port
+    assert n["remote_sysdesc"] == "31.7.1.4"  # neighbor EXOS version
+    assert n["protocol"] == "edp" and n["age_s"] == 12
+    assert n["remote_chassis"] is None       # EDP carries no chassis MAC
 
 
 def test_build_vlans():
@@ -210,15 +213,15 @@ def test_run_once_populates_all_tables(tmp_path):
     engine = _engine_with_switch(tmp_path)
     c = _collector(engine)
     written = asyncio.run(c.run_once())
-    # ports + fdb + lldp + vlans + stack + poe (2 ports + 2 slots)
+    # ports + fdb + edp + vlans + stack + poe (2 ports + 2 slots)
     # + entity (2 slots)
     assert written == 2 + 2 + 1 + 2 + 1 + 4 + 2
 
     ports = db.fetch_all(engine, "SELECT * FROM switch_ports WHERE device_id=1 ORDER BY ifindex")
     assert [p["oper_state"] for p in ports] == ["up", "down"]
     assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM fdb_entries")["n"] == 2
-    lldp = db.fetch_one(engine, "SELECT remote_sysname FROM lldp_neighbors WHERE local_ifindex=1001")
-    assert lldp["remote_sysname"] == "core-1"
+    edp = db.fetch_one(engine, "SELECT remote_sysname, protocol FROM neighbors WHERE local_ifindex=1001")
+    assert edp["remote_sysname"] == "core-1" and edp["protocol"] == "edp"
     assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM switch_vlans")["n"] == 2
     stack = db.fetch_one(engine, "SELECT * FROM stack_members WHERE slot=1")
     assert stack["mem_pct"] == 40.0
@@ -399,7 +402,7 @@ def test_cancelled_run_keeps_completed_sweeps_and_records_health(tmp_path):
     # ports + stack fleet passes completed before the cancel → marked done;
     # fdb (and the passes after it) did not.
     assert "ports" in c._last_run and "stack" in c._last_run
-    assert "fdb" not in c._last_run and "lldp" not in c._last_run
+    assert "fdb" not in c._last_run and "edp" not in c._last_run
     # The completed passes' data is in the DB.
     assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM switch_ports")["n"] == 2
     # And the cancellation is loud in collector_health (§4.5).

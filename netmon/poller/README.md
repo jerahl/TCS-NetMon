@@ -77,7 +77,7 @@ template). Writes the `006` inventory tables read by the Switches dashboard —
 |---|---|---|---|
 | ports | IF-MIB ifTable/ifXTable + EtherLike duplex | 120s | `switch_ports` (oper/admin/speed/duplex + rates) |
 | fdb | BRIDGE-MIB dot1dTpFdb ⋈ dot1dBasePortIfIndex | 900s | `fdb_entries` (MAC→ifIndex) |
-| lldp | LLDP-MIB lldpRemTable | 1800s | `lldp_neighbors` |
+| edp | EXTREME-EDP-MIB extremeEdpTable (Extreme-native; replaced LLDP) | 1800s | `neighbors` |
 | vlans | Extreme extremeVlanIfTable | 3600s | `switch_vlans` |
 | stack | Extreme stacking + CPU/mem/temp sensors | 300s | `stack_members` |
 
@@ -126,4 +126,4 @@ See spec §10.1 "Deferred".
 ## API
 
 `GET /api/switches`, `/{id}`, `/{id}/ports`, `/{id}/ports/{ifindex}` (port + FDB
-MACs), `/{id}/fdb`, `/{id}/lldp`, `/{id}/vlans` — read-only, viewer role, DB-only.
+MACs), `/{id}/fdb`, `/{id}/neighbors`, `/{id}/vlans` — read-only, viewer role, DB-only.

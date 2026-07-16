@@ -58,12 +58,14 @@ OID = {
     # BRIDGE-MIB FDB (not VLAN-scoped):
     "fdb_port": "1.3.6.1.2.1.17.4.3.1.2",      # dot1dTpFdbPort: MAC(suffix) -> bridge port
     "base_port_ifindex": "1.3.6.1.2.1.17.1.4.1.2",  # dot1dBasePortIfIndex: bport -> ifIndex
-    # LLDP-MIB lldpRemTable (index: timemark.localPort.remIndex):
-    "lldp_sysname": "1.0.8802.1.1.2.1.4.1.1.9",
-    "lldp_portid": "1.0.8802.1.1.2.1.4.1.1.7",
-    "lldp_portdesc": "1.0.8802.1.1.2.1.4.1.1.8",
-    "lldp_sysdesc": "1.0.8802.1.1.2.1.4.1.1.10",
-    "lldp_chassis": "1.0.8802.1.1.2.1.4.1.1.5",
+    # EXTREME-EDP-MIB extremeEdpTable (index: local slot.port; EDP is Extreme's
+    # native neighbor protocol, on by default on EXOS — owner's authoritative
+    # topology source). OIDs from the owner's Zabbix template (2026-07-16).
+    "edp_name": "1.3.6.1.4.1.1916.1.13.2.1.3",     # neighbor system name
+    "edp_version": "1.3.6.1.4.1.1916.1.13.2.1.4",  # neighbor EXOS version
+    "edp_slot": "1.3.6.1.4.1.1916.1.13.2.1.5",     # neighbor slot
+    "edp_port": "1.3.6.1.4.1.1916.1.13.2.1.6",     # neighbor port
+    "edp_age": "1.3.6.1.4.1.1916.1.13.2.1.7",      # seconds since last refresh
     # Extreme extremeVlanIfTable:
     "vlan_name": "1.3.6.1.4.1.1916.1.2.1.2.1.2",
     "vlan_vid": "1.3.6.1.4.1.1916.1.2.1.2.1.10",
@@ -262,27 +264,35 @@ def build_fdb(fdb_port: dict[str, str], base_port_ifindex: dict[str, str]) -> li
     return rows
 
 
-def build_lldp(walks: dict[str, dict[str, str]]) -> list[dict]:
-    """lldpRemTable index is timemark.localPortNum.remIndex — the middle field
-    is the local ifIndex. Last-writer-wins if several neighbours share a port."""
+def build_edp(walks: dict[str, dict[str, str]]) -> list[dict]:
+    """extremeEdpTable → neighbor rows. The row index is the LOCAL slot.port
+    (EXOS ifIndex = slot*1000 + port, the same scheme as ifName). EDP is
+    point-to-point, so one neighbor per local port; last-writer-wins if a
+    walk ever returns duplicates. remote_sysdesc carries the neighbor's EXOS
+    version; remote_chassis stays NULL (EDP carries no chassis MAC)."""
     by_local: dict[int, dict] = {}
-    keys = set()
-    for k in ("lldp_sysname", "lldp_portid", "lldp_portdesc", "lldp_sysdesc", "lldp_chassis"):
+    keys: set[str] = set()
+    for k in ("edp_name", "edp_version", "edp_slot", "edp_port", "edp_age"):
         keys.update(walks.get(k, {}))
+    g = walks.get
     for idx in keys:
         parts = idx.split(".")
-        if len(parts) < 3:
+        slot, port = _to_int(parts[0]), (_to_int(parts[1]) if len(parts) > 1 else None)
+        if slot is None:
             continue
-        local = _to_int(parts[1])
-        if local is None:
-            continue
-        g = walks.get
+        local = slot * 1000 + port if port is not None else slot
+        r_slot = _to_int(g("edp_slot", {}).get(idx))
+        r_port = _to_int(g("edp_port", {}).get(idx))
+        remote_port = (f"{r_slot}:{r_port}" if r_slot is not None and r_port is not None
+                       else (str(r_port) if r_port is not None else None))
         by_local[local] = {
             "local_ifindex": local,
-            "remote_sysname": g("lldp_sysname", {}).get(idx),
-            "remote_port": g("lldp_portdesc", {}).get(idx) or g("lldp_portid", {}).get(idx),
-            "remote_sysdesc": g("lldp_sysdesc", {}).get(idx),
-            "remote_chassis": g("lldp_chassis", {}).get(idx),
+            "remote_sysname": g("edp_name", {}).get(idx),
+            "remote_port": remote_port,
+            "remote_sysdesc": g("edp_version", {}).get(idx),
+            "remote_chassis": None,
+            "protocol": "edp",
+            "age_s": _to_int(g("edp_age", {}).get(idx)),
         }
     return list(by_local.values())
 
@@ -502,8 +512,8 @@ _SWEEP_OIDS = {
              "poe_slot_budget", "poe_slot_alloc", "poe_slot_status",
              "poe_slot_avail", "poe_slot_capacity", "poe_slot_measured"]),
     "fdb": ("sweep_fdb", "fdb_interval_s", ["fdb_port", "base_port_ifindex"]),
-    "lldp": ("sweep_lldp", "lldp_interval_s",
-             ["lldp_sysname", "lldp_portid", "lldp_portdesc", "lldp_sysdesc", "lldp_chassis"]),
+    "edp": ("sweep_edp", "edp_interval_s",
+            ["edp_name", "edp_version", "edp_slot", "edp_port", "edp_age"]),
     "vlans": ("sweep_vlans", "vlans_interval_s", ["vlan_name", "vlan_vid", "vlan_admin"]),
     "entity": ("sweep_entity", "entity_interval_s",
                ["ent_descr", "ent_contained", "ent_class", "ent_sw", "ent_serial"]),
@@ -532,7 +542,7 @@ class SnmpInventory:
         # gated internally by its own interval.
         self.interval_s = float(min(
             cfg.ports_interval_s, cfg.poe_interval_s, cfg.fdb_interval_s,
-            cfg.lldp_interval_s, cfg.vlans_interval_s, cfg.stack_interval_s,
+            cfg.edp_interval_s, cfg.vlans_interval_s, cfg.stack_interval_s,
             cfg.entity_interval_s,
         ))
         # The run budget is deliberately NOT the fastest interval: the first
@@ -593,7 +603,7 @@ class SnmpInventory:
     # Fleet-pass order when several sweeps are due at once: cheap/high-cadence
     # first, so a cancelled run has already banked the data operators watch
     # most (ports, stack) before the heavy FDB walk starts.
-    _SWEEP_ORDER = ("ports", "stack", "poe", "fdb", "lldp", "vlans", "entity")
+    _SWEEP_ORDER = ("ports", "stack", "poe", "fdb", "edp", "vlans", "entity")
 
     def _check_credentials(self) -> None:
         """Fail loud on credentials that can only produce fleet-wide silent
@@ -687,9 +697,9 @@ class SnmpInventory:
             walks = await self._walk_keys(host, _SWEEP_OIDS["fdb"][2])
             rows = build_fdb(walks["fdb_port"], walks["base_port_ifindex"])
             written += self._replace(dev_id, "fdb_entries", "mac", rows)
-        if "lldp" in due:
-            walks = await self._walk_keys(host, _SWEEP_OIDS["lldp"][2])
-            written += self._replace(dev_id, "lldp_neighbors", "local_ifindex", build_lldp(walks))
+        if "edp" in due:
+            walks = await self._walk_keys(host, _SWEEP_OIDS["edp"][2])
+            written += self._replace(dev_id, "neighbors", "local_ifindex", build_edp(walks))
         if "vlans" in due:
             walks = await self._walk_keys(host, _SWEEP_OIDS["vlans"][2])
             written += self._replace(dev_id, "switch_vlans", "vlan_id", build_vlans(walks))

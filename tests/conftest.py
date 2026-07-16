@@ -232,14 +232,16 @@ CREATE TABLE fdb_entries (
 )
 """
 
-LLDP_NEIGHBORS_DDL_SQLITE = """
-CREATE TABLE lldp_neighbors (
+NEIGHBORS_DDL_SQLITE = """
+CREATE TABLE neighbors (
     device_id INTEGER NOT NULL,
     local_ifindex INTEGER NOT NULL,
     remote_sysname TEXT,
     remote_port TEXT,
     remote_sysdesc TEXT,
     remote_chassis TEXT,
+    protocol TEXT,
+    age_s INTEGER,
     updated_at TIMESTAMP,
     PRIMARY KEY (device_id, local_ifindex)
 )
@@ -476,7 +478,7 @@ def create_core_tables(engine) -> None:
             FIBER_LINK_STATE_DDL_SQLITE,
             SWITCH_PORTS_DDL_SQLITE,
             FDB_ENTRIES_DDL_SQLITE,
-            LLDP_NEIGHBORS_DDL_SQLITE,
+            NEIGHBORS_DDL_SQLITE,
             SWITCH_VLANS_DDL_SQLITE,
             STACK_MEMBERS_DDL_SQLITE,
             AP_DETAILS_DDL_SQLITE,

@@ -139,18 +139,23 @@ def switch_fdb(
     )]
 
 
-@router.get("/{sid}/lldp")
-def switch_lldp(
+@router.get("/{sid}/neighbors")
+def switch_neighbors(
     sid: int,
     engine: Engine = Depends(get_engine),
     _user=Depends(require_role(Role.viewer)),
 ) -> list[dict]:
+    """Discovered neighbors (EDP on this Extreme fleet — spec 10 §4). The
+    local port name is joined from switch_ports so the UI shows "1:24", not a
+    bare ifIndex."""
     _switch_or_404(engine, sid)
     return [dict(r) for r in db.fetch_all(
         engine,
-        "SELECT local_ifindex, remote_sysname, remote_port, remote_sysdesc, "
-        "remote_chassis, updated_at FROM lldp_neighbors "
-        "WHERE device_id = :d ORDER BY local_ifindex",
+        "SELECT n.local_ifindex, sp.name AS local_port, n.remote_sysname, "
+        "n.remote_port, n.remote_sysdesc, n.remote_chassis, n.protocol, n.age_s, "
+        "n.updated_at FROM neighbors n "
+        "LEFT JOIN switch_ports sp ON sp.device_id = n.device_id AND sp.ifindex = n.local_ifindex "
+        "WHERE n.device_id = :d ORDER BY n.local_ifindex",
         {"d": sid},
     )]
 

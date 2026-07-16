@@ -138,6 +138,14 @@ def test_013_creates_surveillance_voip_tables():
         assert f"CREATE TABLE IF NOT EXISTS {table}" in sql, f"missing table {table}"
 
 
+def test_014_renames_neighbors_and_adds_edp_columns():
+    migs = {m.version: m for m in discover_migrations()}
+    assert "014" in migs, "expected 014 EDP-neighbors migration"
+    sql = migs["014"].path.read_text()
+    assert "RENAME TO neighbors" in sql
+    assert "ADD COLUMN protocol" in sql and "ADD COLUMN age_s" in sql
+
+
 def test_every_migration_has_rollback_note():
     for mig in discover_migrations():
         text_ = mig.path.read_text().lower()
