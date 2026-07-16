@@ -365,7 +365,18 @@ class SnmpInventory:
             cfg.ports_interval_s, cfg.fdb_interval_s, cfg.lldp_interval_s,
             cfg.vlans_interval_s, cfg.stack_interval_s,
         ))
-        self.timeout_s = self.interval_s
+        # A cycle where every sweep is due (always true on the first run) walks
+        # the whole fleet and legitimately outlives the fastest interval — the
+        # cycle timeout must be sized to the slowest sweep, not the cadence.
+        # run_guarded enforces it and records the failure (fail loud); the
+        # supervisor timeout sits above it as a pure hang backstop, so a
+        # timeout is always a recorded collector_health error, never a silent
+        # cancellation that leaves the collector "unknown" forever.
+        self.sweep_timeout_s = float(max(
+            cfg.ports_interval_s, cfg.fdb_interval_s, cfg.lldp_interval_s,
+            cfg.vlans_interval_s, cfg.stack_interval_s,
+        ))
+        self.timeout_s = self.sweep_timeout_s + 30.0
         self._last_run: dict[str, float] = {}
         self._force_all = False
 
@@ -518,7 +529,18 @@ class SnmpInventory:
         health.record_start(self.engine, self.name)
         started = time.monotonic()
         try:
-            written = await self.run_once()
+            # Own timeout, below the supervisor's, so an over-long cycle is
+            # recorded here instead of cancelled invisibly from outside.
+            # Shutdown cancellation still propagates and writes nothing.
+            written = await asyncio.wait_for(self.run_once(), timeout=self.sweep_timeout_s)
+        except asyncio.TimeoutError:
+            health.record_error(
+                self.engine, self.name,
+                message=f"sweep cycle timed out after {self.sweep_timeout_s:.0f}s "
+                        f"(fleet too large for the configured intervals?)",
+                duration_ms=int((time.monotonic() - started) * 1000))
+            log.error("snmp_inventory sweep cycle timed out after %.0fs", self.sweep_timeout_s)
+            return
         except Exception as exc:
             health.record_error(self.engine, self.name, message=repr(exc),
                                 duration_ms=int((time.monotonic() - started) * 1000))

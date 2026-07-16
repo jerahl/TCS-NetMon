@@ -171,6 +171,36 @@ def test_run_once_records_collector_health(tmp_path):
     assert h is not None and h["consecutive_failures"] == 0 and h["last_success"] is not None
 
 
+def test_cycle_timeout_sized_to_slowest_sweep_not_cadence(tmp_path):
+    """A first run has every sweep due and outlives the fastest interval; the
+    cycle timeout must not be the task cadence (that cancelled real fleets
+    mid-sweep forever) but the slowest sweep, with the supervisor above it."""
+    c = _collector(db.make_engine(f"sqlite:///{tmp_path/'t.db'}"))
+    assert c.interval_s == 120.0          # fastest sweep drives the cadence
+    assert c.sweep_timeout_s == 3600.0    # slowest sweep bounds the cycle
+    assert c.timeout_s > c.sweep_timeout_s  # supervisor is only the hang backstop
+
+
+def test_cycle_timeout_is_recorded_not_silent(tmp_path):
+    """Fail loud (§4.5): an over-long cycle lands in collector_health as an
+    error — never an invisible cancellation that stays 'unknown' forever."""
+    engine = _engine_with_switch(tmp_path)
+    cfg = SnmpInventoryConfig(enabled=True)
+
+    async def hang(host, roots):
+        await asyncio.sleep(30)
+        return {}
+
+    c = si.SnmpInventory(engine, cfg, PollerConfig(), walk_fn=hang)
+    c._force_all = True
+    c.sweep_timeout_s = 0.05
+    asyncio.run(c.run_guarded())  # guarded: records the timeout, does not raise
+    h = db.fetch_one(engine, "SELECT * FROM collector_health WHERE name='snmp_inventory'")
+    assert h["consecutive_failures"] == 1
+    assert "timed out" in h["last_error"]
+    assert h["last_success"] is None
+
+
 def test_all_switches_failing_records_error(tmp_path):
     engine = _engine_with_switch(tmp_path)
     cfg = SnmpInventoryConfig(enabled=True)
