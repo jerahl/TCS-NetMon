@@ -150,21 +150,33 @@ shadow-alert diff has run clean for the agreed window.
 - [x] CLAUDE.md rewritten to v2.0 (mission, scope, phases) — this commit.
 - [x] README.md carries a plan-v0.3 pointer note — this commit.
 - [x] Spec 10 header cross-references this spec — this commit.
-- [ ] Drop the unused `apscheduler` pin from `pyproject.toml` (next code
-      session; trivial, but not a docs change).
-- [ ] Fold known debt into 10.0: portable `seed.upsert_devices()` (MariaDB-only
-      `ON DUPLICATE KEY UPDATE`), DB-backed session store before multi-worker
-      uvicorn, nav routes that fall through to Global (`#/xiq`, `#/wireless`,
-      `#/events`).
+- [x] Drop the unused `apscheduler` pin from `pyproject.toml` — done 2026-07-16.
+- [x] Fold known debt into 10.0 — done 2026-07-16: portable
+      `seed.upsert_devices()` (SELECT-then-UPDATE/INSERT; runs on SQLite and
+      MariaDB, idempotent re-seed, never re-enables or blanks source keys),
+      DB-backed session store (migration `007`; SHA-256 token digest at rest,
+      restart/multi-worker safe, loud in-process fallback when `007` is
+      unapplied), `#/xiq` and `#/wireless` now render an honest "Planned —
+      phase 10.2" page instead of falling through to Global (`#/events` was
+      fixed by the Events Console).
 - `reference/` stays — the authoritative record of request shapes and gotchas
   (spec 00) until each collector's detail cycles land; prune after 10.4.
 
 ## Next session
 
+- **Phase 10.0 is complete (2026-07-16)** including this spec's amendments:
+  NetMon Status page + `/api/netmon-status` (D2), `netmon-seed
+  --sites-from-db` (D9), nav disposition (Servers/FortiGate as Zabbix
+  deep-links via `[web] zabbix_url` + `/api/meta`, XDR dropped, NetMon Status
+  in a System section — D1/D2/D8), and the §8 housekeeping/debt items.
+  Details in spec 10's progress log (2026-07-16 entry).
 - Owner: sign off (or veto) the ⛔ gates — D3, D4, D5, D6 — they gate 10.1,
-  10.4, 10.6, and 11.x scope.
-- Start 10.0: fix `/api/status` dimensions, add `/api/events` filters +
-  `/api/collector-health`, port design shell/primitives, NetMon Status page,
-  `--sites-from-db`.
+  10.4, 10.6, and 11.x scope. (Note: spec 10 Q2/Q3 record owner approval of
+  the D6 sweeps and D3 ring buffer on 2026-07-15, and the 10.1 sweep code is
+  already on main under that amendment — reconcile this table's "open" marks
+  with those resolutions when signing.)
+- Next code session: **finish Phase 10.1** — the Switches page UI (8 tabs)
+  over the existing switch API; then the deferred sweeps (PoE, ENTITY
+  serial/fw, fans/PSUs) once a PoE fixture is captured.
 - Capture SNMP fixture walks from one lab EXOS stack (ports/FDB/LLDP/stack)
-  into `tests/fixtures/` ahead of the D6 gate.
+  into `tests/fixtures/`.

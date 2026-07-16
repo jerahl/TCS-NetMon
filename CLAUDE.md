@@ -46,7 +46,6 @@ NetMon also owns **alerting** (rules → dedupe → maintenance windows → SMTP
 - **MariaDB** via **SQLAlchemy Core** (no ORM/declarative models — explicit, SQL-shaped queries). Schema via plain numbered migration scripts in `migrations/` applied by a small runner; no Alembic.
 - **Allowed third-party dependencies:** `fastapi`, `uvicorn`, `sqlalchemy`, `httpx`, `pymysql` (MariaDB DBAPI driver — owner-approved 2026-07-11), `python3-saml` (ClassLink SSO — owner-approved 2026-07-13; links `xmlsec1`/`libxml2` system libs, installed at deploy time). Pinned in a lockfile. **Do not add any other dependency without stopping and asking.** Prefer stdlib. ICMP/SNMP are subprocess calls to `fping` / `snmpget` / (⛔ D6) `snmpbulkwalk` — do not introduce a Python SNMP library.
   - `websockets` (Milestone Events/State live path) is **recommended-pending sign-off** (⛔ spec 11 D5). `collectors/ws.py` is built and tested against a fake transport; do not wire a live socket until the dependency is approved and pinned.
-  - `apscheduler` is pinned but **unused** (the supervisor is hand-rolled asyncio) — drop the pin in the next code session (spec 11 §8).
   - `ldap3` is retired (SAML claims carry roles; no directory bind).
 - **Frontend:** React components ported from `jerahl/ZabbixCustomDashboard` — including the spec-10 "Zabbix Extreme" design port — built with **esbuild** to static files served by FastAPI. `leaflet` 1.9.4 (site map — owner-approved 2026-07-14) is bundled locally like React. No Babel-standalone, no unpkg/CDN loads, no framework migration.
 - **Auth:** Single sign-on. NetMon is a **SAML 2.0 Service Provider**; **ClassLink** is the IdP. Assertion `role`/`group_ids` claims map to roles (`viewer` < `operator` < `admin`); NetMon issues its own server-side session cookie and never handles a password. Break-glass local account (PBKDF2, stdlib) and a dev bypass (refused when `secure_cookies=true`) remain.
@@ -116,7 +115,7 @@ netmon/
 
 ## 7. Milestones and phases
 
-**Delivered:** Phases 0–4, 6, 9 (foundation, poller, XIQ status collector, first UI port, alert engine in shadow, site map); Phases 5/7 collectors at state-level (PF snapshot, Milestone Config-API poll, 3CX trunks, rConfig freshness). Phase 8 (cutover) remains owner-gated at the end.
+**Delivered:** Phases 0–4, 6, 9 (foundation, poller, XIQ status collector, first UI port, alert engine in shadow, site map); Phases 5/7 collectors at state-level (PF snapshot, Milestone Config-API poll, 3CX trunks, rConfig freshness); **Phase 10.0 complete** (2026-07-16, incl. the spec-11 amendments: NetMon Status page, seed `--sites-from-db`, nav disposition, DB-backed sessions); Phase 10.1 collection foundation (SNMP sweeps + switch API) with the Switches page UI remaining. Phase 8 (cutover) remains owner-gated at the end.
 
 **Forward plan (spec 11 §7 — work phase-by-phase; do not start a phase until the prior phase's DoD is met and committed):**
 

@@ -3,7 +3,7 @@
 **2026-07-15:** adopted into the standalone-scope revision — `docs/spec/11-standalone-scope.md` is the plan of
 record; it amends the phases below (adds NetMon Status page, seed `--sites-from-db`, 10.6 history buffer,
 11.x post-parity bucket) and records recommendations for this spec's §10 open questions as decisions D1–D9.
-**Status:** IN PROGRESS — Phase 10.0 complete (2026-07-14); Phase 10.1 collection foundation complete (SNMP sweeps + switch API + tests, 2026-07-15) with the Switches page UI remaining; Phases 10.2–10.5 pending. Originated as the design-analysis session deliverable (2026-07-14).
+**Status:** IN PROGRESS — Phase 10.0 complete including the spec-11 amendments (NetMon Status page, seed `--sites-from-db`, nav disposition, debt items — 2026-07-16); Phase 10.1 collection foundation complete (SNMP sweeps + switch API + tests, 2026-07-15) with the Switches page UI remaining; Phases 10.2–10.5 pending. Originated as the design-analysis session deliverable (2026-07-14).
 **Design source:** `Zabbix_Extreme.zip` (Claude Design handoff: 18 HTML pages + ~50 JSX/CSS modules). Keep the
 archive out of the repo (it contains real hostnames/IPs in mock data); extract locally when implementing.
 **Goal:** make NetMon's UI match this design, and build the data layer the pages need — **cache current
@@ -403,6 +403,46 @@ Source: owner's "Extreme EXOS by SNMP" Zabbix 7.4 template. Numeric roots the
 | vlans | extremeVlan VID `1.3.6.1.4.1.1916.1.2.1.2.1.10`, name `…1.2.1.2.1.2`, admin `…1.2.1.2.1.12` |
 | stack | member status `1.3.6.1.4.1.1916.1.33.2.1.3`, temp `…33.2.1.21`, CPU-5m `…32.1.4.1.9`, memTotal `…32.2.2.1.2`, memAvail `…32.2.2.1.3` |
 | (not yet) | PoE `1.3.6.1.2.1.105.1.1.1.{6 detect,10 class}` + Extreme measured `1.3.6.1.4.1.1916.1.27.2.1.1.6`; ENTITY serial/model/fw `1.3.6.1.2.1.47.1.1.1.1.{11,2,9}`; fans `…1916.1.1.1.9.1.*`, PSUs `…1916.1.1.1.27.1.*` |
+
+**2026-07-16 — Phase 10.0 spec-11 amendments landed** (all ungated: read-only,
+DB-only, no new deps). Phase 10.0 is now complete *including* the spec-11
+additions; verified end-to-end (uvicorn + headless-Chromium on a seeded DB:
+login → pages render live data, session survives a server restart, no runtime
+console errors, no external fetches).
+
+- **NetMon Status (D2)** — `GET /api/netmon-status` (viewer role): collector
+  heartbeats reusing the `/api/collector-health` derivation, supervised-task
+  registrations + run stats (new `Supervisor.running_names()`; in-process view,
+  reset on restart — labeled as such in the UI), portable DB row counts
+  (devices/state/events±24h/open alerts/shadow notifications/live sessions),
+  engine+poller mode flags, uptime. New page `#/netmon-status`
+  (`pages/netmon_status.jsx`) in a new nav **System** section — the standalone
+  replacement for ZCD's Zabbix Status page.
+- **Nav disposition (D1/D2/D8)** — new `[web] zabbix_url` config +
+  `GET /api/meta` (version + deep-link base, fetched once by the shell).
+  Servers and FortiGate render as deep-links into the retained ZCD pages
+  (`zabbix.php?action=tcs.servers.view` / `tcs.fortigate.view`, new-tab) or
+  disabled-with-tooltip when `zabbix_url` is unset; XDR stays dropped. Nav
+  footer version now comes from `/api/meta`.
+- **Fall-through routes fixed** — `#/xiq` and `#/wireless` render an honest
+  "Planned — phase 10.2" page (`pages/planned.jsx`) instead of silently
+  showing Global.
+- **Seed rework (D9 + §8 debt)** — `netmon-seed --sites-from-db` re-seeds from
+  fresh XIQ/PF exports with the registry's own site assignments (no Zabbix;
+  combinable with `--sites`, file overrides). `upsert_devices()` is now
+  portable (SELECT-then-UPDATE/INSERT — PyMySQL "changed rows" semantics made
+  UPDATE-rowcount routing unsafe on idempotent re-seeds), keeps operator
+  `enabled` insert-only, and never regresses per-source keys to NULL.
+- **DB-backed sessions (§8 debt)** — migration `007_sessions.sql` +
+  `DbSessionStore` (same narrow interface): only a SHA-256 digest of the
+  cookie token at rest, expiry compared in Python (portable), opportunistic
+  purge on login, restart/multi-worker safe. App falls back to the in-process
+  store with a loud warning when `007` is unapplied. Deploy runbook §5
+  updated.
+- Housekeeping: unused `apscheduler` pin dropped (pyproject/README/CLAUDE.md).
+- Tests: +`test_netmon_status_api`, +DbSessionStore lifecycle/expiry/
+  token-never-at-rest, +portable-upsert + `--sites-from-db` seed tests,
+  +migration `007` assertions. Full suite green (162).
 
 ## Next session
 
