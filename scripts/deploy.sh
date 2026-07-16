@@ -31,7 +31,8 @@
 #   * DB schema via `python -m netmon.migrate`
 #   * a hardened systemd unit (sandboxed uvicorn bound to 127.0.0.1)
 #   * nginx TLS reverse proxy (HSTS + security headers, HTTP->HTTPS redirect)
-#   * host firewall (SSH + HTTPS only; the app port stays loopback-only)
+#   * host firewall (SSH + HTTPS in; SNMP UDP/161 out + replies for the
+#     poller/sweeps — scope with SNMP_SOURCE_CIDR; app port stays loopback-only)
 #
 set -euo pipefail
 
@@ -60,6 +61,16 @@ NETMON_TLS_KEY="${NETMON_TLS_KEY:-}"
 ENABLE_FIREWALL="${ENABLE_FIREWALL:-1}"
 ENABLE_FAIL2BAN="${ENABLE_FAIL2BAN:-0}"
 SSH_PORT="${SSH_PORT:-22}"               # allowed through the firewall so you don't lock yourself out
+# SNMP (UDP/161) rules for the poller + inventory sweeps: an explicit outbound
+# allow for queries, plus an inbound allow for the switches' replies (source
+# port 161). Replies should ride conntrack, but field experience says they get
+# dropped under sweep load — the explicit rule makes the path deterministic.
+# SCOPE IT: set SNMP_SOURCE_CIDR to your switch management network(s),
+# comma-separated (e.g. "10.20.0.0/16,10.21.0.0/16"). Empty = any source,
+# which also lets arbitrary hosts reach ephemeral UDP ports by sourcing from
+# port 161 — fine on a closed management VLAN, sloppy anywhere else.
+OPEN_SNMP="${OPEN_SNMP:-1}"
+SNMP_SOURCE_CIDR="${SNMP_SOURCE_CIDR:-}"
 
 SERVICE_NAME="netmon"
 # The source tree = the directory this script lives in, one level up.
@@ -424,6 +435,20 @@ setup_firewall() {
       run ufw allow "$SSH_PORT/tcp"
       run ufw allow 80/tcp
       run ufw allow 443/tcp
+      if [[ "$OPEN_SNMP" == 1 ]]; then
+        # Poller + snmp_inventory sweeps: queries out to UDP/161, replies back
+        # from source port 161 (explicit — conntrack drops these under load).
+        run ufw allow out 161/udp comment 'NetMon SNMP queries'
+        if [[ -n "$SNMP_SOURCE_CIDR" ]]; then
+          local cidr
+          for cidr in ${SNMP_SOURCE_CIDR//,/ }; do
+            run ufw allow in proto udp from "$cidr" port 161 comment 'NetMon SNMP replies'
+          done
+        else
+          warn "SNMP_SOURCE_CIDR unset — allowing SNMP replies (udp src 161) from ANY source; scope it to your switch management network(s)"
+          run ufw allow in proto udp from any port 161 comment 'NetMon SNMP replies'
+        fi
+      fi
       run ufw default deny incoming
       run ufw default allow outgoing
       run ufw --force enable
@@ -433,6 +458,19 @@ setup_firewall() {
       run firewall-cmd --permanent --add-port="$SSH_PORT/tcp"
       run firewall-cmd --permanent --add-service=http
       run firewall-cmd --permanent --add-service=https
+      if [[ "$OPEN_SNMP" == 1 ]]; then
+        # Outbound is open by default in firewalld zones; this admits the
+        # switches' replies (source port 161), scoped when a CIDR is given.
+        if [[ -n "$SNMP_SOURCE_CIDR" ]]; then
+          local cidr
+          for cidr in ${SNMP_SOURCE_CIDR//,/ }; do
+            run firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=$cidr source-port port=161 protocol=udp accept"
+          done
+        else
+          warn "SNMP_SOURCE_CIDR unset — allowing SNMP replies (udp src 161) from ANY source; scope it to your switch management network(s)"
+          run firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source-port port=161 protocol=udp accept"
+        fi
+      fi
       run firewall-cmd --reload
       ;;
   esac

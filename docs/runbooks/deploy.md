@@ -49,7 +49,13 @@ TLS reverse proxy** (HTTP→HTTPS redirect, HSTS + security headers); and sets a
   `MemoryDenyWriteExecute`, writable paths limited to state + logs.
 - Config `0640 root:netmon`; TLS key `0600 root:root`; secrets stay in
   `/etc/netmon/`, never in the repo.
-- Firewall default-deny inbound except SSH (`SSH_PORT`, default 22) and 80/443.
+- Firewall default-deny inbound except SSH (`SSH_PORT`, default 22) and 80/443,
+  plus **SNMP for the poller/sweeps** (`OPEN_SNMP=1`, default): UDP/161 out and
+  the switches' replies (UDP source-port 161) in. **Scope the reply rule** with
+  `SNMP_SOURCE_CIDR="10.20.0.0/16,10.21.0.0/16"` (comma-separated management
+  networks) — left empty it admits source-port-161 UDP from anywhere and the
+  script warns. Symptom when missing: every switch reads "no response/timeout"
+  in the sweep while `snmpbulkwalk` from another host works.
 - Single uvicorn worker is still the default; multi-worker is safe once
   migration `007` (DB-backed sessions) is applied — see §5.
 - **Phase 2 note:** the poller shells out to `fping`, which needs raw sockets.
