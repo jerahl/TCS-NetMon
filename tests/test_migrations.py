@@ -121,6 +121,15 @@ def test_011_creates_wireless_tables():
         assert f"CREATE TABLE IF NOT EXISTS {table}" in sql, f"missing table {table}"
 
 
+def test_012_creates_pf_nodes():
+    migs = {m.version: m for m in discover_migrations()}
+    assert "012" in migs, "expected 012 pf_nodes migration"
+    sql = migs["012"].path.read_text()
+    assert "CREATE TABLE IF NOT EXISTS pf_nodes" in sql
+    for col in ("last_switch", "conn_method", "online", "dot1x_user"):
+        assert col in sql, f"missing column {col}"
+
+
 def test_every_migration_has_rollback_note():
     for mig in discover_migrations():
         text_ = mig.path.read_text().lower()

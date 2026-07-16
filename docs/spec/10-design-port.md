@@ -3,7 +3,7 @@
 **2026-07-15:** adopted into the standalone-scope revision — `docs/spec/11-standalone-scope.md` is the plan of
 record; it amends the phases below (adds NetMon Status page, seed `--sites-from-db`, 10.6 history buffer,
 11.x post-parity bucket) and records recommendations for this spec's §10 open questions as decisions D1–D9.
-**Status:** IN PROGRESS — Phase 10.0 complete incl. the spec-11 amendments (2026-07-16); Phase 10.1 **feature-complete** (SNMP sweeps + switch API + 8-tab UI + PoE/entity sweeps, 2026-07-15/16); Phase 10.2 **built** (wireless tables + XIQ cycles + wireless API + XIQ/AP-Detail pages, 2026-07-16 — live-fleet validation of the FULL/clients payload shapes pending); Phases 10.3–10.5 pending. Originated as the design-analysis session deliverable (2026-07-14).
+**Status:** IN PROGRESS — Phase 10.0 complete incl. the spec-11 amendments (2026-07-16); Phase 10.1 **feature-complete** (SNMP sweeps + switch API + 8-tab UI + PoE/entity sweeps, 2026-07-15/16); Phase 10.2 **built** (wireless tables + XIQ cycles + wireless API + XIQ/AP-Detail pages, 2026-07-16 — live-fleet validation of the FULL/clients payload shapes pending); Phase 10.3 **built** (`pf_nodes` persistence + snapshot fetchers + NAC API/pages + the FDB⋈PF port-identity join, 2026-07-16 — PF snapshot endpoint paths pending validation on PF 12.3); Phases 10.4–10.5 pending. Originated as the design-analysis session deliverable (2026-07-14).
 **Design source:** `Zabbix_Extreme.zip` (Claude Design handoff: 18 HTML pages + ~50 JSX/CSS modules). Keep the
 archive out of the repo (it contains real hostnames/IPs in mock data); extract locally when implementing.
 **Goal:** make NetMon's UI match this design, and build the data layer the pages need — **cache current
@@ -528,8 +528,35 @@ client's documented fields — **replace with captured exports and confirm the
 FULL view's radio fields on the live tenant before trusting `ap_radios`.**
 Verified headlessly on seeded data end-to-end; suite green.
 
+**2026-07-16 — Phase 10.3 Identity built.** Migration `012` `pf_nodes` (mac
+PK; identity from `/nodes/search` + role *name* from `/node_categories` +
+switch/port/ssid/auth from open `/locationlogs/search`, merged into one row
+per MAC, replace-on-refresh). The Phase 5 in-memory `app.state.pf` snapshot is
+**deleted** — the collector now persists via `db.replace_rows` and all three
+inputs are required (partial data never overwrites good rows, §4.5). Page-
+level singletons → `snapshot_cache` keys (`pf.rejects` + cluster/services/
+queues/sources/profiles/violations), each **fail-soft** (a 404 on one endpoint
+flips its key to `ok=0`, never blocks the node cycle) via the new
+`netmon/snapshots.py` helper. NAC API reworked to DB-only:
+`/api/nac[/nodes|/sessions|/quarantine|/policies|/cluster]`. Five-tab NAC page
+replaces the thin one. **The marquee payoff landed**: `switch_ports` port
+detail enriches each FDB MAC with PF identity (`fdb_entries ⋈ pf_nodes ON
+mac`) — hostname/owner/role/reg shown, unknown MACs honestly "unknown to PF";
+AP Detail clients gain PF role/reg the same way. Verified headlessly (NAC five
+tabs incl. STALE-badge on a failed snapshot key; port pane with 8 MACs, 7
+resolved + 1 unknown). Reconciliation: `snapshot_cache` fetch paths follow
+PF's documented v1 REST surface — validate against production PF 12.3; a
+wrong path reads `ok=0` in the UI (the honest signal), never a crash.
+
 ## Next session
 
+- **10.3 validation on live PF**: confirm the six snapshot endpoint paths
+  (`/api/v1/cluster/servers`, `/services/status_all`, `/queues/stats`,
+  `/config/sources`, `/config/connection_profiles`, `/config/security_events`)
+  against PF 12.3; any that 404 show `ok=0` on the NAC Policies/Cluster tabs —
+  fix the path in `SNAPSHOT_FETCHES`. Capture a sanitized locationlog +
+  node_categories sample into `tests/fixtures/`. Owner: **Q8** (wireless PII)
+  still open.
 - **10.2 validation on the live fleet**: capture real FULL/clients payloads
   (extend `scripts/xiq_export.py` or curl), diff against the fixtures —
   especially the `radios` field coverage — and measure the actual call rate

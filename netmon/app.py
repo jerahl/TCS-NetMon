@@ -90,7 +90,8 @@ def register_tasks(app: FastAPI, cfg: Config, engine) -> None:
         except PfError as exc:
             log.error("PacketFence collector not started: %s", exc)
         else:
-            app.state.pf = pf  # NAC endpoint reads its cached snapshot
+            # 10.3: the NAC API reads pf_nodes/snapshot_cache from the DB —
+            # the old in-memory app.state.pf snapshot is gone.
             supervisor.register("packetfence", pf.run_guarded, interval_s=pf.interval_s, timeout_s=pf.timeout_s)
             log.info("PacketFence collector enabled: %ss", pf.interval_s)
 

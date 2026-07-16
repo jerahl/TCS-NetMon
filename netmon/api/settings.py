@@ -222,7 +222,6 @@ async def apply_settings(
         old_sup: Supervisor = app.state.supervisor
         await old_sup.stop()
         app.state.config = new_cfg
-        app.state.pf = None  # re-set by register_tasks iff PF is (still) enabled
         app.state.supervisor = Supervisor()
         register_tasks(app, new_cfg, engine)
         await app.state.supervisor.start()

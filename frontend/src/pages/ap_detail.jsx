@@ -104,13 +104,17 @@ export function ApDetailPage({ id }) {
       {wireless && wireless.clients?.length > 0 && (
         <Card title="Connected clients" kicker={`${wireless.clients.length} client(s) · cache cadence`}>
           <table className="grid">
-            <thead><tr><th>MAC</th><th>Hostname</th><th>User</th><th>SSID</th><th>Band</th><th>RSSI</th><th>OS</th><th>IP</th></tr></thead>
+            <thead><tr><th>MAC</th><th>Hostname</th><th>User</th><th>PF role</th><th>Reg</th><th>SSID</th><th>Band</th><th>RSSI</th><th>OS</th><th>IP</th></tr></thead>
             <tbody>
               {wireless.clients.map((c) => (
                 <tr key={c.mac}>
                   <td className="mono">{c.mac}</td>
                   <td>{c.hostname || "—"}</td>
-                  <td className="dim">{c.username || "—"}</td>
+                  <td className="dim">{c.username || c.pf_owner || "—"}</td>
+                  <td>{c.pf_role || "—"}</td>
+                  <td>{c.pf_status
+                    ? <span style={{ color: c.pf_status === "reg" ? sevColor("ok") : sevColor("warn"), fontWeight: 600 }}>{c.pf_status}</span>
+                    : "—"}</td>
                   <td>{c.ssid || "—"}</td>
                   <td className="mono dim">{c.band || "—"}</td>
                   <td className="mono" style={c.rssi_dbm !== null && c.rssi_dbm < -70 ? { color: sevColor("warn") } : undefined}>
@@ -122,7 +126,7 @@ export function ApDetailPage({ id }) {
             </tbody>
           </table>
           <div className="dim" style={{ fontSize: 11, marginTop: 8 }}>
-            PacketFence identity/posture join lands in phase 10.3.
+            Role/registration via wireless_clients ⋈ PacketFence (cache join).
           </div>
         </Card>
       )}

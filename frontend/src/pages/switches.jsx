@@ -190,18 +190,25 @@ function PortDetail({ switchId, ifindex }) {
             <div className="msg">No MAC addresses learned on this port in the last FDB sweep.</div>
           ) : (
             <table className="grid">
-              <thead><tr><th>MAC</th><th>VLAN</th></tr></thead>
+              <thead><tr><th>MAC</th><th>VLAN</th><th>Identity</th><th>Owner</th><th>Role</th><th>Reg</th></tr></thead>
               <tbody>
                 {detail.macs.map((m) => (
                   <tr key={m.mac}>
                     <td className="mono">{m.mac}</td>
                     <td className="mono dim">{m.vlan_id ?? "—"}</td>
+                    <td>{m.computername || <span className="dim">unknown to PF</span>}</td>
+                    <td className="dim">{m.owner || m.dot1x_user || "—"}</td>
+                    <td>{m.role ? <span className="pill">{m.role}</span> : "—"}</td>
+                    <td>{m.reg_status
+                      ? <span style={{ color: m.reg_status === "reg" ? sevColor("ok") : sevColor("warn"), fontWeight: 600 }}>
+                          {m.reg_status}</span>
+                      : "—"}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           )}
-          <div className="dim pd-note">PacketFence identity (hostname / owner / role) joins here in phase 10.3.</div>
+          <div className="dim pd-note">Identity via FDB ⋈ PacketFence (cache join, zero source calls).</div>
         </div>
       </div>
     </Card>

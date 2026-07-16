@@ -51,16 +51,27 @@ Ported from `reference/lib/PFClient.php`.
 - **Auth:** `POST /api/v1/login` → token, sent **raw** in `Authorization`
   (no `Bearer`); one auto-refresh on 401. `/search` returns **404 on empty** →
   treated as empty, not an error.
-- **What it does:** refreshes a cached NAC snapshot (registered / unregistered
-  counts, recent 802.1X rejects, node list) served by `GET /api/nac`. **Not**
-  written to `device_state` — PF stays a linked view pending the §9 merge
-  decision.
+- **What it does (Phase 10.3):** persists one `pf_nodes` row per MAC — identity
+  (`/nodes/search`, cursor-paged) + role *name* (`/node_categories`, resolves
+  the numeric `category_id`) + current switch/port/ssid/802.1X (open
+  `/locationlogs/search`), merged and replace-on-refreshed via
+  `db.replace_rows`. All three fetches are required — partial data must never
+  overwrite good rows (§4.5). Page-level singletons go to `snapshot_cache`
+  keys (`pf.rejects`, `pf.cluster`, `pf.services`, `pf.queues`, `pf.sources`,
+  `pf.profiles`, `pf.violations`), each **fail-soft**: a failing endpoint
+  flips only its key to `ok=0` and never blocks the node cycle. Served by
+  `/api/nac[/nodes|/sessions|/quarantine|/policies|/cluster]` (DB-only; the
+  Phase-5 in-memory snapshot is gone). `pf_nodes.mac` is the FDB⋈PF and
+  wireless-client identity join key.
 - **Interval:** `[packetfence] interval_s` (default 300s — PF is slow; cache
   hard, never in a request path).
-- **Failure modes:** on PF unreachable the task fails loud into
-  `collector_health`; the cached snapshot keeps its last-good `fetched_at`
-  (`ok:false` flags staleness). Never stale-as-fresh.
-- **Config:** `[packetfence] enabled, url, user, pass, verify_ssl, interval_s`.
+- **Failure modes:** node fetch failure fails loud into `collector_health` and
+  leaves `pf_nodes` visibly stale (never blanked); a snapshot-endpoint failure
+  is isolated to its key (`ok=0`). Never stale-as-fresh.
+- **Config:** `[packetfence] enabled, url, user, pass, verify_ssl, interval_s, node_limit`.
+- **Snapshot endpoint paths** (`SNAPSHOT_FETCHES` in `packetfence.py`) follow
+  PF's documented v1 REST surface — confirm against production PF 12.3; a
+  wrong path shows `ok=0` on the NAC Policies/Cluster tabs (the honest signal).
 
 ## Milestone (`milestone.py`, `milestone_client.py`, `ws.py`) — surveillance
 

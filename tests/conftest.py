@@ -360,6 +360,32 @@ CREATE TABLE wireless_clients (
 )
 """
 
+PF_NODES_DDL_SQLITE = """
+CREATE TABLE pf_nodes (
+    mac TEXT PRIMARY KEY,
+    computername TEXT,
+    ip TEXT,
+    vendor TEXT,
+    os TEXT,
+    device_type TEXT,
+    owner TEXT,
+    role TEXT,
+    reg_status TEXT,
+    vlan TEXT,
+    last_switch TEXT,
+    last_switch_ip TEXT,
+    last_port TEXT,
+    last_ssid TEXT,
+    conn_method TEXT,
+    conn_sub TEXT,
+    dot1x_user TEXT,
+    dhcp_fp TEXT,
+    last_seen TIMESTAMP,
+    online INTEGER NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP
+)
+"""
+
 SSIDS_DDL_SQLITE = """
 CREATE TABLE ssids (
     name TEXT PRIMARY KEY,
@@ -399,6 +425,7 @@ def create_core_tables(engine) -> None:
             AP_RADIOS_DDL_SQLITE,
             WIRELESS_CLIENTS_DDL_SQLITE,
             SSIDS_DDL_SQLITE,
+            PF_NODES_DDL_SQLITE,
             APP_SETTINGS_DDL_SQLITE,
             SETTINGS_AUDIT_DDL_SQLITE,
         ):

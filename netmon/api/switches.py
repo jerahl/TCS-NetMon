@@ -98,8 +98,9 @@ def port_detail(
     engine: Engine = Depends(get_engine),
     _user=Depends(require_role(Role.viewer)),
 ) -> dict:
-    """One port plus the MAC addresses learned on it (the FDB payoff). PF
-    identity enrichment is added when `pf_nodes` exists (Phase 10.3)."""
+    """One port plus the MAC addresses learned on it, each enriched with
+    PacketFence identity via ``fdb_entries ⋈ pf_nodes ON mac`` — the design's
+    marquee port-detail feature (spec 10 §3), pure SQL, zero source calls."""
     _switch_or_404(engine, sid)
     port = db.fetch_one(
         engine,
@@ -113,8 +114,11 @@ def port_detail(
         raise HTTPException(status_code=404, detail="port not found")
     macs = [dict(r) for r in db.fetch_all(
         engine,
-        "SELECT mac, vlan_id, updated_at FROM fdb_entries "
-        "WHERE device_id = :d AND ifindex = :i ORDER BY mac",
+        "SELECT f.mac, f.vlan_id, f.updated_at, "
+        " p.computername, p.owner, p.role, p.reg_status, p.os, p.vendor, "
+        " p.ip AS pf_ip, p.dot1x_user, p.updated_at AS pf_updated_at "
+        "FROM fdb_entries f LEFT JOIN pf_nodes p ON p.mac = f.mac "
+        "WHERE f.device_id = :d AND f.ifindex = :i ORDER BY f.mac",
         {"d": sid, "i": ifindex},
     )]
     return {"port": dict(port), "macs": macs}

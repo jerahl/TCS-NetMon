@@ -109,9 +109,11 @@ def ap_detail(
     )]
     out["clients"] = [dict(r) for r in db.fetch_all(
         engine,
-        "SELECT mac, ssid, band, rssi_dbm, snr_db, os, hostname, username, ip, "
-        "connected_since, updated_at FROM wireless_clients "
-        "WHERE device_id = :d ORDER BY ssid, mac",
+        "SELECT w.mac, w.ssid, w.band, w.rssi_dbm, w.snr_db, w.os, w.hostname, "
+        "w.username, w.ip, w.connected_since, w.updated_at, "
+        "p.owner AS pf_owner, p.role AS pf_role, p.reg_status AS pf_status "
+        "FROM wireless_clients w LEFT JOIN pf_nodes p ON p.mac = w.mac "
+        "WHERE w.device_id = :d ORDER BY w.ssid, w.mac",
         {"d": device_id},
     )]
     return out

@@ -71,17 +71,67 @@ class PfClient:
     async def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(base_url=self._url, timeout=self._timeout, verify=self._verify)
 
+    MAX_PAGES = 50  # runaway-cursor backstop (50 × 1,000 rows)
+
+    async def _search_all(self, client: httpx.AsyncClient, path: str, body: dict) -> list[dict]:
+        """Drain a cursor-paged PF /search endpoint."""
+        rows: list[dict] = []
+        cursor: int | str = 0
+        for _ in range(self.MAX_PAGES):
+            data = await self._call(client, "POST", path, {**body, "cursor": cursor})
+            items = data.get("items")
+            if not isinstance(items, list) or not items:
+                break
+            rows.extend(items)
+            nxt = data.get("nextCursor")
+            if nxt in (None, "", cursor) or len(items) < int(body.get("limit") or 1000):
+                break
+            cursor = nxt
+        return rows
+
     async def nodes(self, limit: int = 1000) -> list[dict]:
-        """A page of nodes with the fields the NAC summary needs."""
+        """The whole node inventory (cursor-paged), with the identity fields
+        the pf_nodes table persists (reference PFClient field list)."""
         body = {
-            "cursor": 0, "limit": max(1, limit), "sort": ["mac ASC"],
-            "fields": ["mac", "computername", "status", "category_id", "device_class", "ip4log.ip", "last_seen"],
+            "limit": max(1, limit), "sort": ["mac ASC"],
+            "fields": ["mac", "pid", "computername", "status", "category_id",
+                       "device_class", "device_type", "device_manufacturer",
+                       "dhcp_fingerprint", "ip4log.ip", "last_seen"],
             "query": {"op": "not_equals", "field": "mac", "value": ""},
         }
         async with await self._client() as client:
-            data = await self._call(client, "POST", "/api/v1/nodes/search", body)
-        items = data.get("items")
-        return items if isinstance(items, list) else []
+            return await self._search_all(client, "/api/v1/nodes/search", body)
+
+    async def node_categories(self) -> dict[str, str]:
+        """category_id → role name (nodes carry only the numeric id)."""
+        async with await self._client() as client:
+            data = await self._call(client, "GET", "/api/v1/node_categories?limit=500", None)
+        out: dict[str, str] = {}
+        for r in data.get("items") or []:
+            cid = str(r.get("category_id") or r.get("id") or "")
+            name = str(r.get("name") or "")
+            if cid and name:
+                out[cid] = name
+        return out
+
+    async def open_locationlogs(self, limit: int = 1000) -> list[dict]:
+        """Open sessions (end_time sentinel) — the current switch/port/ssid/
+        auth per MAC that /nodes doesn't carry (reference clientsForNode)."""
+        body = {
+            "limit": max(1, limit), "sort": ["start_time DESC"],
+            "fields": ["mac", "switch", "switch_ip", "port", "vlan", "role",
+                       "ssid", "connection_type", "connection_sub_type",
+                       "dot1x_username", "ifDesc", "start_time"],
+            "query": {"op": "equals", "field": "end_time", "value": "0000-00-00 00:00:00"},
+        }
+        async with await self._client() as client:
+            return await self._search_all(client, "/api/v1/locationlogs/search", body)
+
+    async def get_json(self, path: str) -> dict:
+        """One read-only GET (snapshot_cache fetchers — cluster/services/
+        queues/config). PF's 404-means-empty applies."""
+        async with await self._client() as client:
+            return await self._call(client, "GET", path, None)
 
     async def recent_auth_failures(self, limit: int = 25) -> list[dict]:
         body = {
