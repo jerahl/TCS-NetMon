@@ -3,7 +3,7 @@
 **2026-07-15:** adopted into the standalone-scope revision — `docs/spec/11-standalone-scope.md` is the plan of
 record; it amends the phases below (adds NetMon Status page, seed `--sites-from-db`, 10.6 history buffer,
 11.x post-parity bucket) and records recommendations for this spec's §10 open questions as decisions D1–D9.
-**Status:** IN PROGRESS — Phase 10.0 complete incl. the spec-11 amendments (2026-07-16); Phase 10.1 **feature-complete** (SNMP sweeps + switch API + 8-tab UI + PoE/entity sweeps, 2026-07-15/16); Phase 10.2 **built** (wireless tables + XIQ cycles + wireless API + XIQ/AP-Detail pages, 2026-07-16 — live-fleet validation of the FULL/clients payload shapes pending); Phase 10.3 **built** (`pf_nodes` persistence + snapshot fetchers + NAC API/pages + the FDB⋈PF port-identity join, 2026-07-16 — PF snapshot endpoint paths pending validation on PF 12.3); Phases 10.4–10.5 pending. Originated as the design-analysis session deliverable (2026-07-14).
+**Status:** IN PROGRESS — Phase 10.0 complete incl. the spec-11 amendments (2026-07-16); Phase 10.1 **feature-complete** (SNMP sweeps + switch API + 8-tab UI + PoE/entity sweeps, 2026-07-15/16); Phase 10.2 **built** (wireless tables + XIQ cycles + wireless API + XIQ/AP-Detail pages, 2026-07-16 — live-fleet validation of the FULL/clients payload shapes pending); Phase 10.3 **built** (`pf_nodes` persistence + snapshot fetchers + NAC API/pages + the FDB⋈PF port-identity join, 2026-07-16 — PF snapshot endpoint paths pending validation on PF 12.3); Phase 10.4 **built** (camera/RS/trunk/extension persistence + milestone.overview/threecx.system snapshots + surveillance/voip API + pages + camera→FDB switch-port join, 2026-07-16 — ESS WebSocket D5 and camera JPEG proxy D7 deferred; Milestone/3CX payload shapes pending live validation); Phase 10.5 pending. Originated as the design-analysis session deliverable (2026-07-14).
 **Design source:** `Zabbix_Extreme.zip` (Claude Design handoff: 18 HTML pages + ~50 JSX/CSS modules). Keep the
 archive out of the repo (it contains real hostnames/IPs in mock data); extract locally when implementing.
 **Goal:** make NetMon's UI match this design, and build the data layer the pages need — **cache current
@@ -548,8 +548,31 @@ resolved + 1 unknown). Reconciliation: `snapshot_cache` fetch paths follow
 PF's documented v1 REST surface — validate against production PF 12.3; a
 wrong path reads `ok=0` in the UI (the honest signal), never a crash.
 
+**2026-07-16 — Phase 10.4 Surveillance + VoIP built.** Migration `013`
+(`cameras`, `recording_servers`, `trunks`, `extensions`). Milestone collector
+persists camera/RS attributes + storage rollup (same Config-API responses,
+previously discarded) + a `milestone.overview` snapshot; storage/hardware
+endpoints are fail-soft (older XProtect lacks them). 3CX collector persists
+trunk rows, wires the previously-dead `system_status()` →
+`snapshot_cache['threecx.system']`, and adds extensions (`/xapi/v1/Users`,
+fail-soft). Surveillance API (`/api/surveillance/{summary,cameras,cameras/
+{id},servers,storage}`) with the **camera→switch-port FDB join** at query
+time (`cameras.mac ⋈ fdb_entries`); VoIP API (`/api/voip/{summary,trunks,
+extensions}`). Four-tab Surveillance page + VoIP page. **Deferred (gated):**
+ESS Events/State WebSocket for live alarms (⛔ D5 — alarms show via
+Events/Problems meanwhile) and the camera JPEG proxy (D7 — status tiles +
+Smart Client deep-link, no video). Verified headlessly end-to-end. Milestone
+Config-API + 3CX v20 field shapes are inferred from the reference client —
+validate against the live VMS/PBX (spec §10 Q4).
+
 ## Next session
 
+- **10.4 validation on live sources**: capture real Milestone `/cameras`,
+  `/recordingServers`, `/storages`, `/hardware` and 3CX `/Trunks`, `/Users`,
+  `/SystemStatus` payloads; confirm the field mappings in
+  `milestone.py`/`threecx.py` and the storage byte/GB scaling. Owner: **D5**
+  (websockets) + **D7** (JPEG proxy) sign-off gates the live-alarm and video
+  pieces.
 - **10.3 validation on live PF**: confirm the six snapshot endpoint paths
   (`/api/v1/cluster/servers`, `/services/status_all`, `/queues/stats`,
   `/config/sources`, `/config/connection_profiles`, `/config/security_events`)

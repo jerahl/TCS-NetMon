@@ -397,6 +397,64 @@ CREATE TABLE ssids (
 """
 
 
+RECORDING_SERVERS_DDL_SQLITE = """
+CREATE TABLE recording_servers (
+    device_id INTEGER PRIMARY KEY,
+    hostname TEXT,
+    role TEXT,
+    version TEXT,
+    chans_total INTEGER,
+    chans_recording INTEGER,
+    storage_used_gb REAL,
+    storage_total_gb REAL,
+    retention_days INTEGER,
+    updated_at TIMESTAMP
+)
+"""
+
+CAMERAS_DDL_SQLITE = """
+CREATE TABLE cameras (
+    device_id INTEGER PRIMARY KEY,
+    model TEXT,
+    resolution TEXT,
+    fps_target INTEGER,
+    codec TEXT,
+    bitrate_mode TEXT,
+    recording_mode TEXT,
+    state_msg TEXT,
+    ip TEXT,
+    mac TEXT,
+    recording_server_device_id INTEGER,
+    enabled INTEGER,
+    updated_at TIMESTAMP
+)
+"""
+
+TRUNKS_DDL_SQLITE = """
+CREATE TABLE trunks (
+    device_id INTEGER PRIMARY KEY,
+    name TEXT,
+    provider_host TEXT,
+    did TEXT,
+    reg_status TEXT,
+    ch_total INTEGER,
+    ch_in_use INTEGER,
+    updated_at TIMESTAMP
+)
+"""
+
+EXTENSIONS_DDL_SQLITE = """
+CREATE TABLE extensions (
+    ext TEXT PRIMARY KEY,
+    name TEXT,
+    site TEXT,
+    registered INTEGER,
+    dnd INTEGER,
+    updated_at TIMESTAMP
+)
+"""
+
+
 def create_core_tables(engine) -> None:
     """Create the tables the poller / collectors / engine / API touch (SQLite)."""
     from sqlalchemy import text
@@ -426,6 +484,10 @@ def create_core_tables(engine) -> None:
             WIRELESS_CLIENTS_DDL_SQLITE,
             SSIDS_DDL_SQLITE,
             PF_NODES_DDL_SQLITE,
+            RECORDING_SERVERS_DDL_SQLITE,
+            CAMERAS_DDL_SQLITE,
+            TRUNKS_DDL_SQLITE,
+            EXTENSIONS_DDL_SQLITE,
             APP_SETTINGS_DDL_SQLITE,
             SETTINGS_AUDIT_DDL_SQLITE,
         ):

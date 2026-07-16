@@ -130,6 +130,14 @@ def test_012_creates_pf_nodes():
         assert col in sql, f"missing column {col}"
 
 
+def test_013_creates_surveillance_voip_tables():
+    migs = {m.version: m for m in discover_migrations()}
+    assert "013" in migs, "expected 013 surveillance/voip migration"
+    sql = migs["013"].path.read_text()
+    for table in ("cameras", "recording_servers", "trunks", "extensions"):
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in sql, f"missing table {table}"
+
+
 def test_every_migration_has_rollback_note():
     for mig in discover_migrations():
         text_ = mig.path.read_text().lower()
