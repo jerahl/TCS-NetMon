@@ -30,6 +30,7 @@ import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from netmon import db, health
@@ -553,58 +554,85 @@ class SnmpInventory:
     def _now(self) -> datetime:
         return datetime.now(timezone.utc)
 
+    def _upsert_many(self, table: str, dev_id: int, key_col: str, rows: list[dict]) -> int:
+        """Batched, portable replace-on-refresh for one device's rows in one
+        transaction: a single existing-keys SELECT, one executemany UPDATE,
+        one executemany INSERT, and the not-seen prune — a handful of
+        statements instead of ~3 per row. The per-row upsert dominated the
+        ports pass at fleet scale (~16k rows × 3 round-trips every 120s).
+
+        Runs only after a successful sweep parsed ``rows`` — a failed sweep
+        raised earlier, so stale rows stay visible, never blanked (§4.5).
+        All ``rows`` must share one key set (the build_* parsers guarantee it).
+        """
+        with self.engine.begin() as conn:
+            existing = {r[0] for r in conn.execute(
+                text(f"SELECT {key_col} FROM {table} WHERE device_id = :d"),
+                {"d": dev_id},
+            )}
+            if rows:
+                cols = [c for c in rows[0] if c != key_col]
+                params = [{**r, "device_id": dev_id} for r in rows]
+                updates = [p for p in params if p[key_col] in existing]
+                inserts = [p for p in params if p[key_col] not in existing]
+                if updates:
+                    set_clause = ", ".join(f"{c} = :{c}" for c in cols)
+                    conn.execute(
+                        text(f"UPDATE {table} SET {set_clause} "
+                             f"WHERE device_id = :device_id AND {key_col} = :{key_col}"),
+                        updates,
+                    )
+                if inserts:
+                    all_cols = ["device_id", key_col, *cols]
+                    conn.execute(
+                        text(f"INSERT INTO {table} ({', '.join(all_cols)}) "
+                             f"VALUES ({', '.join(f':{c}' for c in all_cols)})"),
+                        inserts,
+                    )
+            # Prune rows not seen this sweep (all of them when the sweep
+            # legitimately parsed zero rows).
+            seen = [r[key_col] for r in rows]
+            if not seen:
+                conn.execute(text(f"DELETE FROM {table} WHERE device_id = :d"), {"d": dev_id})
+            else:
+                placeholders = ", ".join(f":k{i}" for i in range(len(seen)))
+                conn.execute(
+                    text(f"DELETE FROM {table} WHERE device_id = :d "
+                         f"AND {key_col} NOT IN ({placeholders})"),
+                    {"d": dev_id, **{f"k{i}": v for i, v in enumerate(seen)}},
+                )
+        return len(rows)
+
     def _write_ports(self, dev_id: int, rows: list[dict]) -> int:
         now, now_ts = self._now(), time.time()
-        seen: list[int] = []
-        for r in rows:
-            prev_row = db.fetch_one(
-                self.engine,
-                "SELECT prev_counters FROM switch_ports WHERE device_id=:d AND ifindex=:i",
-                {"d": dev_id, "i": r["ifindex"]},
-            )
-            prev = None
-            if prev_row and prev_row.get("prev_counters"):
+        # Previous counter samples for the whole switch in ONE query (was one
+        # SELECT per port — the other half of the ports-pass round-trips).
+        prev_map: dict[int, dict] = {}
+        for r in db.fetch_all(
+            self.engine,
+            "SELECT ifindex, prev_counters FROM switch_ports WHERE device_id = :d",
+            {"d": dev_id},
+        ):
+            if r.get("prev_counters"):
                 try:
-                    prev = json.loads(prev_row["prev_counters"])
+                    prev_map[r["ifindex"]] = json.loads(r["prev_counters"])
                 except (TypeError, ValueError):
-                    prev = None
-            rates = compute_rates(r, prev, now_ts)
-            db.upsert(
-                self.engine, "switch_ports",
-                {"device_id": dev_id, "ifindex": r["ifindex"]},
-                {"name": r["name"], "member": r["member"], "oper_state": r["oper_state"],
-                 "admin_up": r["admin_up"], "speed_mbps": r["speed_mbps"], "duplex": r["duplex"],
-                 "updated_at": now, **rates},
-            )
-            seen.append(r["ifindex"])
-        self._prune(dev_id, "switch_ports", "ifindex", seen)
-        return len(rows)
+                    pass
+        out: list[dict] = []
+        for r in rows:
+            rates = compute_rates(r, prev_map.get(r["ifindex"]), now_ts)
+            out.append({
+                "ifindex": r["ifindex"], "name": r["name"], "member": r["member"],
+                "oper_state": r["oper_state"], "admin_up": r["admin_up"],
+                "speed_mbps": r["speed_mbps"], "duplex": r["duplex"],
+                "updated_at": now, **rates,
+            })
+        return self._upsert_many("switch_ports", dev_id, "ifindex", out)
 
     def _replace(self, dev_id: int, table: str, key_col: str, rows: list[dict]) -> int:
         now = self._now()
-        seen = []
-        for r in rows:
-            key_val = r[key_col]
-            values = {k: v for k, v in r.items() if k != key_col}
-            values["updated_at"] = now
-            db.upsert(self.engine, table, {"device_id": dev_id, key_col: key_val}, values)
-            seen.append(key_val)
-        self._prune(dev_id, table, key_col, seen)
-        return len(rows)
-
-    def _prune(self, dev_id: int, table: str, key_col: str, seen: list) -> None:
-        """Delete this device's rows not seen in this sweep. Prunes only after a
-        successful sweep populated `seen` — a failed sweep raised earlier and
-        left the rows stale (fail loud, don't blank them)."""
-        if not seen:
-            db.execute(self.engine, f"DELETE FROM {table} WHERE device_id = :d", {"d": dev_id})
-            return
-        placeholders = ", ".join(f":k{i}" for i in range(len(seen)))
-        params = {"d": dev_id, **{f"k{i}": v for i, v in enumerate(seen)}}
-        db.execute(
-            self.engine,
-            f"DELETE FROM {table} WHERE device_id = :d AND {key_col} NOT IN ({placeholders})",
-            params,
+        return self._upsert_many(
+            table, dev_id, key_col, [{**r, "updated_at": now} for r in rows]
         )
 
     async def run_guarded(self) -> None:

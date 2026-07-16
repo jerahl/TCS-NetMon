@@ -190,6 +190,22 @@ def test_run_once_prunes_disappeared_rows(tmp_path):
         "SELECT COUNT(*) AS n FROM fdb_entries WHERE mac='de:ad:be:ef:00:00'")["n"] == 0
 
 
+def test_second_pass_computes_rates_via_batched_prev(tmp_path):
+    """Two consecutive ports passes: the second must produce rates from the
+    first pass's prev_counters (read in one per-switch query, not per port)."""
+    engine = _engine_with_switch(tmp_path)
+    c = _collector(engine)
+    asyncio.run(c.run_once())
+    c._force_all = True  # make everything due again immediately
+    asyncio.run(c.run_once())
+    p = db.fetch_one(
+        engine, "SELECT in_kbps, err_in_delta FROM switch_ports WHERE ifindex = 1001"
+    )
+    # Same fixture counters twice -> zero deltas/rates, but NOT NULL: the
+    # previous sample was found and used.
+    assert p["in_kbps"] == 0 and p["err_in_delta"] == 0
+
+
 def test_run_once_records_collector_health(tmp_path):
     engine = _engine_with_switch(tmp_path)
     asyncio.run(_collector(engine).run_guarded())
