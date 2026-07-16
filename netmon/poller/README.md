@@ -96,7 +96,15 @@ never blanked.
 ```bash
 python -m netmon.poller.snmp_inventory --once     # every enabled sweep once
 python -m netmon.poller.snmp_inventory --loop      # forever on the base interval
+python -m netmon.poller.snmp_inventory --once -v  # + per-switch/per-walk trace
 ```
+
+Default CLI output is per-sweep pass progress (`run: sweep(s) due …`,
+`sweep ports done: N row(s), F/S switch(es) failed, Xs`) — use a timed `--once`
+to size `run_timeout_s` for your fleet. `-v/--verbose` adds per-switch row
+counts/durations and per-`snmpbulkwalk` lines/rc/stderr — the first thing to
+reach for when a switch sweeps empty (bad community and unreachable host look
+identical without the stderr line).
 
 In-process: enabled by `[snmp_inventory] enabled=true`; registered under the
 supervisor as `snmp_inventory` (`collector_health` name). Per-switch failure is

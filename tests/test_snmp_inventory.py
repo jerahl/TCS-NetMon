@@ -185,6 +185,20 @@ def test_all_switches_failing_records_error(tmp_path):
     assert h["consecutive_failures"] == 1 and "timeout" in (h["last_error"] or "")
 
 
+def test_run_once_logs_pass_progress_and_verbose_detail(tmp_path, caplog):
+    """INFO = per-sweep pass progress (default CLI); DEBUG = per-switch rows."""
+    import logging as _logging
+    engine = _engine_with_switch(tmp_path)
+    with caplog.at_level(_logging.DEBUG, logger="netmon.snmp_inventory"):
+        asyncio.run(_collector(engine).run_once())
+    info = [r.message for r in caplog.records if r.levelno == _logging.INFO]
+    debug = [r.message for r in caplog.records if r.levelno == _logging.DEBUG]
+    assert any(m.startswith("run: sweep(s) due:") for m in info)
+    assert any(m.startswith("sweep ports done:") for m in info)
+    # -v detail: per-switch line names the switch and its row count.
+    assert any("BHS-Core-1" in m and "row(s)" in m for m in debug)
+
+
 # ---- run budget / cancellation (the 120s-timeout regression) ----------------
 
 def test_run_timeout_decoupled_from_fastest_interval():

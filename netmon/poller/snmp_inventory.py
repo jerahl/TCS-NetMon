@@ -392,11 +392,18 @@ class SnmpInventory:
                 "-On",  # numeric OIDs so the parser is MIB-independent
                 host, root,
             ]
+            t0 = time.monotonic()
             proc = await asyncio.create_subprocess_exec(
                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             )
-            out, _ = await proc.communicate()
-            results[root] = out.decode(errors="replace")
+            out, err = await proc.communicate()
+            text = out.decode(errors="replace")
+            results[root] = text
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("walk %s %s: rc=%s, %d line(s), %.2fs%s",
+                          host, root, proc.returncode, len(text.splitlines()),
+                          time.monotonic() - t0,
+                          f", stderr: {err.decode(errors='replace').strip()}" if err.strip() else "")
         return results
 
     def _due(self, sweep: str, now: float) -> bool:
@@ -424,28 +431,38 @@ class SnmpInventory:
         if not due:
             return 0
         switches = db.fetch_all(self.engine, _SWITCHES_SQL)
+        log.info("run: sweep(s) due: %s · %d switch(es), concurrency %d",
+                 ", ".join(due), len(switches), self.cfg.concurrency)
         total = 0
         # One fleet pass per due sweep, marking _last_run as each pass
         # completes — a run cancelled mid-way (supervisor budget) keeps the
         # finished sweeps' timestamps instead of re-queuing everything, so a
         # slow fleet converges sweep by sweep rather than looping on timeout.
         for sweep in due:
+            pass_started = time.monotonic()
             sem = asyncio.Semaphore(max(1, self.cfg.concurrency))
             errors: list[str] = []
 
             async def one(sw, _sweep=sweep) -> int:
                 async with sem:
+                    t0 = time.monotonic()
                     try:
-                        return await self._sweep_switch(sw, [_sweep])
+                        n = await self._sweep_switch(sw, [_sweep])
                     except Exception as exc:  # isolate — one dead switch never fails the fleet
                         log.warning("snmp_inventory: %s %s (%s) failed: %r",
                                     _sweep, sw["name"], sw["mgmt_ip"], exc)
                         errors.append(f"{_sweep} {sw['name']}: {exc!r}")
                         return 0
+                    log.debug("%s %s (%s): %d row(s) in %.1fs",
+                              _sweep, sw["name"], sw["mgmt_ip"], n, time.monotonic() - t0)
+                    return n
 
             counts = await asyncio.gather(*(one(sw) for sw in switches))
             self._last_run[sweep] = now
             total += sum(counts)
+            log.info("sweep %s done: %d row(s), %d/%d switch(es) failed, %.1fs",
+                     sweep, sum(counts), len(errors), len(switches),
+                     time.monotonic() - pass_started)
             if errors and len(errors) == len(switches) and switches:
                 # every switch failed → surface as a collector failure (fail loud).
                 raise RuntimeError(f"all {len(switches)} switches failed: {errors[0]}")
@@ -556,8 +573,11 @@ class SnmpInventory:
                                 duration_ms=int((time.monotonic() - started) * 1000))
             log.exception("snmp_inventory sweep failed")
             return
+        elapsed = time.monotonic() - started
+        if written:
+            log.info("run complete: %d row(s) in %.1fs", written, elapsed)
         health.record_success(self.engine, self.name, records=written,
-                              duration_ms=int((time.monotonic() - started) * 1000))
+                              duration_ms=int(elapsed * 1000))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -569,9 +589,23 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--once", action="store_true", help="run every enabled sweep once")
     mode.add_argument("--loop", action="store_true", help="run forever on the interval")
     parser.add_argument("--config", default=None)
+    parser.add_argument(
+        "-v", "--verbose", action="store_true",
+        help="per-switch and per-walk detail (rows, durations, snmpbulkwalk "
+             "rc/stderr); default shows per-sweep pass progress only",
+    )
     args = parser.parse_args(argv)
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+    if args.verbose:
+        # Keep third-party chatter out of the trace — verbose means OUR sweep
+        # detail. SQLAlchemy notably treats logger level INFO as "echo every
+        # statement", so it must sit at WARNING.
+        logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
+        logging.getLogger("asyncio").setLevel(logging.INFO)
     cfg = load_config(args.config)
     engine = db.make_engine(cfg.db.url)
     # Web-managed overrides ride along in standalone runs too (spec 12 S9).
