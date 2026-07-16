@@ -56,6 +56,59 @@ def test_session_expiry():
     assert store.get(store.create("bob", Role.viewer, [])) is None
 
 
+def _db_store(tmp_path, ttl=3600):
+    from netmon import db
+    from netmon.auth.sessions import DbSessionStore
+    from tests.conftest import create_core_tables
+
+    engine = db.make_engine(f"sqlite:///{tmp_path/'sess.db'}")
+    create_core_tables(engine)
+    return DbSessionStore(engine, ttl_seconds=ttl), engine
+
+
+def test_db_session_store_lifecycle(tmp_path):
+    store, engine = _db_store(tmp_path)
+    token = store.create("alice", Role.operator, ["42"])
+    sess = store.get(token)
+    assert sess is not None and sess.username == "alice" and sess.role is Role.operator
+    assert sess.groups == ["42"]
+    assert store.count() == 1
+
+    # A second store over the same DB sees the session — this is the property
+    # the in-memory store lacked (restart/multi-worker survival).
+    from netmon.auth.sessions import DbSessionStore
+    other = DbSessionStore(engine, ttl_seconds=3600)
+    assert other.get(token) is not None
+
+    store.destroy(token)
+    assert store.get(token) is None
+    assert store.count() == 0
+
+
+def test_db_session_store_expiry_and_purge(tmp_path):
+    store, engine = _db_store(tmp_path, ttl=-1)
+    token = store.create("bob", Role.viewer, [])
+    assert store.get(token) is None  # already expired
+    assert store.count() == 0
+
+    # purge_expired removes the dead rows outright.
+    token2 = store.create("carol", Role.viewer, [])
+    assert store.purge_expired() >= 1
+    from netmon import db as _db
+    n = _db.fetch_one(engine, "SELECT COUNT(*) AS n FROM sessions")["n"]
+    assert n == 0, "expired rows must not accumulate"
+    assert store.get(token2) is None
+
+
+def test_db_session_store_never_stores_raw_token(tmp_path):
+    store, engine = _db_store(tmp_path)
+    token = store.create("alice", Role.admin, [])
+    from netmon import db as _db
+    rows = _db.fetch_all(engine, "SELECT token_hash FROM sessions")
+    assert rows and all(r["token_hash"] != token for r in rows)
+    assert all(len(r["token_hash"]) == 64 for r in rows)  # sha256 hex digest
+
+
 def test_complete_login_maps_role_and_sets_cookie(tmp_path):
     cfg = load_config(write_config(tmp_path, dev_bypass=False, extra_auth="saml_role_admin = Administrator"))
     sessions = SessionStore(3600)

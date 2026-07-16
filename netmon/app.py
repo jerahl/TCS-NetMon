@@ -13,6 +13,7 @@ Shutdown reverses (4)–(5): the supervisor cancels every task cleanly.
 from __future__ import annotations
 
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -24,7 +25,7 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 
 from netmon import __version__, db, migrate
 from netmon.api import alerts, auth_routes, devices, events, health, nac, sites, status, switches
-from netmon.auth.sessions import SessionStore
+from netmon.auth.sessions import DbSessionStore, SessionStore
 from netmon.engine.engine import AlertEngine
 from netmon.collectors.milestone import MilestoneCollector, MilestoneError
 from netmon.collectors.packetfence import PfCollector
@@ -128,6 +129,7 @@ def register_tasks(app: FastAPI, cfg: Config, engine) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cfg: Config = app.state.config  # set by create_app before the app runs
+    app.state.started_at = time.time()  # /api/netmon-status uptime
     app.state.engine = db.make_engine(cfg.db.url)
 
     if cfg.db.auto_migrate:
@@ -135,7 +137,19 @@ async def lifespan(app: FastAPI):
         if applied:
             log.info("auto-migrate applied: %s", ", ".join(applied))
 
-    app.state.sessions = SessionStore(ttl_seconds=cfg.web.session_ttl)
+    # DB-backed sessions (migration 007): survive restarts, safe for
+    # multi-worker uvicorn. If the table is missing (migrations not applied),
+    # fall back to the in-process store and say so loudly — logins still work,
+    # they just don't survive a restart.
+    try:
+        db.fetch_one(app.state.engine, "SELECT COUNT(*) FROM sessions")
+        app.state.sessions = DbSessionStore(app.state.engine, ttl_seconds=cfg.web.session_ttl)
+    except Exception:
+        log.warning(
+            "sessions table missing (apply migration 007) — using the "
+            "in-process session store; sessions will not survive a restart"
+        )
+        app.state.sessions = SessionStore(ttl_seconds=cfg.web.session_ttl)
 
     supervisor: Supervisor = app.state.supervisor
     register_tasks(app, cfg, app.state.engine)

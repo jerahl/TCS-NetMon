@@ -32,6 +32,10 @@ port = 8080
 secure_cookies = false
 # Opaque session lifetime, seconds.
 session_ttl = 43200
+# Base URL of the retained Zabbix UI. Powers the nav deep-links for domains
+# Zabbix keeps (Servers; FortiGate until phase 11.x — spec 11 D1/D2). Leave
+# empty to render those nav entries disabled instead.
+# zabbix_url = https://zabbix.example.internal
 
 [auth]
 # Single sign-on: NetMon is a SAML 2.0 Service Provider; ClassLink is the IdP.

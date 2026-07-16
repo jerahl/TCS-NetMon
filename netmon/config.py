@@ -43,6 +43,10 @@ class WebConfig:
     port: int = 8080
     secure_cookies: bool = False
     session_ttl: int = 43200
+    # Base URL of the retained Zabbix UI. Feeds the nav deep-links for the
+    # domains Zabbix keeps (Servers; FortiGate until 11.x) — spec 11 D1/D2.
+    # Empty → the nav renders those entries disabled.
+    zabbix_url: str = ""
 
 
 @dataclass(frozen=True)
@@ -194,6 +198,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         port=parser.getint("web", "port", fallback=8080),
         secure_cookies=_as_bool(parser.get("web", "secure_cookies", fallback="false")),
         session_ttl=parser.getint("web", "session_ttl", fallback=43200),
+        zabbix_url=parser.get("web", "zabbix_url", fallback="").strip().rstrip("/"),
     )
 
     # --- [auth] — SAML SP (ClassLink) + dev bypass ---

@@ -22,7 +22,17 @@ const NAV = {
   events: "#/events",
   problems: "#/problems",
   map: "#/map",
+  netmonStatus: "#/netmon-status",
 };
+
+// Domains Zabbix keeps (spec 11 D1/D2): Servers stays Zabbix's; FortiGate is
+// deferred to phase 11.x. Nav keeps the entries visible as deep-links into the
+// existing ZCD pages inside Zabbix (spec 10 Q1, resolved 2026-07-15). The base
+// URL comes from /api/meta ([web] zabbix_url); unset → entries render disabled.
+const ZBX_LINKS = [
+  { key: "servers", icon: "server", label: "Servers", action: "tcs.servers.view" },
+  { key: "fortigate", icon: "shield", label: "FortiGate", action: "tcs.fortigate.view" },
+];
 
 export function Nav({ active }) {
   const [collapsed, setCollapsed] = React.useState(() => {
@@ -30,6 +40,14 @@ export function Nav({ active }) {
   });
   const [counts, setCounts] = React.useState(null);
   const [health, setHealth] = React.useState(null);
+  const [meta, setMeta] = React.useState(null);
+
+  React.useEffect(() => {
+    // Static shell facts (version, Zabbix deep-link base) — once per load.
+    getJSON("/api/meta")
+      .then(setMeta)
+      .catch(() => { /* deep-links render disabled without it */ });
+  }, []);
 
   React.useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, collapsed ? "1" : "0"); } catch { /* ignore */ }
@@ -103,6 +121,29 @@ export function Nav({ active }) {
         {item("map", NAV.map, "map", "Site Map")}
       </div>
 
+      <div className="nav-section">
+        <div className="nav-label">System</div>
+        {item("netmon-status", NAV.netmonStatus, "events", "NetMon Status")}
+        {ZBX_LINKS.map((l) =>
+          meta?.zabbix_url ? (
+            <a key={l.key} className="nav-item nav-item-ext"
+               href={`${meta.zabbix_url}/zabbix.php?action=${l.action}`}
+               target="_blank" rel="noopener noreferrer"
+               title={`${l.label} — opens in Zabbix (retained domain)`}>
+              <Icon name={l.icon} />
+              <span className="nav-label-text">{l.label}</span>
+              <span className="nav-ext-mark">↗</span>
+            </a>
+          ) : (
+            <span key={l.key} className="nav-item nav-item-disabled"
+                  title={`${l.label} is managed in Zabbix — set [web] zabbix_url to enable the deep-link`}>
+              <Icon name={l.icon} />
+              <span className="nav-label-text">{l.label}</span>
+            </span>
+          )
+        )}
+      </div>
+
       {health && health.length > 0 && (
         <div className="nav-section">
           <div className="nav-label">Sources</div>
@@ -116,7 +157,9 @@ export function Nav({ active }) {
         </div>
       )}
 
-      <div className="nav-foot">v0.1 · {counts ? counts.total + " devices" : "…"}</div>
+      <div className="nav-foot">
+        {meta ? `v${meta.version}` : "v…"} · {counts ? counts.total + " devices" : "…"}
+      </div>
     </aside>
   );
 }

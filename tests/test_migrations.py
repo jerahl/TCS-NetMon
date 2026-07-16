@@ -72,6 +72,15 @@ def test_006_creates_switch_inventory_tables():
         assert f"CREATE TABLE IF NOT EXISTS {table}" in sql, f"missing table {table}"
 
 
+def test_007_creates_sessions_table():
+    migs = {m.version: m for m in discover_migrations()}
+    assert "007" in migs, "expected 007 sessions migration"
+    sql = migs["007"].path.read_text()
+    assert "CREATE TABLE IF NOT EXISTS sessions" in sql
+    # Only a digest of the cookie token may ever be at rest.
+    assert "token_hash" in sql
+
+
 def test_every_migration_has_rollback_note():
     for mig in discover_migrations():
         text_ = mig.path.read_text().lower()

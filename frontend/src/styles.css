@@ -53,6 +53,10 @@ a:hover { text-decoration: underline; }
 .nav-item:hover { background: var(--panel2); text-decoration: none; }
 .nav-item.active { background: var(--panel2); box-shadow: inset 2px 0 0 var(--accent); }
 .nav-count { margin-left: auto; font: 600 11px ui-monospace, monospace; color: var(--dim); }
+/* Zabbix deep-links (retained domains) + disabled entries when no zabbix_url. */
+.nav-ext-mark { margin-left: auto; font-size: 11px; color: var(--dim); }
+.nav-item-disabled { opacity: 0.45; cursor: not-allowed; }
+.nav-item-disabled:hover { background: none; }
 .nav-foot { margin-top: auto; font-size: 11px; color: var(--dim); }
 .ico {
   width: 8px; height: 8px; flex: none; border-radius: 2px;

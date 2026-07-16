@@ -145,6 +145,18 @@ CREATE TABLE maintenance_windows (
 """
 
 
+SESSIONS_DDL_SQLITE = """
+CREATE TABLE sessions (
+    token_hash TEXT PRIMARY KEY,
+    username TEXT NOT NULL,
+    role TEXT NOT NULL,
+    groups_json TEXT NOT NULL,
+    created_at TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL
+)
+"""
+
+
 SITES_DDL_SQLITE = """
 CREATE TABLE sites (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -283,6 +295,7 @@ def create_core_tables(engine) -> None:
             MAINTENANCE_DDL_SQLITE,
             SNAPSHOT_CACHE_DDL_SQLITE,
             CONFIG_BACKUPS_DDL_SQLITE,
+            SESSIONS_DDL_SQLITE,
             SITES_DDL_SQLITE,
             FIBER_LINKS_DDL_SQLITE,
             FIBER_LINK_STATE_DDL_SQLITE,

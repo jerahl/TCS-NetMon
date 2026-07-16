@@ -92,6 +92,10 @@ class Supervisor:
             except asyncio.TimeoutError:
                 pass  # interval elapsed, loop again
 
+    def running_names(self) -> set[str]:
+        """Names of tasks whose loops are currently live (for /api/netmon-status)."""
+        return {t.get_name() for t in self._tasks if not t.done()}
+
     async def start(self) -> None:
         self._stopping = asyncio.Event()
         for spec in self.specs:
