@@ -109,12 +109,13 @@ def test_meta(tmp_path):
     conf = tmp_path / "netmon.conf"
     conf.write_text(
         f"[db]\nurl = {url}\n\n"
-        "[web]\nzabbix_url = https://zabbix.example/\n\n"
+        "[web]\nzabbix_url = https://zabbix.example/\nssheasy_url = https://ssh.example/\n\n"
         "[auth]\ndev_bypass_user = devadmin\ndev_bypass_role = admin\n"
     )
     with TestClient(_app(conf)) as client:
         body = client.get("/api/meta").json()
         assert body["zabbix_url"] == "https://zabbix.example"  # trailing / stripped
+        assert body["ssheasy_url"] == "https://ssh.example"    # trailing / stripped
         assert body["version"]
 
 

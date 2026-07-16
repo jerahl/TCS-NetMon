@@ -296,6 +296,7 @@ class UiMeta(BaseModel):
 
     version: str
     zabbix_url: str = ""
+    ssheasy_url: str = ""
 
 
 class UserSession(BaseModel):

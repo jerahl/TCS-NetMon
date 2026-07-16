@@ -181,10 +181,24 @@ shadow-alert diff has run clean for the agreed window.
   orphan assigned devices) and **import switches/APs from XIQ** (read-only
   fleet fetch reusing the seed's reconcile/upsert; dry-run preview; existing
   site assignments preserved per D9). Admin-role + `[security] allow_web_edit`
-  gated, same as the settings engine. Also this session: **topology switched
+  gated, same as the settings engine. **Extended 2026-07-16**: the registry
+  page also **reassigns devices between sites** — `GET /api/registry/devices`
+  (filterable) + `POST /api/registry/devices/assign` (batch move/unassign,
+  target site must exist, writes only `devices.site`); UI is a filter-by-
+  site/type table with checkbox multi-select + a "Move to…" control. Same
+  admin + `allow_web_edit` gate. Also this session: **topology switched
   LLDP→EDP** (EXTREME-EDP-MIB, migration 014, table `lldp_neighbors`→
-  `neighbors`). Open thread: the **SSHEASY integration** — awaiting the owner's
-  description of what it is / should do before any code.
+  `neighbors`).
+- **SSHEASY integration landed 2026-07-16.** SSHEASY (`jerahl/ssheasy`) is a
+  browser SSH client (xterm.js + WASM) embeddable in an iframe. NetMon adds an
+  operator/admin-gated **"SSH" button** on device detail pages (switch + AP)
+  that opens `<[web] ssheasy_url>/terminal?host=<mgmt_ip>&port=22&connect=true`
+  in a modal iframe (with an open-in-new-tab escape hatch). **No credentials
+  are ever handled by NetMon** — ssheasy prompts for the username/password in
+  the terminal, so read-only-first (§4.1) holds: this is a launch link, not a
+  proxy. Config is `[web] ssheasy_url` (empty → affordance hidden), surfaced
+  via `/api/meta`; role gating is client-side off `/auth/me` (no server
+  endpoint to guard). No new Python/JS dependency.
 - **Phase 10.1 Switches page UI landed 2026-07-16** (8 tabs, faceplate,
   port-detail FDB pane — spec 10 progress log). Remaining 10.1 slices: the
   deferred sweeps (PoE, ENTITY serial/fw, fans/PSUs) once a PoE fixture is

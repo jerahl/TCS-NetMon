@@ -89,7 +89,11 @@ def ui_meta(
     cfg: Config = Depends(get_config),
     _user=Depends(require_role(Role.viewer)),
 ) -> UiMeta:
-    return UiMeta(version=__version__, zabbix_url=cfg.web.zabbix_url)
+    return UiMeta(
+        version=__version__,
+        zabbix_url=cfg.web.zabbix_url,
+        ssheasy_url=cfg.web.ssheasy_url,
+    )
 
 
 def _count(engine: Engine, sql: str, params: dict | None = None) -> int:

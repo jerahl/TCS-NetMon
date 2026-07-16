@@ -1,6 +1,7 @@
 import React from "react";
 import { getJSON } from "../api.js";
 import { Card, Loading, ErrorMsg, SourceBadge, sevColor } from "../primitives.jsx";
+import { SshButton } from "../ssh.jsx";
 
 // Switches dashboard (spec 10 §7 / phase 10.1) — the ZCD port of the "big
 // build": site navigator, KPI strip, port faceplate, port-detail pane (with
@@ -644,6 +645,9 @@ export function SwitchesPage({ id }) {
               {current.mgmt_ip && <span className="pill mono">{current.mgmt_ip}</span>}
               <span className="pill">{stack.length || "?"} member(s)</span>
               <span className="pill">{upCount} up · {(ports || []).length - upCount} down · {(ports || []).length} ports</span>
+              <span style={{ marginLeft: "auto" }}>
+                <SshButton host={current.mgmt_ip} name={current.name} />
+              </span>
             </div>
           )}
 

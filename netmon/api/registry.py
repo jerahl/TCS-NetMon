@@ -147,6 +147,64 @@ def delete_site(
     return {"status": "deleted", "name": row["name"]}
 
 
+@router.get("/devices")
+def list_devices(
+    site: str | None = None,
+    engine: Engine = Depends(get_engine),
+    _user: UserSession = Depends(require_role(Role.admin)),
+) -> list[dict]:
+    """Registry devices for the site editor. Filter by ``site`` (exact
+    ``devices.site`` join key, or the literal ``__none__`` for unassigned)."""
+    sql = ("SELECT id, name, device_type, site, mgmt_ip, enabled "
+           "FROM devices")
+    params: dict = {}
+    if site == "__none__":
+        sql += " WHERE site IS NULL OR site = ''"
+    elif site is not None:
+        sql += " WHERE site = :s"
+        params["s"] = site
+    sql += " ORDER BY device_type, name"
+    return [dict(r) for r in db.fetch_all(engine, sql, params)]
+
+
+class AssignSite(BaseModel):
+    device_ids: list[int]
+    site: str | None = None  # None/"" → unassign
+
+
+@router.post("/devices/assign")
+def assign_devices(
+    body: AssignSite,
+    engine: Engine = Depends(get_engine),
+    cfg: Config = Depends(get_config),
+    user: UserSession = Depends(require_role(Role.admin)),
+) -> dict:
+    """Reassign a batch of devices to a site (or unassign with a null/empty
+    site). Writes only ``devices.site`` — NetMon's own registry."""
+    _require_edit(cfg)
+    ids = [int(i) for i in body.device_ids]
+    if not ids:
+        raise HTTPException(status_code=422, detail="no device ids given")
+    target = (body.site or "").strip() or None
+    # The target site must exist in the registry (or be an explicit unassign),
+    # so we never point a device at a site with no card on the map.
+    if target is not None and not db.fetch_one(
+        engine, "SELECT 1 FROM sites WHERE name = :n", {"n": target}
+    ):
+        raise HTTPException(status_code=404, detail=f"site {target!r} does not exist")
+    placeholders = ",".join(f":id{i}" for i in range(len(ids)))
+    params: dict = {f"id{i}": v for i, v in enumerate(ids)}
+    params["site"] = target
+    n = db.execute(
+        engine,
+        f"UPDATE devices SET site = :site WHERE id IN ({placeholders})",
+        params,
+    )
+    log.info("assign %d device(s) to site %r by %s", len(ids), target, user.username)
+    return {"status": "assigned", "count": n if n is not None and n >= 0 else len(ids),
+            "site": target}
+
+
 class XiqImport(BaseModel):
     dry_run: bool = True
 

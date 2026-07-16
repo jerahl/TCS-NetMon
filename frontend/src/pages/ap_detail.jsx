@@ -1,6 +1,7 @@
 import React from "react";
 import { getJSON } from "../api.js";
 import { Card, Badge, Loading, ErrorMsg, sevColor } from "../primitives.jsx";
+import { SshButton } from "../ssh.jsx";
 
 // Device detail (AP / switch / any): registry fields + live state; APs get
 // the Phase 10.2 wireless sections (detail KV, radios, clients) from
@@ -42,7 +43,10 @@ export function ApDetailPage({ id }) {
   return (
     <div className="page">
       <a className="back" href={device.device_type === "switch" ? "#/switches" : "#/"}>← Back</a>
-      <h1>{device.name}</h1>
+      <div className="detail-head">
+        <h1>{device.name}</h1>
+        <SshButton host={device.mgmt_ip} name={device.name} />
+      </div>
       <div className="subtitle mono">{device.mgmt_ip || "no mgmt IP"} · {device.device_type} · {device.site || "unknown site"}</div>
 
       <div className="stat-row">

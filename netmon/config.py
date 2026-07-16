@@ -47,6 +47,11 @@ class WebConfig:
     # domains Zabbix keeps (Servers; FortiGate until 11.x) — spec 11 D1/D2.
     # Empty → the nav renders those entries disabled.
     zabbix_url: str = ""
+    # Base URL of the SSHEASY web SSH client (jerahl/ssheasy), embedded in an
+    # iframe from device detail pages. Empty → the "SSH" affordance is hidden.
+    # NetMon only builds a target URL (host/port); it never handles credentials
+    # (ssheasy prompts for them in-terminal) — read-only-first still holds.
+    ssheasy_url: str = ""
 
 
 @dataclass(frozen=True)
@@ -222,6 +227,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         secure_cookies=_as_bool(parser.get("web", "secure_cookies", fallback="false")),
         session_ttl=parser.getint("web", "session_ttl", fallback=43200),
         zabbix_url=parser.get("web", "zabbix_url", fallback="").strip().rstrip("/"),
+        ssheasy_url=parser.get("web", "ssheasy_url", fallback="").strip().rstrip("/"),
     )
 
     # --- [auth] — SAML SP (ClassLink) + dev bypass ---

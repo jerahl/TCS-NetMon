@@ -36,6 +36,11 @@ session_ttl = 43200
 # Zabbix keeps (Servers; FortiGate until phase 11.x — spec 11 D1/D2). Leave
 # empty to render those nav entries disabled instead.
 # zabbix_url = https://zabbix.example.internal
+# Base URL of the SSHEASY web SSH client (jerahl/ssheasy), embedded in an
+# iframe from device detail pages ("SSH" button, operator/admin only). NetMon
+# only builds a host/port target — credentials are entered in the terminal,
+# never handled here. Leave empty to hide the affordance.
+# ssheasy_url = https://ssheasy.example.internal
 
 [auth]
 # Single sign-on: NetMon is a SAML 2.0 Service Provider; ClassLink is the IdP.

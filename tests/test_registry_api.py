@@ -82,6 +82,58 @@ def test_edit_gate_blocks_writes(tmp_path):
         assert client.post("/api/registry/sites", json={"name": "X"}).status_code == 403
 
 
+def test_list_and_assign_devices(tmp_path):
+    url = f"sqlite:///{tmp_path/'r.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    # a second site + an unassigned AP to move around
+    db.execute(engine, "INSERT INTO sites (name, display_name, tier, lat, lon, enabled) "
+                       "VALUES ('CHS','C High','high',0,0,1)")
+    db.execute(engine, "INSERT INTO devices (name, site, device_type, mgmt_ip, enabled) "
+                       "VALUES ('ap-loose', NULL, 'ap', '10.0.0.9', 1)")
+
+    with _client(_conf(tmp_path, url)) as client:
+        all_dev = client.get("/api/registry/devices").json()
+        assert len(all_dev) == 2
+        # filter by the literal unassigned sentinel
+        loose = client.get("/api/registry/devices?site=__none__").json()
+        assert len(loose) == 1 and loose[0]["name"] == "ap-loose"
+
+        ids = [d["id"] for d in all_dev]
+        r = client.post("/api/registry/devices/assign", json={"device_ids": ids, "site": "CHS"})
+        assert r.status_code == 200 and r.json()["count"] == 2
+
+    # both devices now roll up under CHS
+    assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM devices WHERE site='CHS'")["n"] == 2
+
+
+def test_assign_unknown_site_rejected(tmp_path):
+    url = f"sqlite:///{tmp_path/'r.db'}"
+    _seed(url)
+    with _client(_conf(tmp_path, url)) as client:
+        d = client.get("/api/registry/devices").json()[0]
+        r = client.post("/api/registry/devices/assign",
+                        json={"device_ids": [d["id"]], "site": "Nope"})
+        assert r.status_code == 404
+
+
+def test_assign_unassign_and_edit_gate(tmp_path):
+    url = f"sqlite:///{tmp_path/'r.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    with _client(_conf(tmp_path, url)) as client:
+        d = client.get("/api/registry/devices").json()[0]
+        # null site unassigns (no existence check)
+        r = client.post("/api/registry/devices/assign", json={"device_ids": [d["id"]], "site": None})
+        assert r.status_code == 200
+    assert db.fetch_one(engine, "SELECT site FROM devices WHERE name='sw-1'")["site"] is None
+    # gate off → assignment is 403
+    with _client(_conf(tmp_path, url, allow_edit=False)) as client:
+        d = client.get("/api/registry/devices").json()[0]
+        assert client.post("/api/registry/devices/assign",
+                           json={"device_ids": [d["id"]], "site": "BHS"}).status_code == 403
+
+
 def test_import_xiq_dry_run(tmp_path, monkeypatch):
     url = f"sqlite:///{tmp_path/'r.db'}"
     _seed(url)

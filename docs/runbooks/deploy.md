@@ -192,6 +192,22 @@ them in the DB or pass `--sites` alongside, which overrides per host). The
 upsert never re-enables a device an operator disabled and never blanks a
 per-source key that a fresh export happens to lack.
 
+**Web registry management (admin, edit-gated):** with `[security]
+allow_web_edit = true`, an admin can add/edit/delete sites, **reassign
+devices between sites**, and **import switches/APs from XIQ** (dry-run
+preview) from the `#/registry` page — no CLI needed. All of it writes only
+NetMon's own `sites`/`devices` rows (never a source) and is refused when
+`allow_web_edit` is false.
+
+**SSH to a device (SSHEASY):** set `[web] ssheasy_url` to the base URL of a
+deployed SSHEASY (`jerahl/ssheasy`) web SSH client. An "SSH" button then
+appears on switch/AP detail pages for operators/admins, opening
+`<ssheasy_url>/terminal?host=<mgmt_ip>&port=22&connect=true` in an embedded
+iframe. Credentials are entered in the terminal — NetMon never stores or
+forwards them. If SSHEASY runs on a different origin, allow NetMon's origin in
+its `frame-ancestors` (nginx CSP) so the iframe is permitted. Leave
+`ssheasy_url` empty to hide the affordance.
+
 ## 5. Run the app
 
 Behind nginx (TLS) with a systemd unit; `secure_cookies=true` in production.
