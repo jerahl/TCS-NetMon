@@ -14,6 +14,7 @@ import { MapPage } from "./pages/map.jsx";
 import { NetmonStatusPage } from "./pages/netmon_status.jsx";
 import { XiqPage } from "./pages/xiq.jsx";
 import { SettingsPage } from "./pages/settings.jsx";
+import { RegistryPage } from "./pages/registry.jsx";
 
 // Hash router — one index.html serves every route (deep links never 404, no
 // server-side per-page routing, no external navigation).
@@ -30,6 +31,7 @@ function parseRoute() {
   if (parts[0] === "xiq") return { name: "xiq" };
   if (parts[0] === "wireless") return { name: "wireless" };
   if (parts[0] === "settings") return { name: "settings" };
+  if (parts[0] === "registry") return { name: "registry" };
   if (parts[0] === "ap" && parts[1]) return { name: "ap", id: parts[1] };
   return { name: "global" };
 }
@@ -58,6 +60,7 @@ function App() {
   else if (route.name === "xiq") { page = <XiqPage />; active = "xiq"; }
   else if (route.name === "wireless") { page = <XiqPage />; active = "wireless"; }
   else if (route.name === "settings") { page = <SettingsPage />; active = "settings"; }
+  else if (route.name === "registry") { page = <RegistryPage />; active = "registry"; }
   else if (route.name === "ap") { page = <ApDetailPage id={route.id} />; active = "wireless"; }
   else { page = <GlobalPage />; active = "global"; }
 

@@ -175,6 +175,16 @@ shadow-alert diff has run clean for the agreed window.
   the D6 sweeps and D3 ring buffer on 2026-07-15, and the 10.1 sweep code is
   already on main under that amendment — reconcile this table's "open" marks
   with those resolutions when signing.)
+- **Web registry management added 2026-07-16** (owner-requested, out of phase
+  order): admin `#/registry` page + `/api/registry/*` — add/edit/delete
+  `sites` (rename cascades to the `devices.site` join key; delete refuses to
+  orphan assigned devices) and **import switches/APs from XIQ** (read-only
+  fleet fetch reusing the seed's reconcile/upsert; dry-run preview; existing
+  site assignments preserved per D9). Admin-role + `[security] allow_web_edit`
+  gated, same as the settings engine. Also this session: **topology switched
+  LLDP→EDP** (EXTREME-EDP-MIB, migration 014, table `lldp_neighbors`→
+  `neighbors`). Open thread: the **SSHEASY integration** — awaiting the owner's
+  description of what it is / should do before any code.
 - **Phase 10.1 Switches page UI landed 2026-07-16** (8 tabs, faceplate,
   port-detail FDB pane — spec 10 progress log). Remaining 10.1 slices: the
   deferred sweeps (PoE, ENTITY serial/fw, fans/PSUs) once a PoE fixture is

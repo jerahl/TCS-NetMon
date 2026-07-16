@@ -23,6 +23,7 @@ const NAV = {
   problems: "#/problems",
   map: "#/map",
   netmonStatus: "#/netmon-status",
+  registry: "#/registry",
   settings: "#/settings",
 };
 
@@ -153,6 +154,7 @@ export function Nav({ active }) {
       {role === "admin" && (
         <div className="nav-section">
           <div className="nav-label">Administration</div>
+          {item("registry", NAV.registry, "ethernet", "Registry")}
           {item("settings", NAV.settings, "gear", "Settings")}
         </div>
       )}

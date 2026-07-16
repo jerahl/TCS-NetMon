@@ -27,7 +27,7 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 from netmon import __version__, db, migrate
 from netmon import settings as settings_engine
 from netmon.api import (
-    alerts, auth_routes, devices, events, health, nac, settings, sites,
+    alerts, auth_routes, devices, events, health, nac, registry, settings, sites,
     status, surveillance, switches, voip, wireless,
 )
 from netmon.auth.sessions import DbSessionStore, SessionStore
@@ -213,6 +213,7 @@ def create_app(
     app.include_router(wireless.router)
     app.include_router(surveillance.router)
     app.include_router(voip.router)
+    app.include_router(registry.router)
     app.include_router(nac.router)
     app.include_router(alerts.router)
     app.include_router(settings.router)
