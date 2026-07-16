@@ -81,6 +81,23 @@ def test_007_creates_sessions_table():
     assert "token_hash" in sql
 
 
+def test_008_creates_settings_tables():
+    migs = {m.version: m for m in discover_migrations()}
+    assert "008" in migs, "expected 008 settings-engine migration"
+    sql = migs["008"].path.read_text()
+    for table in ("app_settings", "settings_audit"):
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in sql, f"missing table {table}"
+    # `key` is a MariaDB reserved word — must stay backtick-quoted.
+    assert "`key`" in sql
+
+
+def test_migration_versions_are_unique():
+    # Two parallel branches once both claimed version 007 — the runner tracks
+    # applied versions by this string, so a duplicate silently skips one file.
+    versions = [m.version for m in discover_migrations()]
+    assert len(versions) == len(set(versions)), f"duplicate migration version in {versions}"
+
+
 def test_every_migration_has_rollback_note():
     for mig in discover_migrations():
         text_ = mig.path.read_text().lower()

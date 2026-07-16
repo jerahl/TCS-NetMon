@@ -280,6 +280,29 @@ CREATE TABLE stack_members (
 """
 
 
+APP_SETTINGS_DDL_SQLITE = """
+CREATE TABLE app_settings (
+    `key` TEXT PRIMARY KEY,
+    value TEXT,
+    is_secret INTEGER NOT NULL DEFAULT 0,
+    updated_by TEXT NOT NULL,
+    updated_at TIMESTAMP
+)
+"""
+
+SETTINGS_AUDIT_DDL_SQLITE = """
+CREATE TABLE settings_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    `key` TEXT NOT NULL,
+    action TEXT NOT NULL,
+    old_value TEXT,
+    new_value TEXT,
+    changed_by TEXT NOT NULL,
+    changed_at TIMESTAMP
+)
+"""
+
+
 def create_core_tables(engine) -> None:
     """Create the tables the poller / collectors / engine / API touch (SQLite)."""
     from sqlalchemy import text
@@ -304,12 +327,15 @@ def create_core_tables(engine) -> None:
             LLDP_NEIGHBORS_DDL_SQLITE,
             SWITCH_VLANS_DDL_SQLITE,
             STACK_MEMBERS_DDL_SQLITE,
+            APP_SETTINGS_DDL_SQLITE,
+            SETTINGS_AUDIT_DDL_SQLITE,
         ):
             conn.execute(text(ddl))
 
 
 def write_config(tmp_path: Path, *, dev_bypass: bool = True, secure_cookies: bool = False,
-                 db_url: str | None = None, extra_auth: str = "") -> Path:
+                 db_url: str | None = None, extra_auth: str = "",
+                 extra_sections: str = "") -> Path:
     """Write a minimal valid netmon.conf and return its path."""
     url = db_url or f"sqlite:///{tmp_path / 'netmon.db'}"
     auth_lines = []
@@ -329,6 +355,7 @@ def write_config(tmp_path: Path, *, dev_bypass: bool = True, secure_cookies: boo
         f"[db]\nurl = {url}\nauto_migrate = false\n\n"
         f"[web]\nsecure_cookies = {'true' if secure_cookies else 'false'}\n\n"
         f"[auth]\n" + "\n".join(l for l in auth_lines if l) + "\n"
+        + (f"\n{extra_sections}\n" if extra_sections else "")
     )
     return conf
 

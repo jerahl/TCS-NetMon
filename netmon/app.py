@@ -12,6 +12,7 @@ Shutdown reverses (4)–(5): the supervisor cancels every task cleanly.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -24,7 +25,8 @@ from fastapi.staticfiles import StaticFiles
 WEB_DIR = Path(__file__).resolve().parent / "web"
 
 from netmon import __version__, db, migrate
-from netmon.api import alerts, auth_routes, devices, events, health, nac, sites, status, switches
+from netmon import settings as settings_engine
+from netmon.api import alerts, auth_routes, devices, events, health, nac, settings, sites, status, switches
 from netmon.auth.sessions import DbSessionStore, SessionStore
 from netmon.engine.engine import AlertEngine
 from netmon.collectors.milestone import MilestoneCollector, MilestoneError
@@ -137,6 +139,14 @@ async def lifespan(app: FastAPI):
         if applied:
             log.info("auto-migrate applied: %s", ", ".join(applied))
 
+    # Settings overlay (spec 12): DB overrides on top of the file config.
+    # base_config stays the pristine file view (the settings API needs it);
+    # everything downstream — routes via get_config, tasks below — sees the
+    # overlaid config. Fail-soft: no app_settings table => file config only.
+    app.state.base_config = cfg
+    cfg = settings_engine.overlay_config(cfg, app.state.engine)
+    app.state.config = cfg
+
     # DB-backed sessions (migration 007): survive restarts, safe for
     # multi-worker uvicorn. If the table is missing (migrations not applied),
     # fall back to the in-process store and say so loudly — logins still work,
@@ -179,9 +189,14 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.config = cfg
+    # Pristine file config; the lifespan overlays DB settings onto
+    # app.state.config while the settings API reads/edits against this base.
+    app.state.base_config = cfg
     # Bare supervisor; tasks are registered in the lifespan once the engine
     # exists (register_tasks). Tests may inject their own.
     app.state.supervisor = supervisor or Supervisor()
+    # Serializes POST /api/settings/apply (config swap + supervisor restart).
+    app.state.apply_lock = asyncio.Lock()
 
     app.include_router(health.router)
     app.include_router(auth_routes.router)
@@ -193,6 +208,7 @@ def create_app(
     app.include_router(switches.router)
     app.include_router(nac.router)
     app.include_router(alerts.router)
+    app.include_router(settings.router)
 
     # Static React UI (Phase 4), if built. Guarded so the app still boots when
     # the bundle is absent (fresh clone / API-only dev). Build with

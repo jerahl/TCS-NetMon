@@ -23,6 +23,7 @@ const NAV = {
   problems: "#/problems",
   map: "#/map",
   netmonStatus: "#/netmon-status",
+  settings: "#/settings",
 };
 
 // Domains Zabbix keeps (spec 11 D1/D2): Servers stays Zabbix's; FortiGate is
@@ -41,12 +42,17 @@ export function Nav({ active }) {
   const [counts, setCounts] = React.useState(null);
   const [health, setHealth] = React.useState(null);
   const [meta, setMeta] = React.useState(null);
+  const [role, setRole] = React.useState(null);
 
   React.useEffect(() => {
     // Static shell facts (version, Zabbix deep-link base) — once per load.
     getJSON("/api/meta")
       .then(setMeta)
       .catch(() => { /* deep-links render disabled without it */ });
+    // Role only gates nav visibility — the API enforces it server-side.
+    getJSON("/auth/me")
+      .then((me) => setRole(me?.role || null))
+      .catch(() => { /* stay hidden */ });
   }, []);
 
   React.useEffect(() => {
@@ -143,6 +149,13 @@ export function Nav({ active }) {
           )
         )}
       </div>
+
+      {role === "admin" && (
+        <div className="nav-section">
+          <div className="nav-label">Administration</div>
+          {item("settings", NAV.settings, "gear", "Settings")}
+        </div>
+      )}
 
       {health && health.length > 0 && (
         <div className="nav-section">

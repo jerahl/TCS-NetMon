@@ -541,7 +541,11 @@ def main(argv: list[str] | None = None) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     cfg = load_config(args.config)
-    collector = SnmpInventory.from_config(db.make_engine(cfg.db.url), cfg)
+    engine = db.make_engine(cfg.db.url)
+    # Web-managed overrides ride along in standalone runs too (spec 12 S9).
+    from netmon import settings as settings_engine
+    cfg = settings_engine.overlay_config(cfg, engine)
+    collector = SnmpInventory.from_config(engine, cfg)
 
     async def _run() -> None:
         if args.once:

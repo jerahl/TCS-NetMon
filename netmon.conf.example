@@ -78,6 +78,22 @@ saml_group_attr = group_ids
 # dev_bypass_user = devadmin
 # dev_bypass_role = admin
 
+[security]
+# Settings engine (docs/spec/12-settings-engine.md). Admins can override most
+# settings from the web UI (#/settings); overrides live in the app_settings
+# table on top of this file. THIS SECTION IS FILE-ONLY and gates that feature.
+#
+# Master key sealing write-only secrets (API tokens/passwords set from the
+# web) before they touch the database. Required before any secret can be
+# stored from the UI. Generate with:
+#   python -c "import secrets; print(secrets.token_hex(32))"
+# Rotating it invalidates stored secret overrides (re-enter them in the UI).
+# settings_key = REPLACE_WITH_64_HEX_CHARS
+#
+# Master switch for the web write path (default false = read-only settings
+# page). Reads never expose secrets either way.
+# allow_web_edit = true
+
 [poller]
 # Native poller: fping ICMP sweep + snmpget sysUpTime. Read-only ground truth.
 # Disabled by default (per-step reversibility); flip on when ready.

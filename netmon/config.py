@@ -78,6 +78,19 @@ class AuthConfig:
 
 
 @dataclass(frozen=True)
+class SecurityConfig:
+    """Settings-engine controls (spec 12). File-only — never web-editable.
+
+    ``settings_key`` seals write-only secrets stored in ``app_settings``
+    (netmon/secretbox.py). ``allow_web_edit`` gates the entire settings write
+    path; reads (with secrets masked) work for admins regardless.
+    """
+
+    settings_key: str = ""
+    allow_web_edit: bool = False
+
+
+@dataclass(frozen=True)
 class PollerConfig:
     enabled: bool = False
     ping_interval_s: int = 60
@@ -147,6 +160,7 @@ class Config:
     db: DBConfig
     web: WebConfig
     auth: AuthConfig
+    security: SecurityConfig
     poller: PollerConfig
     snmp_inventory: SnmpInventoryConfig
     engine: EngineConfig
@@ -270,6 +284,18 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
             "local_password_hash, or dev_bypass_user for local development."
         )
 
+    # --- [security] — settings engine (spec 12); file-only by design ---
+    settings_key = parser.get("security", "settings_key", fallback="").strip()
+    if settings_key and len(settings_key) < 32:
+        raise ConfigError(
+            "[security] settings_key is too short (need >= 32 chars); generate "
+            "one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+        )
+    security = SecurityConfig(
+        settings_key=settings_key,
+        allow_web_edit=_as_bool(parser.get("security", "allow_web_edit", fallback="false")),
+    )
+
     # --- [poller] ---
     def _pint(key: str, default: int) -> int:
         return parser.getint("poller", key, fallback=default)
@@ -343,6 +369,6 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         else:
             sources[name] = SourceToggle(enabled=False)
 
-    return Config(db=db, web=web, auth=auth, poller=poller,
+    return Config(db=db, web=web, auth=auth, security=security, poller=poller,
                   snmp_inventory=snmp_inventory, engine=engine,
                   sources=sources, path=conf_path)
