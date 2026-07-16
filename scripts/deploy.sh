@@ -490,8 +490,12 @@ EOF
 
 # ───────────────────────── start / health / status ──────────────────────────
 start_service() {
-  log "enabling and starting ${SERVICE_NAME}.service"
+  # restart, not start: on an update run the unit is already active, and a
+  # plain `start` would be a no-op that leaves the OLD code running. restart
+  # reloads the freshly-pulled editable install (git pull + pip -e).
+  log "enabling and restarting ${SERVICE_NAME}.service"
   run systemctl enable "$SERVICE_NAME" >/dev/null 2>&1 || true
+  run systemctl daemon-reload
   run systemctl restart "$SERVICE_NAME"
 }
 
