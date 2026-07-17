@@ -7,7 +7,8 @@ import { Card, Loading, ErrorMsg, sevColor } from "../primitives.jsx";
 // NetMon's DB (not a source), gated by [security] allow_web_edit like Settings.
 
 const TIERS = ["hub", "high", "middle", "elementary", "other"];
-const BLANK = { name: "", group_key: "", display_name: "", tier: "other", lat: "", lon: "", enabled: true };
+const LABEL_POS = ["", "top", "bottom", "left", "right"];   // "" = default (top)
+const BLANK = { name: "", group_key: "", display_name: "", tier: "other", label_pos: "", lat: "", lon: "", enabled: true };
 
 // Detail-aware request: surfaces the API's own error `detail` (e.g. "web
 // editing is disabled", "N devices still assigned") instead of a bare
@@ -41,6 +42,7 @@ export function RegistryPage() {
     const body = {
       name: edit.name, group_key: edit.group_key || null,
       display_name: edit.display_name || null, tier: edit.tier,
+      label_pos: edit.label_pos || null,
       lat: edit.lat === "" ? null : Number(edit.lat),
       lon: edit.lon === "" ? null : Number(edit.lon),
       enabled: !!edit.enabled,
@@ -95,7 +97,7 @@ export function RegistryPage() {
                 <td>
                   <button type="button" className="btn" onClick={() => {
                     setEdit({ id: s.id, name: s.name, group_key: s.group_key || "",
-                      display_name: s.display_name || "",
+                      display_name: s.display_name || "", label_pos: s.label_pos || "",
                       tier: s.tier, lat: s.lat ?? "", lon: s.lon ?? "", enabled: !!s.enabled });
                     setMsg(null);
                   }}>Edit</button>
@@ -124,6 +126,10 @@ export function RegistryPage() {
             <label><span>Tier</span>
               <select value={edit.tier} onChange={(e) => setEdit({ ...edit, tier: e.target.value })}>
                 {TIERS.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select></label>
+            <label><span>Map label position</span>
+              <select value={edit.label_pos} onChange={(e) => setEdit({ ...edit, label_pos: e.target.value })}>
+                {LABEL_POS.map((p) => <option key={p || "default"} value={p}>{p || "default (top)"}</option>)}
               </select></label>
             <label><span>Latitude</span>
               <input value={edit.lat} onChange={(e) => setEdit({ ...edit, lat: e.target.value })} placeholder="optional" /></label>

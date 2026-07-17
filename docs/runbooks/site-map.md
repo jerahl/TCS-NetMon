@@ -83,6 +83,25 @@ assignment writes the site's effective group key, and renaming a *linked*
 site's label no longer re-points devices (an unlinked site's rename still
 cascades, as before).
 
+**Label placement.** Each site's name label sits above its dot by default;
+set **Map label position** (Registry → Sites → Edit: top/bottom/left/right) to
+move it when labels collide.
+
+**Owned vs leased fiber.** A link's **Type** (owned | leased) is set in the
+map link editor. Leased circuits (a carrier path, e.g. C-Spire — named in the
+**Provider** field) render as a fine dotted line with a tinted casing so the
+NOC can tell district plant from a leased path at a glance; owned fiber keeps
+the flowing dashes.
+
+**Port attachments (real link state).** By default a link's colour comes from
+the coarse endpoint-site roll-up. Patch each end into a **switch port** (map
+link editor → Attached ports → pick a switch, then a port) and the link's
+up/down, **speed**, and **utilization** are then derived from those
+`switch_ports` rows — the actual circuit — instead. A port-backed link is DOWN
+if either attached port is down; its tooltip shows the negotiated speed and
+live utilization. Detach to fall back to the site-derived status. (Ports must
+be switches in the registry; the SNMP inventory sweep populates their state.)
+
 Editing pauses the 10 s poll so a refresh never fights a drag; leaving edit
 mode reloads and resumes. All of it is refused (403) when `allow_web_edit` is
 false. Bulk/authoritative topology still comes from the KML/JSON importer;

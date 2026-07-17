@@ -150,6 +150,35 @@ def test_rollup_follows_group_key_link(tmp_path):
         assert sites["Annex"]["status"] == "down"
 
 
+def test_link_status_from_attached_ports(tmp_path):
+    """When a link is patched into switch ports, its up/down + speed come from
+    those ports (the real circuit), overriding the coarse site roll-up."""
+    url = f"sqlite:///{tmp_path/'netmon.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    now = datetime.now(timezone.utc)
+    db.execute(engine, "INSERT INTO devices (name, site, device_type, enabled) "
+                       "VALUES ('CHS-Core-2','CHS','switch',1)")
+    swid = db.fetch_one(engine, "SELECT id FROM devices WHERE name='CHS-Core-2'")["id"]
+    # a DOWN 10G uplink port
+    db.execute(engine, "INSERT INTO switch_ports (device_id, ifindex, oper_state, speed_mbps, util_pct, updated_at) "
+                       "VALUES (:d, 1001, 'down', 10000, 3, :now)", {"d": swid, "now": now})
+    # attach it to the CHS↔CO link (CHS is 'up-ish' in the roll-up, so the port
+    # must be what turns the link DOWN)
+    lid = db.fetch_one(engine,
+        "SELECT l.id FROM fiber_links l JOIN sites sa ON sa.id=l.site_a_id "
+        "JOIN sites sb ON sb.id=l.site_b_id "
+        "WHERE (sa.name='CHS' AND sb.name='CO') OR (sa.name='CO' AND sb.name='CHS')")["id"]
+    db.execute(engine, "UPDATE fiber_links SET a_device_id=:d, a_ifindex=1001 WHERE id=:id",
+               {"d": swid, "id": lid})
+    with TestClient(_app(write_config(tmp_path, db_url=url))) as client:
+        link = {l["id"]: l for l in client.get("/api/links").json()}[lid]
+        assert link["port_backed"] is True
+        assert link["status"] == "down"          # port oper down wins
+        assert link["speed_mbps"] == 10000
+        assert link["utilization_source"] == "snmp_inventory"
+
+
 def test_links_derive_status_and_null_utilization(tmp_path):
     url = f"sqlite:///{tmp_path/'netmon.db'}"
     _seed(url)

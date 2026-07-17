@@ -60,6 +60,18 @@ const POLL_MS = 10000;
 const linkColor = (l) =>
   l.status !== "up" ? C[l.status] || C.unknown : l.utilization_pct > 85 ? C.hot : C.up;
 
+const fmtSpeed = (mbps) => (!mbps ? "" : mbps >= 1000 ? `${mbps / 1000}G` : `${mbps}M`);
+
+// Site-label placement → Leaflet tooltip direction + offset (default top).
+function labelTip(pos) {
+  switch ((pos || "top").toLowerCase()) {
+    case "bottom": return { direction: "bottom", offset: [0, 8] };
+    case "left": return { direction: "left", offset: [-8, 0] };
+    case "right": return { direction: "right", offset: [8, 0] };
+    default: return { direction: "top", offset: [0, -8] };
+  }
+}
+
 const fmtTime = (iso) => {
   const d = new Date(iso);
   return isNaN(d) ? String(iso ?? "") : d.toLocaleTimeString("en-US", { hour12: false });
@@ -88,6 +100,9 @@ export function MapPage() {
   const [linkAdd, setLinkAdd] = React.useState(false);   // picking two sites for a new link
   const [pendingA, setPendingA] = React.useState(null);  // first site picked for a new link
   const [editMsg, setEditMsg] = React.useState(null);
+  const [linkForm, setLinkForm] = React.useState(null);  // {kind,provider,aDev,aIf,bDev,bIf} for the edited link
+  const [fleet, setFleet] = React.useState([]);          // switches for the port pickers
+  const [portsByDev, setPortsByDev] = React.useState({});// deviceId → [{ifindex,name,oper_state}]
 
   const rootRef = React.useRef(null);
   const mapEl = React.useRef(null);
@@ -210,10 +225,14 @@ export function MapPage() {
         line.bindTooltip(
           () => {
             const cur = (dataRef.current.links || []).find((x) => x.id === l.id) || l;
+            const rate = cur.speed_mbps ? fmtSpeed(cur.speed_mbps) : `${cur.capacity_gbps}G`;
             const stat = cur.status === "up"
-              ? (cur.utilization_pct == null ? "util: no data" : `${Math.round(cur.utilization_pct)}% of ${cur.capacity_gbps}G`)
+              ? (cur.utilization_pct == null ? "util: no data" : `${Math.round(cur.utilization_pct)}% of ${rate}`)
               : STATUS_LABEL[cur.status] || cur.status.toUpperCase();
-            return `${cur.site_a} ⟷ ${cur.site_b}<br>${cur.capacity_gbps}G fiber · ${stat}`;
+            const own = cur.link_kind === "leased"
+              ? `leased${cur.provider ? ` · ${cur.provider}` : ""}` : "district fiber";
+            const ports = cur.port_backed ? "" : "<br><span style='opacity:.7'>no ports attached — status from sites</span>";
+            return `${cur.site_a} ⟷ ${cur.site_b}<br>${rate} ${own} · ${stat}${ports}`;
           },
           { sticky: true, className: "link-tip" }
         );
@@ -226,6 +245,7 @@ export function MapPage() {
       }
 
       const color = linkColor(l);
+      const leased = l.link_kind === "leased";
       const touched = selected && (l.site_a === selected || l.site_b === selected);
       const dimmed = selected && !touched;
       const w = l.capacity_gbps >= 10 ? 4.5 : 3;
@@ -233,9 +253,16 @@ export function MapPage() {
         color,
         weight: touched ? w + 1.5 : w,
         opacity: dimmed ? 0.25 : 0.95,
-        dashArray: l.status === "down" ? "3 9" : "8 7",
+        // Leased circuits render as a fine dotted line so they read as "not our
+        // plant" at a glance; owned fiber keeps the flowing dashes.
+        dashArray: leased ? "1 7" : l.status === "down" ? "3 9" : "8 7",
       });
-      entry.casing.setStyle({ weight: (touched ? w + 1.5 : w) + 3.5, opacity: dimmed ? 0.1 : 0.35 });
+      // Leased links get a lighter, tinted casing (not the solid black of owned).
+      entry.casing.setStyle({
+        color: leased ? "#b36bd4" : "#000",
+        weight: (touched ? w + 1.5 : w) + 3.5,
+        opacity: dimmed ? 0.1 : leased ? 0.5 : 0.35,
+      });
       const p = entry.line._path;
       if (p) {
         const flowing = l.status === "up" || l.status === "degraded";
@@ -264,10 +291,19 @@ export function MapPage() {
           if (linkAddRef.current) { pickRef.current(s.name); return; }
           setSelected(s.name);
         });
-        m.bindTooltip(s.name, { permanent: true, direction: "top", offset: [0, -8], className: "site-tip", interactive: false });
+        const lt = labelTip(s.label_pos);
+        m.bindTooltip(s.name, { permanent: true, className: "site-tip", interactive: false, ...lt });
+        m._labelPos = s.label_pos || "top";
         lay.sites[s.name] = m;
       } else {
         m.setLatLng([s.lat, s.lon]);
+        // Re-place the label if its configured position changed.
+        if ((s.label_pos || "top") !== m._labelPos) {
+          m.unbindTooltip();
+          const lt = labelTip(s.label_pos);
+          m.bindTooltip(s.name, { permanent: true, className: "site-tip", interactive: false, ...lt });
+          m._labelPos = s.label_pos || "top";
+        }
       }
       const isSel = selected === s.name;
       const neighbor =
@@ -405,19 +441,78 @@ export function MapPage() {
     } catch (e) { setEditMsg({ ok: false, text: String(e.message || e) }); }
   };
 
-  const setLinkCapacity = async (id, cap) => {
-    try {
-      await editReq("PUT", `/api/registry/links/${id}`, { capacity_gbps: cap });
-      setEditMsg({ ok: true, text: `Capacity set to ${cap}G.` });
-      refetch();
-    } catch (e) { setEditMsg({ ok: false, text: String(e.message || e) }); }
-  };
-
   const removeLink = async (id) => {
     try {
       await editReq("DELETE", `/api/registry/links/${id}`);
       setEditMsg({ ok: true, text: "Fiber link deleted." });
       setEditLink(null); refetch();
+    } catch (e) { setEditMsg({ ok: false, text: String(e.message || e) }); }
+  };
+
+  // Load ports for a switch on demand (port pickers), cached per device.
+  const loadPorts = React.useCallback((devId) => {
+    if (!devId) return;
+    setPortsByDev((m) => (m[devId] ? m : { ...m, [devId]: [] }));   // mark loading
+    getJSON(`/api/switches/${devId}/ports`)
+      .then((ps) => setPortsByDev((m) => ({ ...m, [devId]: ps })))
+      .catch(() => { /* leave empty; free-typing still works via ifindex */ });
+  }, []);
+
+  // When a link is opened for editing, prime the details/ports form from the
+  // registry row (which carries kind/provider/port refs the map API omits) and
+  // fetch the switch fleet for the pickers.
+  React.useEffect(() => {
+    if (!edit || editLink == null) { setLinkForm(null); return; }
+    let live = true;
+    Promise.all([
+      getJSON("/api/registry/links").catch(() => []),
+      fleet.length ? Promise.resolve(fleet) : getJSON("/api/switches").catch(() => []),
+    ]).then(([rlinks, sw]) => {
+      if (!live) return;
+      if (!fleet.length) setFleet(sw);
+      const l = (rlinks || []).find((x) => x.id === editLink);
+      if (!l) return;
+      setLinkForm({
+        kind: l.link_kind || "owned", provider: l.provider || "",
+        aDev: l.a_device_id ?? "", aIf: l.a_ifindex ?? "",
+        bDev: l.b_device_id ?? "", bIf: l.b_ifindex ?? "",
+      });
+      if (l.a_device_id) loadPorts(l.a_device_id);
+      if (l.b_device_id) loadPorts(l.b_device_id);
+    });
+    return () => { live = false; };
+  }, [edit, editLink]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const saveLinkDetails = async () => {
+    const f = linkForm; if (!f) return;
+    try {
+      await editReq("PUT", `/api/registry/links/${editLinkRef.current}`, {
+        capacity_gbps: parseFloat(capInputRef.current.value),
+        link_kind: f.kind,
+        provider: f.kind === "leased" ? (f.provider || null) : null,
+      });
+      setEditMsg({ ok: true, text: "Saved link details." }); refetch();
+    } catch (e) { setEditMsg({ ok: false, text: String(e.message || e) }); }
+  };
+
+  const saveLinkPorts = async () => {
+    const f = linkForm; if (!f) return;
+    const num = (v) => (v === "" || v == null ? null : Number(v));
+    try {
+      await editReq("PUT", `/api/registry/links/${editLinkRef.current}`, {
+        set_ports: true,
+        a_device_id: num(f.aDev), a_ifindex: num(f.aIf),
+        b_device_id: num(f.bDev), b_ifindex: num(f.bIf),
+      });
+      setEditMsg({ ok: true, text: "Saved link ports — status now follows them." }); refetch();
+    } catch (e) { setEditMsg({ ok: false, text: String(e.message || e) }); }
+  };
+
+  const detachLinkPorts = async () => {
+    try {
+      await editReq("PUT", `/api/registry/links/${editLinkRef.current}`, { clear_ports: true });
+      setLinkForm((f) => ({ ...f, aDev: "", aIf: "", bDev: "", bIf: "" }));
+      setEditMsg({ ok: true, text: "Detached ports." }); refetch();
     } catch (e) { setEditMsg({ ok: false, text: String(e.message || e) }); }
   };
 
@@ -587,18 +682,71 @@ export function MapPage() {
                         Drag ○ to move a waypoint · drag a faint + to add one · right-click ○ to remove.
                         Endpoints follow their sites.
                       </div>
-                      <div className="edit-row">
-                        <label className="dim">Capacity (G)</label>
-                        <input key={editLink} ref={capInputRef} className="enum-in" style={{ width: 70 }}
-                               type="number" min="0.1" step="0.5" defaultValue={elink.capacity_gbps} />
-                        <button type="button" className="btn"
-                                onClick={() => setLinkCapacity(elink.id, parseFloat(capInputRef.current.value))}>Set</button>
-                      </div>
                       <div className="edit-row" style={{ marginTop: 10 }}>
                         <button type="button" className="btn" onClick={saveLinkPath}>Save path</button>
                         <button type="button" className="btn" onClick={() => { setEditLink(null); refetch(); }}>Cancel</button>
                       </div>
+
+                      <div className="map-panel-kicker mono" style={{ marginTop: 14 }}>LINK DETAILS</div>
                       <div className="edit-row" style={{ marginTop: 6 }}>
+                        <label className="dim">Capacity (G)</label>
+                        <input key={editLink} ref={capInputRef} className="enum-in" style={{ width: 64 }}
+                               type="number" min="0.1" step="0.5" defaultValue={elink.capacity_gbps} />
+                        <label className="dim">Type</label>
+                        <select className="enum-in" style={{ width: 90 }} value={linkForm?.kind || "owned"}
+                                onChange={(e) => setLinkForm((f) => ({ ...f, kind: e.target.value }))}>
+                          <option value="owned">owned</option>
+                          <option value="leased">leased</option>
+                        </select>
+                      </div>
+                      {linkForm?.kind === "leased" && (
+                        <div className="edit-row" style={{ marginTop: 6 }}>
+                          <label className="dim">Provider</label>
+                          <input className="enum-in" style={{ flex: 1 }} placeholder="e.g. C-Spire"
+                                 value={linkForm?.provider || ""}
+                                 onChange={(e) => setLinkForm((f) => ({ ...f, provider: e.target.value }))} />
+                        </div>
+                      )}
+                      <div className="edit-row" style={{ marginTop: 6 }}>
+                        <button type="button" className="btn" onClick={saveLinkDetails}>Save details</button>
+                      </div>
+
+                      <div className="map-panel-kicker mono" style={{ marginTop: 14 }}>ATTACHED PORTS</div>
+                      <div className="dim" style={{ fontSize: 11, margin: "2px 0 6px" }}>
+                        Patch each end into a switch port to drive the link's up/down, speed, and utilization from the real circuit.
+                      </div>
+                      {["a", "b"].map((end) => {
+                        const dk = `${end}Dev`, ik = `${end}If`;
+                        const devVal = linkForm?.[dk] ?? "";
+                        const ports = portsByDev[devVal] || [];
+                        return (
+                          <div className="edit-row" key={end} style={{ marginTop: 4 }}>
+                            <label className="dim" style={{ width: 42 }}>{end === "a" ? elink.site_a : elink.site_b}</label>
+                            <select className="enum-in" style={{ flex: 1 }} value={devVal}
+                                    onChange={(e) => { const v = e.target.value;
+                                      setLinkForm((f) => ({ ...f, [dk]: v, [ik]: "" })); if (v) loadPorts(v); }}>
+                              <option value="">— switch —</option>
+                              {fleet.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                            </select>
+                            <select className="enum-in" style={{ width: 110 }} value={linkForm?.[ik] ?? ""}
+                                    disabled={!devVal}
+                                    onChange={(e) => setLinkForm((f) => ({ ...f, [ik]: e.target.value }))}>
+                              <option value="">— port —</option>
+                              {ports.map((p) => (
+                                <option key={p.ifindex} value={p.ifindex}>
+                                  {(p.name || p.ifindex) + (p.oper_state ? ` (${p.oper_state})` : "")}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        );
+                      })}
+                      <div className="edit-row" style={{ marginTop: 6 }}>
+                        <button type="button" className="btn" onClick={saveLinkPorts}>Save ports</button>
+                        <button type="button" className="btn" onClick={detachLinkPorts}>Detach</button>
+                      </div>
+
+                      <div className="edit-row" style={{ marginTop: 12 }}>
                         <button type="button" className="btn" onClick={() => removeLink(elink.id)}
                                 style={{ borderColor: "#e5484d", color: "#e5484d" }}>Delete link</button>
                       </div>

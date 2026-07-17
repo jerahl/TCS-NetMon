@@ -36,6 +36,9 @@ def _require_edit(cfg: Config) -> None:
         )
 
 
+LABEL_POSITIONS = ("top", "bottom", "left", "right")
+
+
 class SiteIn(BaseModel):
     name: str
     # Network site/group this map location represents (a devices.site value).
@@ -43,6 +46,7 @@ class SiteIn(BaseModel):
     group_key: str | None = None
     display_name: str | None = None
     tier: SiteTier = SiteTier.other
+    label_pos: str | None = None   # top|bottom|left|right; None → top
     lat: float | None = None
     lon: float | None = None
     enabled: bool = True
@@ -58,7 +62,8 @@ def list_sites(
     site name."""
     rows = db.fetch_all(
         engine,
-        "SELECT s.id, s.name, s.group_key, s.display_name, s.tier, s.lat, s.lon, s.enabled, "
+        "SELECT s.id, s.name, s.group_key, s.display_name, s.tier, s.label_pos, "
+        " s.lat, s.lon, s.enabled, "
         " (SELECT COUNT(*) FROM devices d WHERE d.site = COALESCE(s.group_key, s.name)) AS device_count "
         "FROM sites s ORDER BY s.name",
     )
@@ -73,6 +78,15 @@ def list_sites(
 def _norm_group(value: str | None) -> str | None:
     v = (value or "").strip()
     return v or None
+
+
+def _norm_label_pos(value: str | None) -> str | None:
+    v = (value or "").strip().lower()
+    if not v:
+        return None
+    if v not in LABEL_POSITIONS:
+        raise HTTPException(status_code=422, detail=f"label_pos must be one of {LABEL_POSITIONS}")
+    return v
 
 
 @router.post("/sites")
@@ -92,10 +106,10 @@ def create_site(
     # the site map skips 0/0 markers, so a site can exist before it's placed.
     db.execute(
         engine,
-        "INSERT INTO sites (name, group_key, display_name, tier, lat, lon, enabled) "
-        "VALUES (:n, :g, :d, :t, :lat, :lon, :e)",
+        "INSERT INTO sites (name, group_key, display_name, tier, label_pos, lat, lon, enabled) "
+        "VALUES (:n, :g, :d, :t, :lp, :lat, :lon, :e)",
         {"n": name, "g": _norm_group(body.group_key), "d": (body.display_name or None),
-         "t": body.tier.value,
+         "t": body.tier.value, "lp": _norm_label_pos(body.label_pos),
          "lat": body.lat if body.lat is not None else 0,
          "lon": body.lon if body.lon is not None else 0,
          "e": 1 if body.enabled else 0},
@@ -128,8 +142,9 @@ def update_site(
     db.execute(
         engine,
         "UPDATE sites SET name = :n, group_key = :g, display_name = :d, tier = :t, "
-        "lat = :lat, lon = :lon, enabled = :e WHERE id = :id",
+        "label_pos = :lp, lat = :lat, lon = :lon, enabled = :e WHERE id = :id",
         {"n": new_name, "g": group_key, "d": (body.display_name or None), "t": body.tier.value,
+         "lp": _norm_label_pos(body.label_pos),
          "lat": body.lat if body.lat is not None else 0,
          "lon": body.lon if body.lon is not None else 0,
          "e": 1 if body.enabled else 0, "id": site_id},
@@ -317,9 +332,11 @@ def list_links(
     engine: Engine = Depends(get_engine),
     _user: UserSession = Depends(require_role(Role.admin)),
 ) -> list[dict]:
-    """Fiber links for the map editor (raw rows incl. id + parsed path)."""
+    """Fiber links for the map editor (raw rows incl. id, parsed path, kind,
+    provider, and the switch ports each end is patched into)."""
     rows = db.fetch_all(engine,
-        "SELECT l.id, l.capacity_gbps, l.path, l.enabled, "
+        "SELECT l.id, l.capacity_gbps, l.path, l.enabled, l.link_kind, l.provider, "
+        " l.a_device_id, l.a_ifindex, l.b_device_id, l.b_ifindex, "
         " sa.name AS site_a, sb.name AS site_b "
         "FROM fiber_links l JOIN sites sa ON sa.id = l.site_a_id "
         "JOIN sites sb ON sb.id = l.site_b_id ORDER BY l.id")
@@ -331,8 +348,36 @@ def list_links(
             path = None
         out.append({"id": r["id"], "site_a": r["site_a"], "site_b": r["site_b"],
                     "capacity_gbps": float(r["capacity_gbps"]), "path": path,
+                    "link_kind": (r.get("link_kind") or "owned"), "provider": r.get("provider"),
+                    "a_device_id": r.get("a_device_id"), "a_ifindex": r.get("a_ifindex"),
+                    "b_device_id": r.get("b_device_id"), "b_ifindex": r.get("b_ifindex"),
                     "enabled": bool(r["enabled"])})
     return out
+
+
+LINK_KINDS = ("owned", "leased")
+
+
+def _norm_kind(value: str | None) -> str:
+    v = (value or "owned").strip().lower()
+    if v not in LINK_KINDS:
+        raise HTTPException(status_code=422, detail=f"link_kind must be one of {LINK_KINDS}")
+    return v
+
+
+def _check_port(engine: Engine, device_id, ifindex) -> None:
+    """A port end is either fully unset or a (device_id, ifindex) pair naming a
+    switch in the registry — we don't require the sweep to have seen the port
+    yet, but the device must exist and be a switch."""
+    if device_id is None and ifindex is None:
+        return
+    if device_id is None or ifindex is None:
+        raise HTTPException(status_code=422, detail="a port end needs both a device and an ifindex")
+    row = db.fetch_one(engine, "SELECT device_type FROM devices WHERE id = :id", {"id": int(device_id)})
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"device {device_id} does not exist")
+    if row["device_type"] != "switch":
+        raise HTTPException(status_code=422, detail=f"device {device_id} is not a switch")
 
 
 class LinkIn(BaseModel):
@@ -340,6 +385,8 @@ class LinkIn(BaseModel):
     site_b: str
     capacity_gbps: float = 1.0
     path: list | None = None
+    link_kind: str = "owned"
+    provider: str | None = None
 
 
 @router.post("/links")
@@ -361,12 +408,15 @@ def create_link(
                     {"a": aid, "b": bid}):
         raise HTTPException(status_code=409, detail=f"a link between {a} and {b} already exists")
     path = _validate_path(body.path)
+    kind = _norm_kind(body.link_kind)
+    provider = (body.provider or "").strip() or None
     db.execute(engine,
-        "INSERT INTO fiber_links (site_a_id, site_b_id, capacity_gbps, path, enabled) "
-        "VALUES (:a, :b, :cap, :path, 1)",
+        "INSERT INTO fiber_links (site_a_id, site_b_id, capacity_gbps, path, link_kind, provider, enabled) "
+        "VALUES (:a, :b, :cap, :path, :kind, :prov, 1)",
         {"a": aid, "b": bid, "cap": body.capacity_gbps,
-         "path": json.dumps(path) if path is not None else None})
-    log.info("fiber link %s—%s created by %s", a, b, user.username)
+         "path": json.dumps(path) if path is not None else None,
+         "kind": kind, "prov": provider})
+    log.info("fiber link %s—%s (%s) created by %s", a, b, kind, user.username)
     return {"status": "created", "site_a": a, "site_b": b}
 
 
@@ -375,6 +425,16 @@ class LinkUpdate(BaseModel):
     path: list | None = None
     clear_path: bool = False   # explicit: revert to a straight, site-tracking line
     enabled: bool | None = None
+    link_kind: str | None = None
+    provider: str | None = None
+    # Port attachments. Present a key to change that end; use clear_ports to
+    # detach both. device+ifindex None means "leave as is" unless clear_ports.
+    a_device_id: int | None = None
+    a_ifindex: int | None = None
+    b_device_id: int | None = None
+    b_ifindex: int | None = None
+    set_ports: bool = False     # apply the a_/b_ port fields (allows setting NULL)
+    clear_ports: bool = False   # detach both ends
 
 
 @router.put("/links/{link_id}")
@@ -385,7 +445,8 @@ def update_link(
     cfg: Config = Depends(get_config),
     user: UserSession = Depends(require_role(Role.admin)),
 ) -> dict:
-    """Edit a link's capacity, path (waypoints), or enabled flag."""
+    """Edit a link's capacity, path, ownership, or the switch ports it's
+    patched into."""
     _require_edit(cfg)
     if db.fetch_one(engine, "SELECT 1 FROM fiber_links WHERE id = :id", {"id": link_id}) is None:
         raise HTTPException(status_code=404, detail="link not found")
@@ -401,6 +462,18 @@ def update_link(
         sets.append("path = :path"); params["path"] = json.dumps(path)
     if body.enabled is not None:
         sets.append("enabled = :en"); params["en"] = 1 if body.enabled else 0
+    if body.link_kind is not None:
+        sets.append("link_kind = :kind"); params["kind"] = _norm_kind(body.link_kind)
+    if body.provider is not None:
+        sets.append("provider = :prov"); params["prov"] = (body.provider.strip() or None)
+    if body.clear_ports:
+        sets += ["a_device_id = NULL", "a_ifindex = NULL", "b_device_id = NULL", "b_ifindex = NULL"]
+    elif body.set_ports:
+        _check_port(engine, body.a_device_id, body.a_ifindex)
+        _check_port(engine, body.b_device_id, body.b_ifindex)
+        sets += ["a_device_id = :ad", "a_ifindex = :ai", "b_device_id = :bd", "b_ifindex = :bi"]
+        params.update({"ad": body.a_device_id, "ai": body.a_ifindex,
+                       "bd": body.b_device_id, "bi": body.b_ifindex})
     if not sets:
         raise HTTPException(status_code=422, detail="nothing to update")
     db.execute(engine, f"UPDATE fiber_links SET {', '.join(sets)} WHERE id = :id", params)

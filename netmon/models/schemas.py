@@ -166,6 +166,7 @@ class SiteRollup(BaseModel):
     name: str
     display_name: str | None = None
     tier: SiteTier = SiteTier.other
+    label_pos: str | None = None   # top|bottom|left|right; None → top
     lat: float
     lon: float
     status: SiteStatus = SiteStatus.unknown
@@ -182,10 +183,17 @@ class FiberLink(BaseModel):
     site_b: str
     capacity_gbps: float
     path: list[tuple[float, float]] | None = None
+    link_kind: str = "owned"        # owned | leased
+    provider: str | None = None     # carrier name when leased (e.g. C-Spire)
     status: SiteStatus = SiteStatus.unknown
     utilization_pct: float | None = None
     utilization_at: datetime | None = None
     utilization_source: str | None = None
+    # Derived from the attached switch ports when set (else the port-agnostic
+    # site-derived status stands): the negotiated link speed and whether the
+    # link is wired to physical ports at all.
+    speed_mbps: int | None = None
+    port_backed: bool = False
 
 
 class MapEvent(BaseModel):

@@ -40,14 +40,15 @@ GROUP BY d.id, d.site
 """
 
 _SITES_SQL = """
-SELECT name, group_key, display_name, tier, lat, lon
+SELECT name, group_key, display_name, tier, label_pos, lat, lon
 FROM sites
 WHERE enabled = 1
 ORDER BY name
 """
 
 _LINKS_SQL = """
-SELECT l.id, l.capacity_gbps, l.path,
+SELECT l.id, l.capacity_gbps, l.path, l.link_kind, l.provider,
+       l.a_device_id, l.a_ifindex, l.b_device_id, l.b_ifindex,
        sa.name AS site_a, sb.name AS site_b,
        st.status AS raw_status, st.utilization_pct, st.updated_at AS util_at,
        st.source AS util_source
@@ -134,6 +135,7 @@ def _site_rollups(engine: Engine) -> list[SiteRollup]:
                 name=site["name"],
                 display_name=site.get("display_name"),
                 tier=_tier(site.get("tier")),
+                label_pos=site.get("label_pos") or None,
                 lat=float(site["lat"]),
                 lon=float(site["lon"]),
                 status=status,
@@ -153,26 +155,99 @@ def sites_json(
     return _site_rollups(engine)
 
 
+def _port_index(engine: Engine, refs: set[tuple[int, int]]) -> dict[tuple[int, int], dict]:
+    """Fetch the switch_ports rows for a set of (device_id, ifindex) link ends.
+    Queried by device_id (portable) and filtered to the wanted ifindexes."""
+    if not refs:
+        return {}
+    dev_ids = sorted({d for d, _ in refs})
+    ph = ",".join(f":d{i}" for i in range(len(dev_ids)))
+    params = {f"d{i}": v for i, v in enumerate(dev_ids)}
+    rows = db.fetch_all(
+        engine,
+        f"SELECT device_id, ifindex, oper_state, util_pct, speed_mbps, updated_at "
+        f"FROM switch_ports WHERE device_id IN ({ph})",
+        params,
+    )
+    idx: dict[tuple[int, int], dict] = {}
+    for r in rows:
+        idx[(int(r["device_id"]), int(r["ifindex"]))] = r
+    return idx
+
+
+def _link_ends(r: dict) -> list[tuple[int, int]]:
+    ends = []
+    for dk, ik in (("a_device_id", "a_ifindex"), ("b_device_id", "b_ifindex")):
+        d, i = r.get(dk), r.get(ik)
+        if d is not None and i is not None:
+            ends.append((int(d), int(i)))
+    return ends
+
+
+def _port_derived(ends: list[tuple[int, int]], ports: dict[tuple[int, int], dict]):
+    """(status, utilization_pct, speed_mbps, util_at) from the attached ports.
+
+    A link is DOWN if any attached port is oper down, UP if any is up and none
+    down, else unknown (no sweep data yet). Utilization is the busier end; speed
+    the negotiated port speed. Honest nulls when the sweep hasn't populated."""
+    seen = [ports.get(e) for e in ends]
+    seen = [p for p in seen if p is not None]
+    if not seen:
+        return None, None, None, None
+    states = {(p.get("oper_state") or "").lower() for p in seen}
+    if "down" in states:
+        status = SiteStatus.down
+    elif "up" in states:
+        status = SiteStatus.up
+    else:
+        status = SiteStatus.unknown
+    utils = [p["util_pct"] for p in seen if p.get("util_pct") is not None]
+    speeds = [p["speed_mbps"] for p in seen if p.get("speed_mbps") is not None]
+    ats = [p["updated_at"] for p in seen if p.get("updated_at") is not None]
+    return (status,
+            float(max(utils)) if utils else None,
+            int(max(speeds)) if speeds else None,
+            max(ats) if ats else None)
+
+
 @router.get("/api/links", response_model=list[FiberLink])
 def links_json(
     engine: Engine = Depends(get_engine),
     _user=Depends(require_role(Role.viewer)),
 ) -> list[FiberLink]:
     status_by_site = {s.name: s.status for s in _site_rollups(engine)}
+    rows = db.fetch_all(engine, _LINKS_SQL)
+    # Batch-load the switch ports every port-backed link end references.
+    refs: set[tuple[int, int]] = set()
+    for r in rows:
+        refs.update(_link_ends(r))
+    ports = _port_index(engine, refs)
+
     out: list[FiberLink] = []
-    for r in db.fetch_all(engine, _LINKS_SQL):
-        status = effective_link_status(
-            status_by_site.get(r["site_a"], SiteStatus.unknown),
-            status_by_site.get(r["site_b"], SiteStatus.unknown),
-            r.get("raw_status"),
-        )
+    for r in rows:
         path = None
         if r.get("path"):
             try:
                 path = json.loads(r["path"])
             except (TypeError, ValueError):
                 path = None  # curated data bug — fall back to a straight line
-        util = r.get("utilization_pct")
+
+        ends = _link_ends(r)
+        p_status, p_util, p_speed, p_at = _port_derived(ends, ports)
+        if p_status is not None:
+            # Ports are attached and have a reading → they are authoritative.
+            status, util, util_at, util_src = p_status, p_util, p_at, "snmp_inventory"
+        else:
+            # No ports (or no sweep data yet): the port-agnostic site roll-up.
+            status = effective_link_status(
+                status_by_site.get(r["site_a"], SiteStatus.unknown),
+                status_by_site.get(r["site_b"], SiteStatus.unknown),
+                r.get("raw_status"),
+            )
+            u = r.get("utilization_pct")
+            util = float(u) if u is not None else None
+            util_at, util_src = r.get("util_at"), r.get("util_source")
+
         out.append(
             FiberLink(
                 id=r["id"],
@@ -180,10 +255,14 @@ def links_json(
                 site_b=r["site_b"],
                 capacity_gbps=float(r["capacity_gbps"]),
                 path=path,
+                link_kind=(r.get("link_kind") or "owned"),
+                provider=(r.get("provider") or None),
                 status=status,
-                utilization_pct=float(util) if util is not None else None,
-                utilization_at=r.get("util_at"),
-                utilization_source=r.get("util_source"),
+                utilization_pct=util,
+                utilization_at=util_at,
+                utilization_source=util_src,
+                speed_mbps=p_speed,
+                port_backed=bool(ends),
             )
         )
     return out

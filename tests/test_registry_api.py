@@ -134,6 +134,63 @@ def test_assign_unassign_and_edit_gate(tmp_path):
                            json={"device_ids": [d["id"]], "site": "BHS"}).status_code == 403
 
 
+def test_site_label_pos(tmp_path):
+    url = f"sqlite:///{tmp_path/'r.db'}"
+    _seed(url)
+    with _client(_conf(tmp_path, url)) as client:
+        assert client.post("/api/registry/sites",
+                           json={"name": "X", "label_pos": "bottom", "tier": "other"}).status_code == 200
+        x = {s["name"]: s for s in client.get("/api/registry/sites").json()}["X"]
+        assert x["label_pos"] == "bottom"
+        # invalid position → 422
+        assert client.put(f"/api/registry/sites/{x['id']}",
+                          json={"name": "X", "label_pos": "sideways"}).status_code == 422
+        # blank clears back to default (NULL → top)
+        assert client.put(f"/api/registry/sites/{x['id']}",
+                          json={"name": "X", "label_pos": ""}).status_code == 200
+        x = {s["name"]: s for s in client.get("/api/registry/sites").json()}["X"]
+        assert x["label_pos"] is None
+
+
+def test_link_kind_provider_and_ports(tmp_path):
+    url = f"sqlite:///{tmp_path/'r.db'}"
+    _seed(url)   # site BHS + switch sw-1 (device_type switch)
+    engine = db.make_engine(url)
+    db.execute(engine, "INSERT INTO sites (name, tier, lat, lon, enabled) VALUES ('CHS','high',0,0,1)")
+    swid = db.fetch_one(engine, "SELECT id FROM devices WHERE name='sw-1'")["id"]
+    with _client(_conf(tmp_path, url)) as client:
+        # leased link with a provider
+        r = client.post("/api/registry/links",
+                        json={"site_a": "BHS", "site_b": "CHS", "link_kind": "leased", "provider": "C-Spire"})
+        assert r.status_code == 200
+        link = client.get("/api/registry/links").json()[0]
+        assert link["link_kind"] == "leased" and link["provider"] == "C-Spire"
+        lid = link["id"]
+        # bad kind → 422
+        assert client.put(f"/api/registry/links/{lid}", json={"link_kind": "rented"}).status_code == 422
+
+        # attach the A end to a real switch port
+        r = client.put(f"/api/registry/links/{lid}",
+                       json={"set_ports": True, "a_device_id": swid, "a_ifindex": 1001,
+                             "b_device_id": None, "b_ifindex": None})
+        assert r.status_code == 200
+        link = client.get("/api/registry/links").json()[0]
+        assert link["a_device_id"] == swid and link["a_ifindex"] == 1001
+
+        # a half-specified end is rejected; a non-switch device is rejected
+        assert client.put(f"/api/registry/links/{lid}",
+                          json={"set_ports": True, "a_device_id": swid, "a_ifindex": None}).status_code == 422
+        db.execute(engine, "INSERT INTO devices (name, device_type, enabled) VALUES ('cam','camera',1)")
+        camid = db.fetch_one(engine, "SELECT id FROM devices WHERE name='cam'")["id"]
+        assert client.put(f"/api/registry/links/{lid}",
+                          json={"set_ports": True, "a_device_id": camid, "a_ifindex": 5}).status_code == 422
+
+        # clear_ports detaches both ends
+        assert client.put(f"/api/registry/links/{lid}", json={"clear_ports": True}).status_code == 200
+        link = client.get("/api/registry/links").json()[0]
+        assert link["a_device_id"] is None and link["b_device_id"] is None
+
+
 def test_group_key_link_and_counts(tmp_path):
     url = f"sqlite:///{tmp_path/'r.db'}"
     _seed(url)   # site BHS + device sw-1 at site 'BHS'

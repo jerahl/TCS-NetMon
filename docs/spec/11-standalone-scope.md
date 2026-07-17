@@ -207,9 +207,19 @@ shadow-alert diff has run clean for the agreed window.
   represent a network site/group whose name differs, without renaming the
   marker or moving devices (NULL = historical join-by-name; a linked site's
   rename no longer cascades). `GET /api/registry/groups` lists the live
-  `devices.site` groups for the Registry site editor's picklist. Also this
-  session: **topology switched LLDP→EDP** (EXTREME-EDP-MIB, migration 014,
-  table `lldp_neighbors`→`neighbors`).
+  `devices.site` groups for the Registry site editor's picklist.
+  **Map link/label richness 2026-07-17**: migration 016 adds
+  `sites.label_pos` (label placement top/bottom/left/right),
+  `fiber_links.link_kind`+`provider` (owned vs leased carrier fiber, e.g.
+  C-Spire — rendered distinctly), and `fiber_links.{a,b}_device_id/ifindex`
+  (each link end patched into a switch port). When ports are attached the map
+  link's up/down + `speed_mbps` + utilization derive from those `switch_ports`
+  rows (authoritative, source `snmp_inventory`) instead of the endpoint-site
+  roll-up; `/api/links` gains `link_kind`/`provider`/`speed_mbps`/`port_backed`
+  and `/api/sites` gains `label_pos`. Registry link CRUD + the map link editor
+  set kind/provider and the per-end switch+port pickers. Also this session:
+  **topology switched LLDP→EDP** (EXTREME-EDP-MIB, migration 014, table
+  `lldp_neighbors`→`neighbors`).
 - **SSHEASY integration landed 2026-07-16.** SSHEASY (`jerahl/ssheasy`) is a
   browser SSH client (xterm.js + WASM) embeddable in an iframe. NetMon adds an
   operator/admin-gated **"SSH" button** on device detail pages (switch + AP)

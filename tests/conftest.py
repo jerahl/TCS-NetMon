@@ -164,6 +164,7 @@ CREATE TABLE sites (
     group_key TEXT,
     display_name TEXT,
     tier TEXT NOT NULL DEFAULT 'other',
+    label_pos TEXT,
     lat REAL NOT NULL,
     lon REAL NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1
@@ -177,6 +178,12 @@ CREATE TABLE fiber_links (
     site_b_id INTEGER NOT NULL,
     capacity_gbps REAL NOT NULL DEFAULT 1.0,
     path TEXT,
+    link_kind TEXT NOT NULL DEFAULT 'owned',
+    provider TEXT,
+    a_device_id INTEGER,
+    a_ifindex INTEGER,
+    b_device_id INTEGER,
+    b_ifindex INTEGER,
     enabled INTEGER NOT NULL DEFAULT 1,
     UNIQUE (site_a_id, site_b_id)
 )
