@@ -134,6 +134,61 @@ def test_assign_unassign_and_edit_gate(tmp_path):
                            json={"device_ids": [d["id"]], "site": "BHS"}).status_code == 403
 
 
+def test_group_key_link_and_counts(tmp_path):
+    url = f"sqlite:///{tmp_path/'r.db'}"
+    _seed(url)   # site BHS + device sw-1 at site 'BHS'
+    engine = db.make_engine(url)
+    with _client(_conf(tmp_path, url)) as client:
+        # groups picklist: one network group 'BHS' with 1 device, already linked
+        groups = {g["name"]: g for g in client.get("/api/registry/groups").json()}
+        assert groups["BHS"]["device_count"] == 1 and groups["BHS"]["linked"] is True
+
+        # a NEW map location whose label differs, linked to the 'BHS' group
+        r = client.post("/api/registry/sites",
+                        json={"name": "Main Campus", "group_key": "BHS", "tier": "hub"})
+        assert r.status_code == 200
+        rows = {s["name"]: s for s in client.get("/api/registry/sites").json()}
+        mc = rows["Main Campus"]
+        # device_count + join_key follow the linked group, not the label
+        assert mc["group_key"] == "BHS" and mc["join_key"] == "BHS" and mc["device_count"] == 1
+        # the label-only site 'BHS' still counts by its name
+        assert rows["BHS"]["join_key"] == "BHS"
+
+        # unlink (blank group_key) → joins by name again, count drops to 0
+        r = client.put(f"/api/registry/sites/{mc['id']}",
+                       json={"name": "Main Campus", "group_key": "", "tier": "hub"})
+        assert r.status_code == 200
+        mc = {s["name"]: s for s in client.get("/api/registry/sites").json()}["Main Campus"]
+        assert mc["group_key"] is None and mc["device_count"] == 0
+
+
+def test_linked_site_rename_does_not_touch_devices(tmp_path):
+    url = f"sqlite:///{tmp_path/'r.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    # link a site to group 'BHS', then rename the label — devices must NOT move
+    with _client(_conf(tmp_path, url)) as client:
+        client.post("/api/registry/sites", json={"name": "Campus", "group_key": "BHS", "tier": "hub"})
+        cid = {s["name"]: s for s in client.get("/api/registry/sites").json()}["Campus"]["id"]
+        client.put(f"/api/registry/sites/{cid}", json={"name": "Campus 2", "group_key": "BHS", "tier": "hub"})
+    assert db.fetch_one(engine, "SELECT site FROM devices WHERE name='sw-1'")["site"] == "BHS"
+
+
+def test_assign_uses_group_key(tmp_path):
+    url = f"sqlite:///{tmp_path/'r.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    db.execute(engine, "INSERT INTO devices (name, device_type, enabled) VALUES ('ap-x','ap',1)")
+    with _client(_conf(tmp_path, url)) as client:
+        # a map site linked to network group 'CORE'
+        client.post("/api/registry/sites", json={"name": "HQ", "group_key": "CORE", "tier": "hub"})
+        dev = [d for d in client.get("/api/registry/devices").json() if d["name"] == "ap-x"][0]
+        r = client.post("/api/registry/devices/assign", json={"device_ids": [dev["id"]], "site": "HQ"})
+        # device is written with the group_key, not the label
+        assert r.status_code == 200 and r.json()["site"] == "CORE"
+    assert db.fetch_one(engine, "SELECT site FROM devices WHERE name='ap-x'")["site"] == "CORE"
+
+
 def test_move_site(tmp_path):
     url = f"sqlite:///{tmp_path/'r.db'}"
     _seed(url)

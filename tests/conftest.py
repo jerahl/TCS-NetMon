@@ -161,6 +161,7 @@ SITES_DDL_SQLITE = """
 CREATE TABLE sites (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
+    group_key TEXT,
     display_name TEXT,
     tier TEXT NOT NULL DEFAULT 'other',
     lat REAL NOT NULL,

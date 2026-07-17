@@ -200,9 +200,16 @@ shadow-alert diff has run clean for the agreed window.
   /api/registry/links`; endpoints sorted-name; path validated as [lat,lon]
   points or null=straight). Writes only `sites`/`fiber_links`; the KML/JSON
   importer remains the bulk path (same tables). `/api/meta` now carries
-  `can_edit` so the UI shows edit affordances only when the gate is on. Also
-  this session: **topology switched LLDP→EDP** (EXTREME-EDP-MIB, migration
-  014, table `lldp_neighbors`→`neighbors`).
+  `can_edit` so the UI shows edit affordances only when the gate is on.
+  **Link a map location to a network group 2026-07-17**: migration 015 adds
+  `sites.group_key` — when set, the map roll-up, device-count, delete guard,
+  and device-assign all join on it instead of `sites.name`, so a marker can
+  represent a network site/group whose name differs, without renaming the
+  marker or moving devices (NULL = historical join-by-name; a linked site's
+  rename no longer cascades). `GET /api/registry/groups` lists the live
+  `devices.site` groups for the Registry site editor's picklist. Also this
+  session: **topology switched LLDP→EDP** (EXTREME-EDP-MIB, migration 014,
+  table `lldp_neighbors`→`neighbors`).
 - **SSHEASY integration landed 2026-07-16.** SSHEASY (`jerahl/ssheasy`) is a
   browser SSH client (xterm.js + WASM) embeddable in an iframe. NetMon adds an
   operator/admin-gated **"SSH" button** on device detail pages (switch + AP)

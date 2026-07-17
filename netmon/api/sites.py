@@ -40,7 +40,7 @@ GROUP BY d.id, d.site
 """
 
 _SITES_SQL = """
-SELECT name, display_name, tier, lat, lon
+SELECT name, group_key, display_name, tier, lat, lon
 FROM sites
 WHERE enabled = 1
 ORDER BY name
@@ -125,7 +125,10 @@ def _site_rollups(engine: Engine) -> list[SiteRollup]:
 
     out: list[SiteRollup] = []
     for site in db.fetch_all(engine, _SITES_SQL):
-        status, total, down, degraded = rollup_site(flags_by_site.get(site["name"], []))
+        # Effective join key: an explicit group_key link wins over the marker
+        # name, so a map location can point at any devices.site group.
+        join_key = site.get("group_key") or site["name"]
+        status, total, down, degraded = rollup_site(flags_by_site.get(join_key, []))
         out.append(
             SiteRollup(
                 name=site["name"],

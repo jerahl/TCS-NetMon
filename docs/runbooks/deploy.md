@@ -198,7 +198,9 @@ devices between sites**, **import switches/APs from XIQ** (dry-run preview),
 and **edit SNMP status-label maps** (e.g. the Extreme stack member
 oper-status decode) from the `#/registry` page, and **edit the site map**
 (drag sites, add/edit/delete fiber links and their paths) from the `#/map`
-page's EDIT MAP button — no CLI needed. Site/device/link edits write only
+page's EDIT MAP button — no CLI needed. A map site can also be **linked to a
+network site/group** whose name differs (Registry → Sites → Network group), so
+its marker rolls up that group's devices without a rename. Site/device/link edits write only
 NetMon's own `sites`/`devices`/`fiber_links` rows (never a source); enum
 overrides live in `snapshot_cache` and are picked up by the next sweep. All of
 it is refused when `allow_web_edit` is false. (See

@@ -133,6 +133,23 @@ def test_sites_rollup(tmp_path):
         assert isinstance(sites["CO"]["lat"], float)
 
 
+def test_rollup_follows_group_key_link(tmp_path):
+    """A map site linked to a differently-named network group rolls up that
+    group's devices (spec: link a map location to a network site/group)."""
+    url = f"sqlite:///{tmp_path/'netmon.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    # a map location "Annex" linked to the network group "BHS" (2 devices, both down)
+    db.execute(engine, "INSERT INTO sites (name, group_key, tier, lat, lon, enabled) "
+                       "VALUES ('Annex','BHS','other',33.1,-87.5,1)")
+    with TestClient(_app(write_config(tmp_path, db_url=url))) as client:
+        sites = {s["name"]: s for s in client.get("/api/sites").json()}
+        assert "Annex" in sites
+        # Annex mirrors the BHS group's roll-up, not its own (empty) name
+        assert sites["Annex"]["devices_total"] == 2
+        assert sites["Annex"]["status"] == "down"
+
+
 def test_links_derive_status_and_null_utilization(tmp_path):
     url = f"sqlite:///{tmp_path/'netmon.db'}"
     _seed(url)

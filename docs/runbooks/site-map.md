@@ -43,8 +43,8 @@ The NOC wall view at `/ui/#/map` (nav: **Site Map**). Spec: `docs/spec/09-site-m
        python -m netmon.topology /etc/netmon/district.kml
 
    The importer **warns** about curated site names that match no device —
-   fix the name rather than ignoring it (mismatched sites roll up as
-   NO DATA). The importer never deletes rows, so deleting a placemark from
+   fix the name, or **link the map site to the network group** instead (see
+   below), rather than ignoring it (mismatched sites roll up as NO DATA). The importer never deletes rows, so deleting a placemark from
    the KML only stops future updates — to retire a site/link, set
    `"enabled": false` via the JSON format (or `UPDATE sites/fiber_links SET
    enabled=0` directly) .
@@ -71,6 +71,17 @@ appears (admin only); it toggles an editor that writes to NetMon's own
 - **Add / delete a link** — "+ Add fiber link" then click the two endpoint
   sites; "Delete link" removes one. Endpoints are stored in sorted-name order,
   so A↔B can't be registered twice.
+
+**Linking a map location to a network site/group.** The roll-up joins a
+`sites` row to live devices by `devices.site`. When the map label differs from
+the network group string (a Zabbix `Site/<x>` value, a legacy group name, or a
+label you prefer), set the site's **Network group** field (Registry → Sites →
+Edit, a picklist of the live `devices.site` groups) — the roll-up then joins on
+that `group_key` instead of the name, without renaming the marker or moving any
+device. Leave it blank to keep the historical join-by-name behaviour. Device
+assignment writes the site's effective group key, and renaming a *linked*
+site's label no longer re-points devices (an unlinked site's rename still
+cascades, as before).
 
 Editing pauses the 10 s poll so a refresh never fights a drag; leaving edit
 mode reloads and resumes. All of it is refused (403) when `allow_web_edit` is

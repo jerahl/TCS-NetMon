@@ -7,7 +7,7 @@ import { Card, Loading, ErrorMsg, sevColor } from "../primitives.jsx";
 // NetMon's DB (not a source), gated by [security] allow_web_edit like Settings.
 
 const TIERS = ["hub", "high", "middle", "elementary", "other"];
-const BLANK = { name: "", display_name: "", tier: "other", lat: "", lon: "", enabled: true };
+const BLANK = { name: "", group_key: "", display_name: "", tier: "other", lat: "", lon: "", enabled: true };
 
 // Detail-aware request: surfaces the API's own error `detail` (e.g. "web
 // editing is disabled", "N devices still assigned") instead of a bare
@@ -25,19 +25,22 @@ async function req(method, path, body) {
 
 export function RegistryPage() {
   const [sites, setSites] = React.useState(null);
+  const [groups, setGroups] = React.useState([]);    // network site/groups (devices.site)
   const [error, setError] = React.useState(null);
   const [edit, setEdit] = React.useState(null);      // {id?, ...fields} or null
   const [msg, setMsg] = React.useState(null);
 
   const load = React.useCallback(() => {
     getJSON("/api/registry/sites").then(setSites).catch(setError);
+    getJSON("/api/registry/groups").then(setGroups).catch(() => { /* picklist best-effort */ });
   }, []);
   React.useEffect(load, [load]);
 
   const save = async () => {
     setMsg(null);
     const body = {
-      name: edit.name, display_name: edit.display_name || null, tier: edit.tier,
+      name: edit.name, group_key: edit.group_key || null,
+      display_name: edit.display_name || null, tier: edit.tier,
       lat: edit.lat === "" ? null : Number(edit.lat),
       lon: edit.lon === "" ? null : Number(edit.lon),
       enabled: !!edit.enabled,
@@ -75,19 +78,24 @@ export function RegistryPage() {
         <button type="button" className="btn" style={{ marginBottom: 10 }}
                 onClick={() => { setEdit({ ...BLANK }); setMsg(null); }}>+ Add site</button>
         <table className="grid">
-          <thead><tr><th>Name</th><th>Display</th><th>Tier</th><th>Lat/Lon</th><th>Devices</th><th>Enabled</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Network group</th><th>Tier</th><th>Lat/Lon</th><th>Devices</th><th>Enabled</th><th></th></tr></thead>
           <tbody>
             {sites.map((s) => (
               <tr key={s.id}>
                 <td className="mono">{s.name}</td>
-                <td>{s.display_name || "—"}</td>
+                <td className="mono">
+                  {s.group_key
+                    ? <span className="pill" title="linked to a network group">{s.group_key}</span>
+                    : <span className="dim" title="joins devices by the site name">= name</span>}
+                </td>
                 <td>{s.tier}</td>
                 <td className="mono dim">{s.lat && s.lon ? `${s.lat}, ${s.lon}` : "—"}</td>
-                <td className="mono">{s.device_count}</td>
+                <td className="mono" title={`joins devices.site = ${s.join_key}`}>{s.device_count}</td>
                 <td>{s.enabled ? "yes" : <span className="dim">no</span>}</td>
                 <td>
                   <button type="button" className="btn" onClick={() => {
-                    setEdit({ id: s.id, name: s.name, display_name: s.display_name || "",
+                    setEdit({ id: s.id, name: s.name, group_key: s.group_key || "",
+                      display_name: s.display_name || "",
                       tier: s.tier, lat: s.lat ?? "", lon: s.lon ?? "", enabled: !!s.enabled });
                     setMsg(null);
                   }}>Edit</button>
@@ -103,8 +111,14 @@ export function RegistryPage() {
       {edit && (
         <Card title={edit.id ? `Edit site` : "Add site"}>
           <div className="reg-form">
-            <label><span>Name (join key)</span>
+            <label><span>Name (map label)</span>
               <input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></label>
+            <label><span>Network group (link)</span>
+              <input list="reg-groups" value={edit.group_key} placeholder="= name (unlinked)"
+                     onChange={(e) => setEdit({ ...edit, group_key: e.target.value })} />
+              <datalist id="reg-groups">
+                {groups.map((g) => <option key={g.name} value={g.name}>{`${g.name} · ${g.device_count} device(s)`}</option>)}
+              </datalist></label>
             <label><span>Display name</span>
               <input value={edit.display_name} onChange={(e) => setEdit({ ...edit, display_name: e.target.value })} /></label>
             <label><span>Tier</span>
@@ -118,8 +132,11 @@ export function RegistryPage() {
             <label className="reg-check"><input type="checkbox" checked={edit.enabled}
               onChange={(e) => setEdit({ ...edit, enabled: e.target.checked })} /> <span>Enabled</span></label>
           </div>
-          {edit.id && <div className="dim" style={{ fontSize: 11, margin: "6px 0" }}>
-            Renaming re-points every device's site join key automatically.</div>}
+          <div className="dim" style={{ fontSize: 11, margin: "6px 0" }}>
+            Leave <b>Network group</b> blank to join devices by the site name. Set it to link this
+            map location to a network site/group whose name differs (a <span className="mono">devices.site</span> value) —
+            the map then rolls up that group's devices.
+            {edit.id && " Renaming an unlinked site re-points its devices; a linked site's name is just a map label."}</div>
           <button type="button" className="btn" onClick={save}>Save</button>
           <button type="button" className="btn" style={{ marginLeft: 6 }} onClick={() => setEdit(null)}>Cancel</button>
         </Card>

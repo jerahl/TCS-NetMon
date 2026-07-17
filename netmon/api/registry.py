@@ -38,6 +38,9 @@ def _require_edit(cfg: Config) -> None:
 
 class SiteIn(BaseModel):
     name: str
+    # Network site/group this map location represents (a devices.site value).
+    # Empty/None → the roll-up joins by name, the historical behaviour.
+    group_key: str | None = None
     display_name: str | None = None
     tier: SiteTier = SiteTier.other
     lat: float | None = None
@@ -50,14 +53,26 @@ def list_sites(
     engine: Engine = Depends(get_engine),
     _user: UserSession = Depends(require_role(Role.admin)),
 ) -> list[dict]:
-    """Raw site rows for the admin editor + a device count per site (the
-    devices.site join key)."""
-    return [dict(r) for r in db.fetch_all(
+    """Raw site rows for the admin editor + the effective device-group join key
+    and its device count. The join key is ``group_key`` when linked, else the
+    site name."""
+    rows = db.fetch_all(
         engine,
-        "SELECT s.id, s.name, s.display_name, s.tier, s.lat, s.lon, s.enabled, "
-        " (SELECT COUNT(*) FROM devices d WHERE d.site = s.name) AS device_count "
+        "SELECT s.id, s.name, s.group_key, s.display_name, s.tier, s.lat, s.lon, s.enabled, "
+        " (SELECT COUNT(*) FROM devices d WHERE d.site = COALESCE(s.group_key, s.name)) AS device_count "
         "FROM sites s ORDER BY s.name",
-    )]
+    )
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["join_key"] = d.get("group_key") or d["name"]
+        out.append(d)
+    return out
+
+
+def _norm_group(value: str | None) -> str | None:
+    v = (value or "").strip()
+    return v or None
 
 
 @router.post("/sites")
@@ -77,9 +92,10 @@ def create_site(
     # the site map skips 0/0 markers, so a site can exist before it's placed.
     db.execute(
         engine,
-        "INSERT INTO sites (name, display_name, tier, lat, lon, enabled) "
-        "VALUES (:n, :d, :t, :lat, :lon, :e)",
-        {"n": name, "d": (body.display_name or None), "t": body.tier.value,
+        "INSERT INTO sites (name, group_key, display_name, tier, lat, lon, enabled) "
+        "VALUES (:n, :g, :d, :t, :lat, :lon, :e)",
+        {"n": name, "g": _norm_group(body.group_key), "d": (body.display_name or None),
+         "t": body.tier.value,
          "lat": body.lat if body.lat is not None else 0,
          "lon": body.lon if body.lon is not None else 0,
          "e": 1 if body.enabled else 0},
@@ -108,21 +124,45 @@ def update_site(
                          {"n": new_name, "id": site_id})
     if clash:
         raise HTTPException(status_code=409, detail=f"site {new_name!r} already exists")
+    group_key = _norm_group(body.group_key)
     db.execute(
         engine,
-        "UPDATE sites SET name = :n, display_name = :d, tier = :t, lat = :lat, "
-        "lon = :lon, enabled = :e WHERE id = :id",
-        {"n": new_name, "d": (body.display_name or None), "t": body.tier.value,
+        "UPDATE sites SET name = :n, group_key = :g, display_name = :d, tier = :t, "
+        "lat = :lat, lon = :lon, enabled = :e WHERE id = :id",
+        {"n": new_name, "g": group_key, "d": (body.display_name or None), "t": body.tier.value,
          "lat": body.lat if body.lat is not None else 0,
          "lon": body.lon if body.lon is not None else 0,
          "e": 1 if body.enabled else 0, "id": site_id},
     )
-    # Rename cascades to the devices.site join key so the roll-up stays intact.
-    if new_name != old_name:
+    # Rename cascades to devices.site ONLY when the site joins by name (no
+    # group link) — with a group_key set the name is just a map label and must
+    # not re-point devices.
+    renamed = new_name != old_name
+    if renamed and group_key is None:
         db.execute(engine, "UPDATE devices SET site = :new WHERE site = :old",
                    {"new": new_name, "old": old_name})
         log.info("site %r renamed to %r by %s (devices re-pointed)", old_name, new_name, user.username)
-    return {"status": "updated", "name": new_name, "renamed_from": old_name if new_name != old_name else None}
+    return {"status": "updated", "name": new_name,
+            "renamed_from": old_name if renamed else None}
+
+
+@router.get("/groups")
+def list_groups(
+    engine: Engine = Depends(get_engine),
+    _user: UserSession = Depends(require_role(Role.admin)),
+) -> list[dict]:
+    """Distinct network site/groups (``devices.site`` values) with device counts
+    and whether a map site already links to each — the picklist for linking a
+    map location to a group."""
+    counts = db.fetch_all(
+        engine,
+        "SELECT site AS name, COUNT(*) AS device_count FROM devices "
+        "WHERE site IS NOT NULL AND site <> '' GROUP BY site ORDER BY site",
+    )
+    linked = {r["k"] for r in db.fetch_all(
+        engine, "SELECT COALESCE(group_key, name) AS k FROM sites")}
+    return [{"name": r["name"], "device_count": r["device_count"],
+             "linked": r["name"] in linked} for r in counts]
 
 
 @router.delete("/sites/{site_id}")
@@ -133,16 +173,17 @@ def delete_site(
     user: UserSession = Depends(require_role(Role.admin)),
 ) -> dict:
     _require_edit(cfg)
-    row = db.fetch_one(engine, "SELECT name FROM sites WHERE id = :id", {"id": site_id})
+    row = db.fetch_one(engine, "SELECT name, group_key FROM sites WHERE id = :id", {"id": site_id})
     if row is None:
         raise HTTPException(status_code=404, detail="site not found")
+    join_key = row.get("group_key") or row["name"]
     n = db.fetch_one(engine, "SELECT COUNT(*) AS n FROM devices WHERE site = :s",
-                     {"s": row["name"]})["n"]
+                     {"s": join_key})["n"]
     if n > 0:
         # Refuse to orphan devices silently — the admin must reassign first.
         raise HTTPException(
             status_code=409,
-            detail=f"{n} device(s) still assigned to site {row['name']!r}; reassign them first",
+            detail=f"{n} device(s) still assigned to {join_key!r}; reassign them first",
         )
     db.execute(engine, "DELETE FROM sites WHERE id = :id", {"id": site_id})
     log.info("site %r deleted by %s", row["name"], user.username)
@@ -189,22 +230,26 @@ def assign_devices(
         raise HTTPException(status_code=422, detail="no device ids given")
     target = (body.site or "").strip() or None
     # The target site must exist in the registry (or be an explicit unassign),
-    # so we never point a device at a site with no card on the map.
-    if target is not None and not db.fetch_one(
-        engine, "SELECT 1 FROM sites WHERE name = :n", {"n": target}
-    ):
-        raise HTTPException(status_code=404, detail=f"site {target!r} does not exist")
+    # so we never point a device at a site with no card on the map. Devices are
+    # written with the site's EFFECTIVE join key (group_key when linked) so
+    # they roll up under it.
+    join_key = None
+    if target is not None:
+        row = db.fetch_one(engine, "SELECT name, group_key FROM sites WHERE name = :n", {"n": target})
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"site {target!r} does not exist")
+        join_key = row.get("group_key") or row["name"]
     placeholders = ",".join(f":id{i}" for i in range(len(ids)))
     params: dict = {f"id{i}": v for i, v in enumerate(ids)}
-    params["site"] = target
+    params["site"] = join_key
     n = db.execute(
         engine,
         f"UPDATE devices SET site = :site WHERE id IN ({placeholders})",
         params,
     )
-    log.info("assign %d device(s) to site %r by %s", len(ids), target, user.username)
+    log.info("assign %d device(s) to %r by %s", len(ids), join_key, user.username)
     return {"status": "assigned", "count": n if n is not None and n >= 0 else len(ids),
-            "site": target}
+            "site": join_key}
 
 
 # ── site map: move sites, edit fiber links ──────────────────────────────────
