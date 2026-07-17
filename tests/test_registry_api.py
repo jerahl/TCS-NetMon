@@ -134,6 +134,48 @@ def test_assign_unassign_and_edit_gate(tmp_path):
                            json={"device_ids": [d["id"]], "site": "BHS"}).status_code == 403
 
 
+def test_device_create_edit_delete(tmp_path):
+    url = f"sqlite:///{tmp_path/'r.db'}"
+    _seed(url)   # site BHS + switch sw-1
+    engine = db.make_engine(url)
+    with _client(_conf(tmp_path, url)) as client:
+        # manual add — a camera the sources don't know about, placed at BHS
+        r = client.post("/api/registry/devices", json={
+            "name": "cam-9", "device_type": "camera", "site": "BHS", "mgmt_ip": "10.0.0.9"})
+        assert r.status_code == 200
+        # unknown site → 404; duplicate name → 409
+        assert client.post("/api/registry/devices",
+                           json={"name": "x", "site": "Nope"}).status_code == 404
+        assert client.post("/api/registry/devices",
+                           json={"name": "cam-9"}).status_code == 409
+
+        cam = [d for d in client.get("/api/registry/devices").json() if d["name"] == "cam-9"][0]
+        assert cam["site"] == "BHS" and cam["device_type"] == "camera"
+        assert cam["snmp_capable"] == 0    # non-switch default
+
+        # change the type (the core ask) — camera → switch flips SNMP default on
+        r = client.put(f"/api/registry/devices/{cam['id']}", json={
+            "name": "cam-9", "device_type": "switch"})
+        assert r.status_code == 200 and r.json()["type_changed_from"] == "camera"
+        cam = [d for d in client.get("/api/registry/devices").json() if d["name"] == "cam-9"][0]
+        assert cam["device_type"] == "switch" and cam["snmp_capable"] == 1
+
+        # delete
+        assert client.delete(f"/api/registry/devices/{cam['id']}").status_code == 200
+        assert all(d["name"] != "cam-9" for d in client.get("/api/registry/devices").json())
+
+
+def test_device_writes_are_edit_gated(tmp_path):
+    url = f"sqlite:///{tmp_path/'r.db'}"
+    _seed(url)
+    with _client(_conf(tmp_path, url, allow_edit=False)) as client:
+        sw = client.get("/api/registry/devices").json()[0]
+        assert client.post("/api/registry/devices", json={"name": "z"}).status_code == 403
+        assert client.put(f"/api/registry/devices/{sw['id']}",
+                          json={"name": "sw-1", "device_type": "ap"}).status_code == 403
+        assert client.delete(f"/api/registry/devices/{sw['id']}").status_code == 403
+
+
 def test_site_label_pos(tmp_path):
     url = f"sqlite:///{tmp_path/'r.db'}"
     _seed(url)
