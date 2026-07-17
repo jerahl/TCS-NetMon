@@ -165,6 +165,39 @@ def test_device_create_edit_delete(tmp_path):
         assert all(d["name"] != "cam-9" for d in client.get("/api/registry/devices").json())
 
 
+def test_device_bulk_type_and_snmp(tmp_path):
+    url = f"sqlite:///{tmp_path/'r.db'}"
+    _seed(url)   # switch sw-1
+    engine = db.make_engine(url)
+    # two APs mis-imported that are really switches
+    db.execute(engine, "INSERT INTO devices (name, device_type, snmp_capable, enabled) "
+                       "VALUES ('closet-a','ap',0,1),('closet-b','ap',0,1)")
+    with _client(_conf(tmp_path, url)) as client:
+        ids = [d["id"] for d in client.get("/api/registry/devices").json()
+               if d["name"] in ("closet-a", "closet-b")]
+        # re-type both to switch AND flip SNMP on in one call
+        r = client.post("/api/registry/devices/bulk-type",
+                        json={"device_ids": ids, "device_type": "switch", "snmp_capable": True})
+        assert r.status_code == 200 and r.json()["count"] == 2
+    rows = {r["name"]: r for r in db.fetch_all(engine,
+            "SELECT name, device_type, snmp_capable FROM devices WHERE name LIKE 'closet-%'")}
+    assert all(v["device_type"] == "switch" and v["snmp_capable"] == 1 for v in rows.values())
+
+    with _client(_conf(tmp_path, url)) as client:
+        ids = [rows_["id"] for rows_ in client.get("/api/registry/devices").json()
+               if rows_["name"] == "closet-a"]
+        # snmp-only change leaves type alone
+        assert client.post("/api/registry/devices/bulk-type",
+                           json={"device_ids": ids, "snmp_capable": False}).status_code == 200
+        # neither field → 422; empty id list → 422
+        assert client.post("/api/registry/devices/bulk-type",
+                           json={"device_ids": ids}).status_code == 422
+        assert client.post("/api/registry/devices/bulk-type",
+                           json={"device_ids": [], "device_type": "ap"}).status_code == 422
+    assert db.fetch_one(engine, "SELECT device_type, snmp_capable FROM devices WHERE name='closet-a'") \
+        == {"device_type": "switch", "snmp_capable": 0}
+
+
 def test_device_writes_are_edit_gated(tmp_path):
     url = f"sqlite:///{tmp_path/'r.db'}"
     _seed(url)
@@ -173,6 +206,8 @@ def test_device_writes_are_edit_gated(tmp_path):
         assert client.post("/api/registry/devices", json={"name": "z"}).status_code == 403
         assert client.put(f"/api/registry/devices/{sw['id']}",
                           json={"name": "sw-1", "device_type": "ap"}).status_code == 403
+        assert client.post("/api/registry/devices/bulk-type",
+                           json={"device_ids": [sw["id"]], "device_type": "ap"}).status_code == 403
         assert client.delete(f"/api/registry/devices/{sw['id']}").status_code == 403
 
 

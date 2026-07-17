@@ -164,6 +164,8 @@ function DeviceAssignments({ sites, onDone }) {
   const [filterType, setFilterType] = React.useState("");   // "" = all
   const [sel, setSel] = React.useState(() => new Set());
   const [target, setTarget] = React.useState("");
+  const [bulkType, setBulkType] = React.useState("");       // "" = leave type unchanged
+  const [bulkSnmp, setBulkSnmp] = React.useState("");       // "" = unchanged | "1" | "0"
   const [editDev, setEditDev] = React.useState(null);       // add/edit form, or null
   const [msg, setMsg] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
@@ -198,6 +200,23 @@ function DeviceAssignments({ sites, onDone }) {
         site: target === "__none__" ? null : target,
       });
       setMsg({ ok: true, text: `Moved ${r.count} device(s) to ${r.site || "no site"}.` });
+      load(); onDone?.();
+    } catch (e) { setMsg({ ok: false, text: String(e.message || e) }); }
+    finally { setBusy(false); }
+  };
+
+  const applyBulkType = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const r = await req("POST", "/api/registry/devices/bulk-type", {
+        device_ids: [...sel],
+        device_type: bulkType || null,
+        snmp_capable: bulkSnmp === "" ? null : bulkSnmp === "1",
+      });
+      const bits = [];
+      if (r.device_type) bits.push(`type → ${r.device_type}`);
+      if (r.snmp_capable !== null) bits.push(`SNMP ${r.snmp_capable ? "on" : "off"}`);
+      setMsg({ ok: true, text: `Updated ${r.count} device(s): ${bits.join(", ")}.` });
       load(); onDone?.();
     } catch (e) { setMsg({ ok: false, text: String(e.message || e) }); }
     finally { setBusy(false); }
@@ -328,11 +347,26 @@ function DeviceAssignments({ sites, onDone }) {
       <div className="reg-move">
         <span className="dim">{sel.size} selected →</span>
         <select value={target} onChange={(e) => setTarget(e.target.value)}>
-          <option value="">Choose target…</option>
+          <option value="">Move to site…</option>
           <option value="__none__">Unassign</option>
           {sites.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
         </select>
         <button type="button" className="btn" disabled={busy || !sel.size || !target} onClick={move}>Move</button>
+      </div>
+      <div className="reg-move">
+        <span className="dim">{sel.size} selected →</span>
+        <select value={bulkType} onChange={(e) => setBulkType(e.target.value)}>
+          <option value="">Set type…</option>
+          {DEVICE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <select value={bulkSnmp} onChange={(e) => setBulkSnmp(e.target.value)}>
+          <option value="">SNMP: leave as-is</option>
+          <option value="1">SNMP: capable</option>
+          <option value="0">SNMP: not capable</option>
+        </select>
+        <button type="button" className="btn"
+                disabled={busy || !sel.size || (!bulkType && bulkSnmp === "")}
+                onClick={applyBulkType}>Apply</button>
       </div>
       {msg && <div className={"msg" + (msg.ok ? "" : " error")}>{msg.text}</div>}
     </Card>

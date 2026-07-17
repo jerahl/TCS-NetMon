@@ -269,6 +269,47 @@ def assign_devices(
             "site": join_key}
 
 
+class BulkTypeIn(BaseModel):
+    device_ids: list[int]
+    device_type: DeviceType | None = None   # None → leave type unchanged
+    snmp_capable: bool | None = None        # None → leave SNMP flag unchanged
+
+
+@router.post("/devices/bulk-type")
+def bulk_set_type(
+    body: BulkTypeIn,
+    engine: Engine = Depends(get_engine),
+    cfg: Config = Depends(get_config),
+    user: UserSession = Depends(require_role(Role.admin)),
+) -> dict:
+    """Set ``device_type`` and/or ``snmp_capable`` on a batch of devices at
+    once (e.g. re-type a whole closet of switches mis-imported as APs).
+    Only the fields provided are changed; each is independent so the SNMP flag
+    is never silently derived. Writes NetMon's own registry only."""
+    _require_edit(cfg)
+    ids = [int(i) for i in body.device_ids]
+    if not ids:
+        raise HTTPException(status_code=422, detail="no device ids given")
+    sets, params = [], {}
+    if body.device_type is not None:
+        sets.append("device_type = :t"); params["t"] = body.device_type.value
+    if body.snmp_capable is not None:
+        sets.append("snmp_capable = :snmp"); params["snmp"] = 1 if body.snmp_capable else 0
+    if not sets:
+        raise HTTPException(status_code=422, detail="nothing to change (set device_type and/or snmp_capable)")
+    placeholders = ",".join(f":id{i}" for i in range(len(ids)))
+    params.update({f"id{i}": v for i, v in enumerate(ids)})
+    n = db.execute(
+        engine,
+        f"UPDATE devices SET {', '.join(sets)} WHERE id IN ({placeholders})",
+        params,
+    )
+    log.info("bulk-type %d device(s) → %s by %s", len(ids), ", ".join(sets), user.username)
+    return {"status": "updated", "count": n if n is not None and n >= 0 else len(ids),
+            "device_type": body.device_type.value if body.device_type is not None else None,
+            "snmp_capable": body.snmp_capable}
+
+
 # ── manual device add / edit / delete ───────────────────────────────────────
 
 def _resolve_site(engine: Engine, site: str | None) -> str | None:
