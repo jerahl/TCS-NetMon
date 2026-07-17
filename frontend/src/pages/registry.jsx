@@ -7,6 +7,10 @@ import { Card, Loading, ErrorMsg, sevColor } from "../primitives.jsx";
 // NetMon's DB (not a source), gated by [security] allow_web_edit like Settings.
 
 const TIERS = ["hub", "high", "middle", "elementary", "other"];
+const DEVICE_TYPES = ["switch", "ap", "camera", "recording_server", "trunk", "pbx", "other"];
+// A device has no real site when its site is null/empty (web "unassign") OR the
+// literal seed/import sentinel "Unassigned" — both must read as unassigned.
+const isUnassigned = (d) => !d.site || d.site === "Unassigned";
 const LABEL_POS = ["", "top", "bottom", "left", "right"];   // "" = default (top)
 const BLANK = { name: "", group_key: "", display_name: "", tier: "other", label_pos: "", lat: "", lon: "", enabled: true };
 
@@ -151,15 +155,21 @@ export function RegistryPage() {
   );
 }
 
-// Move switches/APs between sites — writes only devices.site. Filter the fleet
-// by current site + type, select rows, then reassign the batch to a target
-// site (or unassign). Re-loads the parent's site counts on success.
+// Manage the device registry from the web: batch-move devices between sites
+// (writes devices.site only), fix a device's type (reroutes it between
+// dashboards — e.g. a switch mis-imported as an AP stops being polled via the
+// XIQ AP path and flows into the SNMP switch sweep), and add/delete devices.
+const BLANK_DEV = { name: "", device_type: "switch", site: "__none__", mgmt_ip: "", snmp_capable: true, enabled: true };
+
 function DeviceAssignments({ sites, onDone }) {
   const [devices, setDevices] = React.useState(null);
   const [filterSite, setFilterSite] = React.useState("");   // "" = all
   const [filterType, setFilterType] = React.useState("");   // "" = all
   const [sel, setSel] = React.useState(() => new Set());
   const [target, setTarget] = React.useState("");
+  const [bulkType, setBulkType] = React.useState("");       // "" = leave type unchanged
+  const [bulkSnmp, setBulkSnmp] = React.useState("");       // "" = unchanged | "1" | "0"
+  const [editDev, setEditDev] = React.useState(null);       // add/edit form, or null
   const [msg, setMsg] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
 
@@ -171,11 +181,11 @@ function DeviceAssignments({ sites, onDone }) {
   }, []);
   React.useEffect(load, [load]);
 
-  if (!devices) return <Card title="Device assignments"><Loading what="devices" /></Card>;
+  if (!devices) return <Card title="Devices"><Loading what="devices" /></Card>;
 
   const types = Array.from(new Set(devices.map((d) => d.device_type))).sort();
   const shown = devices.filter((d) =>
-    (!filterSite || (filterSite === "__none__" ? !d.site : d.site === filterSite)) &&
+    (!filterSite || (filterSite === "__none__" ? isUnassigned(d) : d.site === filterSite)) &&
     (!filterType || d.device_type === filterType));
 
   const toggle = (id) => setSel((s) => {
@@ -198,11 +208,106 @@ function DeviceAssignments({ sites, onDone }) {
     finally { setBusy(false); }
   };
 
+  const applyBulkType = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const r = await req("POST", "/api/registry/devices/bulk-type", {
+        device_ids: [...sel],
+        device_type: bulkType || null,
+        snmp_capable: bulkSnmp === "" ? null : bulkSnmp === "1",
+      });
+      const bits = [];
+      if (r.device_type) bits.push(`type → ${r.device_type}`);
+      if (r.snmp_capable !== null) bits.push(`SNMP ${r.snmp_capable ? "on" : "off"}`);
+      setMsg({ ok: true, text: `Updated ${r.count} device(s): ${bits.join(", ")}.` });
+      load(); onDone?.();
+    } catch (e) { setMsg({ ok: false, text: String(e.message || e) }); }
+    finally { setBusy(false); }
+  };
+
+  const saveDev = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      if (editDev.id) {
+        // Edit: site is managed by the assign tool, so it's not sent here.
+        await req("PUT", `/api/registry/devices/${editDev.id}`, {
+          name: editDev.name, device_type: editDev.device_type,
+          mgmt_ip: editDev.mgmt_ip || null,
+          snmp_capable: !!editDev.snmp_capable, enabled: !!editDev.enabled,
+        });
+        setMsg({ ok: true, text: `Saved ${editDev.name}.` });
+      } else {
+        await req("POST", "/api/registry/devices", {
+          name: editDev.name, device_type: editDev.device_type,
+          site: editDev.site === "__none__" ? null : editDev.site,
+          mgmt_ip: editDev.mgmt_ip || null,
+          snmp_capable: !!editDev.snmp_capable, enabled: !!editDev.enabled,
+        });
+        setMsg({ ok: true, text: `Added ${editDev.name}.` });
+      }
+      setEditDev(null); load(); onDone?.();
+    } catch (e) { setMsg({ ok: false, text: String(e.message || e) }); }
+    finally { setBusy(false); }
+  };
+
+  const deleteDev = async (d) => {
+    if (!window.confirm(`Delete ${d.name}? Its current state and history are removed.`)) return;
+    setBusy(true); setMsg(null);
+    try {
+      await req("DELETE", `/api/registry/devices/${d.id}`);
+      setMsg({ ok: true, text: `Deleted ${d.name}.` });
+      setEditDev(null); load(); onDone?.();
+    } catch (e) { setMsg({ ok: false, text: String(e.message || e) }); }
+    finally { setBusy(false); }
+  };
+
   return (
-    <Card kicker="Switches & APs" title="Device assignments">
+    <Card kicker="Switches, APs & more" title="Devices">
       <div className="dim" style={{ marginBottom: 8 }}>
-        Move devices between sites — writes only the <span className="mono">devices.site</span> join key.
+        Add or edit devices in NetMon's own registry, fix a device's <b>type</b>
+        {" "}(reroutes it between dashboards), and batch-move devices between sites.
       </div>
+      <button type="button" className="btn" style={{ marginBottom: 10 }}
+              onClick={() => { setEditDev({ ...BLANK_DEV }); setMsg(null); }}>+ Add device</button>
+
+      {editDev && (
+        <div className="reg-form" style={{ marginBottom: 12 }}>
+          <label><span>Name</span>
+            <input value={editDev.name} onChange={(e) => setEditDev({ ...editDev, name: e.target.value })} /></label>
+          <label><span>Type</span>
+            <select value={editDev.device_type} onChange={(e) => setEditDev({ ...editDev, device_type: e.target.value })}>
+              {DEVICE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select></label>
+          {!editDev.id && (
+            <label><span>Site</span>
+              <select value={editDev.site} onChange={(e) => setEditDev({ ...editDev, site: e.target.value })}>
+                <option value="__none__">Unassigned</option>
+                {sites.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
+              </select></label>
+          )}
+          <label><span>Mgmt IP</span>
+            <input value={editDev.mgmt_ip} placeholder="optional"
+                   onChange={(e) => setEditDev({ ...editDev, mgmt_ip: e.target.value })} /></label>
+          <label className="reg-check"><input type="checkbox" checked={editDev.snmp_capable}
+            onChange={(e) => setEditDev({ ...editDev, snmp_capable: e.target.checked })} /> <span>SNMP-capable</span></label>
+          <label className="reg-check"><input type="checkbox" checked={editDev.enabled}
+            onChange={(e) => setEditDev({ ...editDev, enabled: e.target.checked })} /> <span>Enabled</span></label>
+          <div style={{ gridColumn: "1 / -1", display: "flex", gap: 6, alignItems: "center" }}>
+            <button type="button" className="btn" disabled={busy || !editDev.name.trim()} onClick={saveDev}>Save</button>
+            <button type="button" className="btn" onClick={() => setEditDev(null)}>Cancel</button>
+            {editDev.id && (
+              <button type="button" className="btn" disabled={busy}
+                      onClick={() => deleteDev(editDev)}>Delete</button>
+            )}
+            {editDev.id && editDev.xiq_device_id && (
+              <span className="dim" style={{ fontSize: 11 }}>
+                XIQ-managed — your type/SNMP edits are kept across re-imports.
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="reg-filters">
         <label><span>Site</span>
           <select value={filterSite} onChange={(e) => setFilterSite(e.target.value)}>
@@ -220,7 +325,7 @@ function DeviceAssignments({ sites, onDone }) {
       <table className="grid">
         <thead><tr>
           <th style={{ width: 24 }}><input type="checkbox" checked={allShownSelected} onChange={toggleAll} /></th>
-          <th>Name</th><th>Type</th><th>Mgmt IP</th><th>Current site</th>
+          <th>Name</th><th>Type</th><th>Mgmt IP</th><th>Current site</th><th></th>
         </tr></thead>
         <tbody>
           {shown.slice(0, 500).map((d) => (
@@ -229,7 +334,13 @@ function DeviceAssignments({ sites, onDone }) {
               <td>{d.name}</td>
               <td className="dim">{d.device_type}</td>
               <td className="mono dim">{d.mgmt_ip || "—"}</td>
-              <td>{d.site || <span className="dim">unassigned</span>}</td>
+              <td>{isUnassigned(d) ? <span className="dim">unassigned</span> : d.site}</td>
+              <td><button type="button" className="btn" onClick={() => {
+                setEditDev({ id: d.id, name: d.name, device_type: d.device_type,
+                  mgmt_ip: d.mgmt_ip || "", snmp_capable: !!d.snmp_capable,
+                  enabled: !!d.enabled, xiq_device_id: d.xiq_device_id });
+                setMsg(null);
+              }}>Edit</button></td>
             </tr>
           ))}
         </tbody>
@@ -239,11 +350,26 @@ function DeviceAssignments({ sites, onDone }) {
       <div className="reg-move">
         <span className="dim">{sel.size} selected →</span>
         <select value={target} onChange={(e) => setTarget(e.target.value)}>
-          <option value="">Choose target…</option>
+          <option value="">Move to site…</option>
           <option value="__none__">Unassign</option>
           {sites.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
         </select>
         <button type="button" className="btn" disabled={busy || !sel.size || !target} onClick={move}>Move</button>
+      </div>
+      <div className="reg-move">
+        <span className="dim">{sel.size} selected →</span>
+        <select value={bulkType} onChange={(e) => setBulkType(e.target.value)}>
+          <option value="">Set type…</option>
+          {DEVICE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <select value={bulkSnmp} onChange={(e) => setBulkSnmp(e.target.value)}>
+          <option value="">SNMP: leave as-is</option>
+          <option value="1">SNMP: capable</option>
+          <option value="0">SNMP: not capable</option>
+        </select>
+        <button type="button" className="btn"
+                disabled={busy || !sel.size || (!bulkType && bulkSnmp === "")}
+                onClick={applyBulkType}>Apply</button>
       </div>
       {msg && <div className={"msg" + (msg.ok ? "" : " error")}>{msg.text}</div>}
     </Card>

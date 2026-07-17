@@ -85,12 +85,28 @@ def test_build_edp():
     rows = si.build_edp(_walks(si._SWEEP_OIDS["edp"][2]))
     assert len(rows) == 1
     n = rows[0]
-    assert n["local_ifindex"] == 1001        # local slot.port 1.1 -> 1*1000+1
-    assert n["remote_sysname"] == "core-1"
-    assert n["remote_port"] == "1:52"        # neighbor slot:port
+    assert n["local_ifindex"] == 1001        # table indexed by local ifIndex (1001.0)
+    assert n["remote_sysname"] == "CHS-CORE-MDF"
+    assert n["remote_port"] == "1:50"        # neighbor slot:port
     assert n["remote_sysdesc"] == "31.7.1.4"  # neighbor EXOS version
     assert n["protocol"] == "edp" and n["age_s"] == 12
     assert n["remote_chassis"] is None       # EDP carries no chassis MAC
+
+
+EDP_FIXTURE = (Path(__file__).parent / "fixtures" / "snmp_exos_edp.txt").read_text()
+
+
+def test_build_edp_real_walk_multi_octet_index():
+    """Real extremeEdpTable index is <localIfIndex>.<neighbor MAC octets>; the
+    local ifIndex is the first component verbatim (1049 = 1:49), never
+    slot*1000+port."""
+    walks = {k: si.parse_walk(EDP_FIXTURE, si.OID[k]) for k in si._SWEEP_OIDS["edp"][2]}
+    rows = {r["local_ifindex"]: r for r in si.build_edp(walks)}
+    assert set(rows) == {1049, 1050, 2051}
+    assert rows[1049]["remote_sysname"] == "EMS-MDF-CORE"
+    assert rows[1049]["remote_port"] == "1:50"        # neighbor slot 1 port 50
+    assert rows[1050]["remote_sysname"] == "BHS_G109" and rows[1050]["remote_port"] == "1:49"
+    assert rows[2051]["age_s"] == 24
 
 
 def test_build_vlans():
@@ -140,6 +156,60 @@ def test_build_entity_slots():
     # The VIM option module (class 9 in an "Option Slot" container) must not
     # have overwritten any slot's identity.
     assert all(r["model"] == "X465-48P" for r in rows.values())
+
+
+SFP_FIXTURE = (Path(__file__).parent / "fixtures" / "snmp_exos_sfp.txt").read_text()
+
+
+def test_build_sfp_ports_real_x465_walk():
+    """Verified against the owner's live X465-48P ENTITY-MIB walk: the 1 Gbps
+    base ports are copper (0); the 10/40 Gbps uplinks are SFP+/QSFP cages (1),
+    flagged from the port speed descr + entAliasMappingTable."""
+    keys = ["ent_descr", "ent_contained", "ent_class", "ent_alias"]
+    walks = {k: si.parse_walk(SFP_FIXTURE, si.OID[k]) for k in keys}
+    rows = {r["ifindex"]: r["is_sfp"] for r in si.build_sfp_ports(walks)}
+    assert rows == {1001: 0, 1002: 0, 1048: 0, 1049: 1, 1050: 1, 1053: 1}
+
+
+# Synthetic walk exercising the secondary DOM/containment path: a 1 Gbps port
+# with an "SFP … Sensor" child, and a sensor nested under a transceiver under a
+# port — both must resolve up to the port even though the port descr is 1 Gbps.
+_SFP_DOM_WALK = """
+.1.3.6.1.2.1.47.1.1.1.1.2.10 = STRING: "1 Gbps Ethernet Port"
+.1.3.6.1.2.1.47.1.1.1.1.5.10 = INTEGER: 10
+.1.3.6.1.2.1.47.1.3.2.1.2.10.0 = OID: .1.3.6.1.2.1.2.2.1.1.1010
+.1.3.6.1.2.1.47.1.1.1.1.2.11 = STRING: "SFP RX Power Sensor"
+.1.3.6.1.2.1.47.1.1.1.1.5.11 = INTEGER: 8
+.1.3.6.1.2.1.47.1.1.1.1.4.11 = INTEGER: 10
+.1.3.6.1.2.1.47.1.1.1.1.2.20 = STRING: "1 Gbps Ethernet Port"
+.1.3.6.1.2.1.47.1.1.1.1.5.20 = INTEGER: 10
+.1.3.6.1.2.1.47.1.3.2.1.2.20.0 = OID: .1.3.6.1.2.1.2.2.1.1.1020
+.1.3.6.1.2.1.47.1.1.1.1.2.21 = STRING: "10GBASE-SR Transceiver"
+.1.3.6.1.2.1.47.1.1.1.1.5.21 = INTEGER: 9
+.1.3.6.1.2.1.47.1.1.1.1.4.21 = INTEGER: 20
+.1.3.6.1.2.1.47.1.1.1.1.2.22 = STRING: "SFP TX Power Sensor"
+.1.3.6.1.2.1.47.1.1.1.1.5.22 = INTEGER: 8
+.1.3.6.1.2.1.47.1.1.1.1.4.22 = INTEGER: 21
+.1.3.6.1.2.1.47.1.1.1.1.2.30 = STRING: "1 Gbps Ethernet Port"
+.1.3.6.1.2.1.47.1.1.1.1.5.30 = INTEGER: 10
+.1.3.6.1.2.1.47.1.3.2.1.2.30.0 = OID: .1.3.6.1.2.1.2.2.1.1.1030
+"""
+
+
+def test_build_sfp_ports_dom_containment():
+    keys = ["ent_descr", "ent_contained", "ent_class", "ent_alias"]
+    walks = {k: si.parse_walk(_SFP_DOM_WALK, si.OID[k]) for k in keys}
+    rows = {r["ifindex"]: r["is_sfp"] for r in si.build_sfp_ports(walks)}
+    # 1010: 1 Gbps port with a direct SFP DOM-sensor child → 1
+    # 1020: 1 Gbps port with sensor→transceiver→port nesting → 1 (walk-up)
+    # 1030: plain 1 Gbps copper port → 0
+    assert rows == {1010: 1, 1020: 1, 1030: 0}
+
+
+def test_build_sfp_ports_empty_without_entity_alias():
+    # No entAliasMappingTable → nothing can be tied to an ifIndex → no rows
+    # (honest: leaves is_sfp NULL rather than guessing).
+    assert si.build_sfp_ports({"ent_descr": {}, "ent_class": {}, "ent_alias": {}}) == []
 
 
 def test_build_stack():
@@ -244,7 +314,7 @@ def test_run_once_populates_all_tables(tmp_path):
     assert [p["oper_state"] for p in ports] == ["up", "down"]
     assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM fdb_entries")["n"] == 2
     edp = db.fetch_one(engine, "SELECT remote_sysname, protocol FROM neighbors WHERE local_ifindex=1001")
-    assert edp["remote_sysname"] == "core-1" and edp["protocol"] == "edp"
+    assert edp["remote_sysname"] == "CHS-CORE-MDF" and edp["protocol"] == "edp"
     assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM switch_vlans")["n"] == 2
     stack = db.fetch_one(engine, "SELECT * FROM stack_members WHERE slot=1")
     assert stack["mem_pct"] == 40.0

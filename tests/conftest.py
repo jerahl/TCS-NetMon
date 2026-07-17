@@ -184,8 +184,9 @@ CREATE TABLE fiber_links (
     a_ifindex INTEGER,
     b_device_id INTEGER,
     b_ifindex INTEGER,
-    enabled INTEGER NOT NULL DEFAULT 1,
-    UNIQUE (site_a_id, site_b_id)
+    enabled INTEGER NOT NULL DEFAULT 1
+    -- pair is intentionally NOT unique: a site pair may have several links
+    -- (redundant fiber). Migration 018 drops the old uq_fiber_links_pair.
 )
 """
 
@@ -221,6 +222,7 @@ CREATE TABLE switch_ports (
     err_out_delta INTEGER,
     disc_in_delta INTEGER,
     disc_out_delta INTEGER,
+    is_sfp INTEGER,
     last_change TIMESTAMP,
     prev_counters TEXT,
     updated_at TIMESTAMP,

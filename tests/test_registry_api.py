@@ -107,6 +107,22 @@ def test_list_and_assign_devices(tmp_path):
     assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM devices WHERE site='CHS'")["n"] == 2
 
 
+def test_unassigned_filter_matches_null_and_literal_sentinel(tmp_path):
+    """"Unassigned" has two on-disk forms — NULL (web unassign) and the literal
+    seed/import sentinel "Unassigned". The __none__ filter must catch both."""
+    url = f"sqlite:///{tmp_path/'r.db'}"
+    _seed(url)   # sw-1 at BHS
+    engine = db.make_engine(url)
+    db.execute(engine, "INSERT INTO devices (name, site, device_type, enabled) VALUES "
+                       "('ap-null', NULL, 'ap', 1),"
+                       "('ap-seed', 'Unassigned', 'ap', 1)")
+    with _client(_conf(tmp_path, url)) as client:
+        none = {d["name"] for d in client.get("/api/registry/devices?site=__none__").json()}
+        assert none == {"ap-null", "ap-seed"}   # sw-1 (BHS) excluded
+        # a real site still filters exactly
+        assert {d["name"] for d in client.get("/api/registry/devices?site=BHS").json()} == {"sw-1"}
+
+
 def test_assign_unknown_site_rejected(tmp_path):
     url = f"sqlite:///{tmp_path/'r.db'}"
     _seed(url)
@@ -132,6 +148,83 @@ def test_assign_unassign_and_edit_gate(tmp_path):
         d = client.get("/api/registry/devices").json()[0]
         assert client.post("/api/registry/devices/assign",
                            json={"device_ids": [d["id"]], "site": "BHS"}).status_code == 403
+
+
+def test_device_create_edit_delete(tmp_path):
+    url = f"sqlite:///{tmp_path/'r.db'}"
+    _seed(url)   # site BHS + switch sw-1
+    engine = db.make_engine(url)
+    with _client(_conf(tmp_path, url)) as client:
+        # manual add — a camera the sources don't know about, placed at BHS
+        r = client.post("/api/registry/devices", json={
+            "name": "cam-9", "device_type": "camera", "site": "BHS", "mgmt_ip": "10.0.0.9"})
+        assert r.status_code == 200
+        # unknown site → 404; duplicate name → 409
+        assert client.post("/api/registry/devices",
+                           json={"name": "x", "site": "Nope"}).status_code == 404
+        assert client.post("/api/registry/devices",
+                           json={"name": "cam-9"}).status_code == 409
+
+        cam = [d for d in client.get("/api/registry/devices").json() if d["name"] == "cam-9"][0]
+        assert cam["site"] == "BHS" and cam["device_type"] == "camera"
+        assert cam["snmp_capable"] == 0    # non-switch default
+
+        # change the type (the core ask) — camera → switch flips SNMP default on
+        r = client.put(f"/api/registry/devices/{cam['id']}", json={
+            "name": "cam-9", "device_type": "switch"})
+        assert r.status_code == 200 and r.json()["type_changed_from"] == "camera"
+        cam = [d for d in client.get("/api/registry/devices").json() if d["name"] == "cam-9"][0]
+        assert cam["device_type"] == "switch" and cam["snmp_capable"] == 1
+
+        # delete
+        assert client.delete(f"/api/registry/devices/{cam['id']}").status_code == 200
+        assert all(d["name"] != "cam-9" for d in client.get("/api/registry/devices").json())
+
+
+def test_device_bulk_type_and_snmp(tmp_path):
+    url = f"sqlite:///{tmp_path/'r.db'}"
+    _seed(url)   # switch sw-1
+    engine = db.make_engine(url)
+    # two APs mis-imported that are really switches
+    db.execute(engine, "INSERT INTO devices (name, device_type, snmp_capable, enabled) "
+                       "VALUES ('closet-a','ap',0,1),('closet-b','ap',0,1)")
+    with _client(_conf(tmp_path, url)) as client:
+        ids = [d["id"] for d in client.get("/api/registry/devices").json()
+               if d["name"] in ("closet-a", "closet-b")]
+        # re-type both to switch AND flip SNMP on in one call
+        r = client.post("/api/registry/devices/bulk-type",
+                        json={"device_ids": ids, "device_type": "switch", "snmp_capable": True})
+        assert r.status_code == 200 and r.json()["count"] == 2
+    rows = {r["name"]: r for r in db.fetch_all(engine,
+            "SELECT name, device_type, snmp_capable FROM devices WHERE name LIKE 'closet-%'")}
+    assert all(v["device_type"] == "switch" and v["snmp_capable"] == 1 for v in rows.values())
+
+    with _client(_conf(tmp_path, url)) as client:
+        ids = [rows_["id"] for rows_ in client.get("/api/registry/devices").json()
+               if rows_["name"] == "closet-a"]
+        # snmp-only change leaves type alone
+        assert client.post("/api/registry/devices/bulk-type",
+                           json={"device_ids": ids, "snmp_capable": False}).status_code == 200
+        # neither field → 422; empty id list → 422
+        assert client.post("/api/registry/devices/bulk-type",
+                           json={"device_ids": ids}).status_code == 422
+        assert client.post("/api/registry/devices/bulk-type",
+                           json={"device_ids": [], "device_type": "ap"}).status_code == 422
+    assert db.fetch_one(engine, "SELECT device_type, snmp_capable FROM devices WHERE name='closet-a'") \
+        == {"device_type": "switch", "snmp_capable": 0}
+
+
+def test_device_writes_are_edit_gated(tmp_path):
+    url = f"sqlite:///{tmp_path/'r.db'}"
+    _seed(url)
+    with _client(_conf(tmp_path, url, allow_edit=False)) as client:
+        sw = client.get("/api/registry/devices").json()[0]
+        assert client.post("/api/registry/devices", json={"name": "z"}).status_code == 403
+        assert client.put(f"/api/registry/devices/{sw['id']}",
+                          json={"name": "sw-1", "device_type": "ap"}).status_code == 403
+        assert client.post("/api/registry/devices/bulk-type",
+                           json={"device_ids": [sw["id"]], "device_type": "ap"}).status_code == 403
+        assert client.delete(f"/api/registry/devices/{sw['id']}").status_code == 403
 
 
 def test_site_label_pos(tmp_path):
@@ -189,6 +282,24 @@ def test_link_kind_provider_and_ports(tmp_path):
         assert client.put(f"/api/registry/links/{lid}", json={"clear_ports": True}).status_code == 200
         link = client.get("/api/registry/links").json()[0]
         assert link["a_device_id"] is None and link["b_device_id"] is None
+
+
+def test_redundant_links_between_same_pair_allowed(tmp_path):
+    """A site pair may carry several links (redundant fiber) — the old
+    duplicate-pair 409 is gone."""
+    url = f"sqlite:///{tmp_path/'r.db'}"
+    _seed(url)   # site BHS
+    engine = db.make_engine(url)
+    db.execute(engine, "INSERT INTO sites (name, tier, lat, lon, enabled) VALUES ('CHS','high',0,0,1)")
+    with _client(_conf(tmp_path, url)) as client:
+        assert client.post("/api/registry/links",
+                           json={"site_a": "BHS", "site_b": "CHS", "capacity_gbps": 10}).status_code == 200
+        # reversed order normalises to the same pair — still allowed, not a 409
+        assert client.post("/api/registry/links",
+                           json={"site_a": "CHS", "site_b": "BHS", "capacity_gbps": 1}).status_code == 200
+        pair = [l for l in client.get("/api/registry/links").json()
+                if {l["site_a"], l["site_b"]} == {"BHS", "CHS"}]
+        assert len(pair) == 2
 
 
 def test_group_key_link_and_counts(tmp_path):
@@ -276,10 +387,8 @@ def test_fiber_link_crud(tmp_path):
         # create (endpoints normalised to sorted-name order)
         r = client.post("/api/registry/links", json={"site_a": "CHS", "site_b": "BHS", "capacity_gbps": 10})
         assert r.status_code == 200 and r.json()["site_a"] == "BHS" and r.json()["site_b"] == "CHS"
-        # duplicate (reversed) → 409
-        assert client.post("/api/registry/links",
-                           json={"site_a": "BHS", "site_b": "CHS"}).status_code == 409
-        # unknown site → 404; same-site → 422
+        # unknown site → 404; same-site → 422 (redundant same-pair links are
+        # allowed now — see test_redundant_links_between_same_pair_allowed)
         assert client.post("/api/registry/links",
                            json={"site_a": "BHS", "site_b": "NOPE"}).status_code == 404
         assert client.post("/api/registry/links",

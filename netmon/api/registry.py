@@ -21,7 +21,8 @@ from sqlalchemy.engine import Engine
 from netmon import db, enums
 from netmon.api.deps import get_config, get_engine, require_role
 from netmon.config import Config
-from netmon.models.schemas import Role, SiteTier, UserSession
+from netmon.models.schemas import DeviceType, Role, SiteTier, UserSession
+from netmon.seed import UNASSIGNED_SITE
 
 log = logging.getLogger("netmon.api.registry")
 
@@ -211,13 +212,18 @@ def list_devices(
     engine: Engine = Depends(get_engine),
     _user: UserSession = Depends(require_role(Role.admin)),
 ) -> list[dict]:
-    """Registry devices for the site editor. Filter by ``site`` (exact
-    ``devices.site`` join key, or the literal ``__none__`` for unassigned)."""
-    sql = ("SELECT id, name, device_type, site, mgmt_ip, enabled "
+    """Registry devices for the site/device editor. Filter by ``site`` (exact
+    ``devices.site`` join key, or the literal ``__none__`` for unassigned).
+    ``xiq_device_id`` is surfaced so the editor can flag source-managed rows."""
+    sql = ("SELECT id, name, device_type, site, mgmt_ip, snmp_capable, enabled, "
+           "xiq_device_id "
            "FROM devices")
     params: dict = {}
     if site == "__none__":
-        sql += " WHERE site IS NULL OR site = ''"
+        # "Unassigned" has two on-disk forms: NULL/'' (web unassign) and the
+        # literal seed/import sentinel; both must count as unassigned.
+        sql += " WHERE site IS NULL OR site = '' OR site = :unassigned"
+        params["unassigned"] = UNASSIGNED_SITE
     elif site is not None:
         sql += " WHERE site = :s"
         params["s"] = site
@@ -265,6 +271,181 @@ def assign_devices(
     log.info("assign %d device(s) to %r by %s", len(ids), join_key, user.username)
     return {"status": "assigned", "count": n if n is not None and n >= 0 else len(ids),
             "site": join_key}
+
+
+class BulkTypeIn(BaseModel):
+    device_ids: list[int]
+    device_type: DeviceType | None = None   # None → leave type unchanged
+    snmp_capable: bool | None = None        # None → leave SNMP flag unchanged
+
+
+@router.post("/devices/bulk-type")
+def bulk_set_type(
+    body: BulkTypeIn,
+    engine: Engine = Depends(get_engine),
+    cfg: Config = Depends(get_config),
+    user: UserSession = Depends(require_role(Role.admin)),
+) -> dict:
+    """Set ``device_type`` and/or ``snmp_capable`` on a batch of devices at
+    once (e.g. re-type a whole closet of switches mis-imported as APs).
+    Only the fields provided are changed; each is independent so the SNMP flag
+    is never silently derived. Writes NetMon's own registry only."""
+    _require_edit(cfg)
+    ids = [int(i) for i in body.device_ids]
+    if not ids:
+        raise HTTPException(status_code=422, detail="no device ids given")
+    sets, params = [], {}
+    if body.device_type is not None:
+        sets.append("device_type = :t"); params["t"] = body.device_type.value
+    if body.snmp_capable is not None:
+        sets.append("snmp_capable = :snmp"); params["snmp"] = 1 if body.snmp_capable else 0
+    if not sets:
+        raise HTTPException(status_code=422, detail="nothing to change (set device_type and/or snmp_capable)")
+    placeholders = ",".join(f":id{i}" for i in range(len(ids)))
+    params.update({f"id{i}": v for i, v in enumerate(ids)})
+    n = db.execute(
+        engine,
+        f"UPDATE devices SET {', '.join(sets)} WHERE id IN ({placeholders})",
+        params,
+    )
+    log.info("bulk-type %d device(s) → %s by %s", len(ids), ", ".join(sets), user.username)
+    return {"status": "updated", "count": n if n is not None and n >= 0 else len(ids),
+            "device_type": body.device_type.value if body.device_type is not None else None,
+            "snmp_capable": body.snmp_capable}
+
+
+# ── manual device add / edit / delete ───────────────────────────────────────
+
+def _resolve_site(engine: Engine, site: str | None) -> str | None:
+    """A site the device may point at must exist in the registry (mirrors
+    ``assign_devices``); returns its effective join key (``group_key`` when
+    linked), or None for an explicit unassign."""
+    target = (site or "").strip() or None
+    if target is None:
+        return None
+    row = db.fetch_one(engine, "SELECT name, group_key FROM sites WHERE name = :n", {"n": target})
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"site {target!r} does not exist")
+    return row.get("group_key") or row["name"]
+
+
+def _norm_ip(value: str | None) -> str | None:
+    return (value or "").strip() or None
+
+
+def _snmp_default(device_type: DeviceType, snmp_capable: bool | None) -> int:
+    """Explicit flag wins; when unset, only switches default to SNMP-capable
+    (matches the seed importer)."""
+    if snmp_capable is not None:
+        return 1 if snmp_capable else 0
+    return 1 if device_type == DeviceType.switch else 0
+
+
+class DeviceIn(BaseModel):
+    name: str
+    device_type: DeviceType = DeviceType.other
+    site: str | None = None            # None/"" → unassigned
+    mgmt_ip: str | None = None
+    snmp_capable: bool | None = None   # None → derive from type (switch→on)
+    enabled: bool = True
+
+
+class DeviceEdit(BaseModel):
+    """Edit payload — no ``site`` field: site is managed by the batch-assign
+    tool so an edit can never inadvertently re-point a device off its site."""
+
+    name: str
+    device_type: DeviceType = DeviceType.other
+    mgmt_ip: str | None = None
+    snmp_capable: bool | None = None
+    enabled: bool = True
+
+
+@router.post("/devices")
+def create_device(
+    body: DeviceIn,
+    engine: Engine = Depends(get_engine),
+    cfg: Config = Depends(get_config),
+    user: UserSession = Depends(require_role(Role.admin)),
+) -> dict:
+    """Manually register a device in NetMon's own registry (not from a source
+    export). Useful for gear no federated source knows about, or before a
+    collector has discovered it. Writes only NetMon's ``devices`` table."""
+    _require_edit(cfg)
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="device name is required")
+    if db.fetch_one(engine, "SELECT 1 FROM devices WHERE name = :n", {"n": name}):
+        raise HTTPException(status_code=409, detail=f"device {name!r} already exists")
+    join_key = _resolve_site(engine, body.site)
+    db.execute(
+        engine,
+        "INSERT INTO devices (name, site, device_type, mgmt_ip, snmp_capable, enabled) "
+        "VALUES (:n, :s, :t, :ip, :snmp, :e)",
+        {"n": name, "s": join_key, "t": body.device_type.value, "ip": _norm_ip(body.mgmt_ip),
+         "snmp": _snmp_default(body.device_type, body.snmp_capable), "e": 1 if body.enabled else 0},
+    )
+    log.info("device %r (%s) created by %s", name, body.device_type.value, user.username)
+    return {"status": "created", "name": name}
+
+
+@router.put("/devices/{device_id}")
+def update_device(
+    device_id: int,
+    body: DeviceEdit,
+    engine: Engine = Depends(get_engine),
+    cfg: Config = Depends(get_config),
+    user: UserSession = Depends(require_role(Role.admin)),
+) -> dict:
+    """Edit a registry device — rename, change ``device_type``, mgmt IP, SNMP
+    flag, or enabled state. Changing the type reroutes the device between
+    dashboards (e.g. an AP mis-imported as a switch, or vice-versa) and, for
+    switches, into the SNMP inventory sweep and out of the XIQ AP-detail path.
+    Site (use the assign tool) and per-source keys are left untouched."""
+    _require_edit(cfg)
+    existing = db.fetch_one(
+        engine, "SELECT name, device_type FROM devices WHERE id = :id", {"id": device_id})
+    if existing is None:
+        raise HTTPException(status_code=404, detail="device not found")
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="device name is required")
+    clash = db.fetch_one(engine, "SELECT 1 FROM devices WHERE name = :n AND id <> :id",
+                         {"n": name, "id": device_id})
+    if clash:
+        raise HTTPException(status_code=409, detail=f"device {name!r} already exists")
+    db.execute(
+        engine,
+        "UPDATE devices SET name = :n, device_type = :t, mgmt_ip = :ip, "
+        "snmp_capable = :snmp, enabled = :e WHERE id = :id",
+        {"n": name, "t": body.device_type.value, "ip": _norm_ip(body.mgmt_ip),
+         "snmp": _snmp_default(body.device_type, body.snmp_capable),
+         "e": 1 if body.enabled else 0, "id": device_id},
+    )
+    log.info("device %d (%s → %s) updated by %s",
+             device_id, existing["device_type"], body.device_type.value, user.username)
+    return {"status": "updated", "id": device_id, "name": name,
+            "type_changed_from": existing["device_type"] if existing["device_type"] != body.device_type.value else None}
+
+
+@router.delete("/devices/{device_id}")
+def delete_device(
+    device_id: int,
+    engine: Engine = Depends(get_engine),
+    cfg: Config = Depends(get_config),
+    user: UserSession = Depends(require_role(Role.admin)),
+) -> dict:
+    """Remove a device from the registry. Its current state and transition
+    history cascade away (FK ON DELETE CASCADE) — intended for decommissioned
+    or mistakenly-added gear. A device a source collector still sees will be
+    re-created on the next import/seed."""
+    _require_edit(cfg)
+    row = db.fetch_one(engine, "SELECT name FROM devices WHERE id = :id", {"id": device_id})
+    if row is None:
+        raise HTTPException(status_code=404, detail="device not found")
+    db.execute(engine, "DELETE FROM devices WHERE id = :id", {"id": device_id})
+    log.info("device %r deleted by %s", row["name"], user.username)
+    return {"status": "deleted", "name": row["name"]}
 
 
 # ── site map: move sites, edit fiber links ──────────────────────────────────
@@ -397,16 +578,14 @@ def create_link(
     user: UserSession = Depends(require_role(Role.admin)),
 ) -> dict:
     """Register a fiber link between two sites. Endpoints stored in sorted-name
-    order so A↔B can't be registered twice reversed (matches the importer)."""
+    order (A↔B == B↔A). A pair may have several links — redundant fiber paths
+    are allowed, so no duplicate-pair check; distinguish them by path/capacity."""
     _require_edit(cfg)
     a, b = body.site_a.strip(), body.site_b.strip()
     if a == b:
         raise HTTPException(status_code=422, detail="a link needs two distinct sites")
     a, b = (a, b) if a <= b else (b, a)   # _norm_pair, mirroring topology.py
     aid, bid = _site_id(engine, a), _site_id(engine, b)
-    if db.fetch_one(engine, "SELECT 1 FROM fiber_links WHERE site_a_id = :a AND site_b_id = :b",
-                    {"a": aid, "b": bid}):
-        raise HTTPException(status_code=409, detail=f"a link between {a} and {b} already exists")
     path = _validate_path(body.path)
     kind = _norm_kind(body.link_kind)
     provider = (body.provider or "").strip() or None

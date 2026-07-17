@@ -93,6 +93,10 @@ OID = {
     "ent_class": "1.3.6.1.2.1.47.1.1.1.1.5",
     "ent_sw": "1.3.6.1.2.1.47.1.1.1.1.10",
     "ent_serial": "1.3.6.1.2.1.47.1.1.1.1.11",
+    # entAliasMappingIdentifier: (entPhysicalIndex.0) -> an OID ending in the
+    # ifIndex the physical port maps to. Lets us tie an ENTITY-MIB port (and
+    # any optic contained in it) back to a switch_ports row for SFP detection.
+    "ent_alias": "1.3.6.1.2.1.47.1.3.2.1.2",
     # Extreme stacking + per-slot sensors:
     "stack_status": "1.3.6.1.4.1.1916.1.33.2.1.3",
     "stack_temp": "1.3.6.1.4.1.1916.1.33.2.1.21",
@@ -269,10 +273,12 @@ def build_fdb(fdb_port: dict[str, str], base_port_ifindex: dict[str, str]) -> li
 
 
 def build_edp(walks: dict[str, dict[str, str]]) -> list[dict]:
-    """extremeEdpTable → neighbor rows. The row index is the LOCAL slot.port
-    (EXOS ifIndex = slot*1000 + port, the same scheme as ifName). EDP is
-    point-to-point, so one neighbor per local port; last-writer-wins if a
-    walk ever returns duplicates. remote_sysdesc carries the neighbor's EXOS
+    """extremeEdpTable → neighbor rows. The row index's FIRST component is the
+    LOCAL ifIndex (EXOS slot*1000+port, e.g. 1001 = port 1:1), followed by a
+    neighbor sub-index — so we take the ifIndex verbatim, NOT slot*1000+port
+    (that double-scaled it to e.g. 1001000, which matched no port). EDP is
+    point-to-point, so one neighbor per local port; last-writer-wins if a walk
+    ever returns duplicates. remote_sysdesc carries the neighbor's EXOS
     version; remote_chassis stays NULL (EDP carries no chassis MAC)."""
     by_local: dict[int, dict] = {}
     keys: set[str] = set()
@@ -281,10 +287,9 @@ def build_edp(walks: dict[str, dict[str, str]]) -> list[dict]:
     g = walks.get
     for idx in keys:
         parts = idx.split(".")
-        slot, port = _to_int(parts[0]), (_to_int(parts[1]) if len(parts) > 1 else None)
-        if slot is None:
+        local = _to_int(parts[0])
+        if local is None:
             continue
-        local = slot * 1000 + port if port is not None else slot
         r_slot = _to_int(g("edp_slot", {}).get(idx))
         r_port = _to_int(g("edp_port", {}).get(idx))
         remote_port = (f"{r_slot}:{r_port}" if r_slot is not None and r_port is not None
@@ -299,6 +304,103 @@ def build_edp(walks: dict[str, dict[str, str]]) -> list[dict]:
             "age_s": _to_int(g("edp_age", {}).get(idx)),
         }
     return list(by_local.values())
+
+
+# ENTITY-MIB entPhysicalClass values we care about (RFC 4133): 10 = port.
+_ENT_CLASS_PORT = "10"
+# Descr/name patterns that name a fiber optic, an SFP/QSFP cage, or an EXOS SFP
+# DOM sensor ("SFP TX Power Sensor", …). On the live X465 fleet the *port*
+# entity reads generically ("1 Gbps Ethernet Port"), so the optic itself is
+# recognised here and mapped back to its port via containment; the port's own
+# speed (below) is the primary signal.
+_OPTIC_RE = re.compile(
+    r"\b("
+    r"sfp\+?|sfp28|qsfp\d*|xfp|cfp\d*|gbic|"                 # cage / optic families + EXOS "SFP … Sensor"
+    r"1000\s*base-?(?:x|sx|lx|bx|zx|ex)|"                    # 1G fiber
+    r"10\s*g?\s*base-?(?:sr|lr|er|zr|lrm|cx|bx)|"            # 10G fiber
+    r"(?:25|40|100)\s*g\s*base-?(?:sr|lr|er|cr|dr|fr)|"      # 25/40/100G
+    r"fiber|optical|transceiver"
+    r")\b",
+    re.IGNORECASE,
+)
+# EXOS port entity descr is "<N> Gbps Ethernet Port". On this fleet the 48 base
+# ports are 1 Gbps copper (RJ45) and every >1 Gbps port is an SFP+/QSFP cage —
+# so a multi-gig port descr is the primary, verified SFP signal.
+_PORT_GBPS_RE = re.compile(r"(\d+)\s*Gbps", re.IGNORECASE)
+
+
+def _ifindex_from_alias(value: str | None):
+    """entAliasMappingIdentifier value is an OID (e.g. ``.1.3.6.1.2.1.2.2.1.1.1001``)
+    whose trailing integer is the ifIndex the physical entity maps to."""
+    if not value:
+        return None
+    m = re.search(r"(\d+)\s*$", str(value).strip())
+    return int(m.group(1)) if m else None
+
+
+def _port_is_multigig(descr: str | None) -> bool:
+    m = _PORT_GBPS_RE.search(descr or "")
+    return bool(m and int(m.group(1)) > 1)
+
+
+def build_sfp_ports(walks: dict[str, dict[str, str]]) -> list[dict]:
+    """ENTITY-MIB → per-ifIndex ``is_sfp`` rows (owner decision 2026-07-17;
+    verified against a live X465 walk).
+
+    EXOS exposes no media type on the IF-MIB, so SFP/fiber is derived from the
+    ENTITY-MIB. Ports are mapped to their ifIndex via entAliasMappingTable; a
+    port is flagged SFP when **either**:
+
+      * its descr is a multi-gig port ("10/40 Gbps Ethernet Port") — the SFP+/
+        QSFP cages, the primary and verified signal on this fleet; **or**
+      * an optic/DOM entity ("SFP … Sensor", a "10GBASE-SR" transceiver) is
+        contained in it — walking up entPhysicalContainedIn to the port. This
+        catches a 1 Gbps SFP a speed check would miss (best-effort: depends on
+        the fleet populating optic/DOM entities under the port).
+
+    Only alias-mapped ports are emitted, so copper ports get an explicit
+    ``is_sfp=0`` and anything unmappable is left untouched (NULL).
+    """
+    descr = walks.get("ent_descr", {})
+    contained = walks.get("ent_contained", {})
+    classes = walks.get("ent_class", {})
+    alias = walks.get("ent_alias", {})
+
+    # entPhysicalIndex -> ifIndex (alias index is "<entIdx>.<logicalOrZero>").
+    ent_to_if: dict[str, int] = {}
+    for idx, val in alias.items():
+        ent_idx = idx.split(".", 1)[0]
+        ifx = _ifindex_from_alias(val)
+        if ent_idx and ifx is not None:
+            ent_to_if.setdefault(ent_idx, ifx)
+
+    # Ports = alias-mapped entities that are class port (or unknown class, if
+    # the device omits entPhysicalClass).
+    port_ents = {e for e in ent_to_if
+                 if _enum_int(classes.get(e)) in (None, _ENT_CLASS_PORT)}
+
+    # Optic/DOM entities → the port they belong to, walking up the containment
+    # chain (sensor → [transceiver] → port) to the nearest mapped port.
+    sfp_by_optic: set[str] = set()
+    for ent_idx, d in descr.items():
+        if ent_idx in port_ents or not (d and _OPTIC_RE.search(d)):
+            continue
+        cur = ent_idx
+        for _ in range(16):  # bounded — never loop on a self/cyclic containment
+            parent = contained.get(cur)
+            if not parent or parent == cur:
+                break
+            if parent in port_ents:
+                sfp_by_optic.add(parent)
+                break
+            cur = parent
+
+    rows: list[dict] = []
+    for ent_idx in port_ents:
+        d = descr.get(ent_idx) or ""
+        is_sfp = _port_is_multigig(d) or bool(_OPTIC_RE.search(d)) or ent_idx in sfp_by_optic
+        rows.append({"ifindex": ent_to_if[ent_idx], "is_sfp": 1 if is_sfp else 0})
+    return rows
 
 
 def build_vlans(walks: dict[str, dict[str, str]]) -> list[dict]:
@@ -526,7 +628,8 @@ _SWEEP_OIDS = {
             ["edp_name", "edp_version", "edp_slot", "edp_port", "edp_age"]),
     "vlans": ("sweep_vlans", "vlans_interval_s", ["vlan_name", "vlan_vid", "vlan_admin"]),
     "entity": ("sweep_entity", "entity_interval_s",
-               ["ent_descr", "ent_contained", "ent_class", "ent_sw", "ent_serial"]),
+               ["ent_descr", "ent_contained", "ent_class", "ent_sw", "ent_serial",
+                "ent_alias"]),
     "stack": ("sweep_stack", "stack_interval_s",
               ["stack_status", "stack_temp", "cpu_5m", "mem_total", "mem_avail"]),
 }
@@ -719,6 +822,7 @@ class SnmpInventory:
         if "entity" in due:
             walks = await self._walk_keys(host, _SWEEP_OIDS["entity"][2])
             written += self._write_entity(dev_id, build_entity_slots(walks))
+            written += self._write_sfp(dev_id, build_sfp_ports(walks))
         if "stack" in due:
             walks = await self._walk_keys(host, _SWEEP_OIDS["stack"][2])
             status_map = getattr(self, "_stack_status_map", None)
@@ -824,6 +928,20 @@ class SnmpInventory:
                 params,
             )
         return len(slot_rows)
+
+    def _write_sfp(self, dev_id: int, rows: list[dict]) -> int:
+        """Partial UPDATE of switch_ports.is_sfp (same contract as _write_poe:
+        no insert, no prune, no updated_at bump — the ports sweep owns the rows
+        and their freshness; this just classifies existing ones)."""
+        if not rows:
+            return 0
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("UPDATE switch_ports SET is_sfp = :is_sfp "
+                     "WHERE device_id = :device_id AND ifindex = :ifindex"),
+                [{**r, "device_id": dev_id} for r in rows],
+            )
+        return len(rows)
 
     def _write_ports(self, dev_id: int, rows: list[dict]) -> int:
         now, now_ts = self._now(), time.time()

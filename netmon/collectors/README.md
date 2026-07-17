@@ -25,6 +25,16 @@ Ported from `reference/lib/XIQFleetClient.php`.
 - **Writes:** `device_state` dimension `source_status` per matched device —
   `up` (connected, ok) / `down` (not connected, crit) / `blind` (source
   unreachable, warn). Backfills empty `devices.mgmt_ip` from XIQ `ip_address`.
+- **AP-detail cycles (10.2):** the `detail`/`clients`/`ssids` cycles persist
+  `ap_details`/`ap_radios`/`wireless_clients`/`ssids`. **NetMon's registry
+  `device_type` is authoritative** — only devices typed `ap` flow through the
+  AP-detail path. Switches federated from XIQ get up/down `source_status`
+  only; their port/PoE/FDB detail comes from the SNMP inventory sweep, never
+  the AP endpoints, even when XIQ reports a switch's `device_function` as an
+  AP. Correct a mis-classified device from the web Registry (device edit) —
+  the type override is insert-only in the seed/import upsert, so it survives
+  re-imports. (XIQ's switch-specific wired-client grid is a **POST** — a
+  non-GET source call, owner-gated per CLAUDE.md §2/§4.1 — not implemented.)
 - **Interval:** `[xiq] status_interval_s` (default 180s).
 - **Rate limits:** 7,500 req/hr per VIQ, **shared across all integrations**
   (Zabbix, SolarWinds, NetMon). `RateLimit-Remaining`/`-Reset` tracked; a low-

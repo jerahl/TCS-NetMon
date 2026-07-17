@@ -9,6 +9,9 @@ of the 7,500/h tenant quota):
     a 429 is a throttle, not blind.
   * detail (5 min): ``views=FULL`` fleet sweep → ``ap_details`` + ``ap_radios``
     (when due, the same fetch also serves the status cycle — no extra calls).
+    Only devices the registry types as ``ap`` get AP-detail rows; switches
+    federated from XIQ get up/down ``source_status`` only — their port/PoE/FDB
+    detail comes from the SNMP inventory sweep, never the AP endpoints.
   * clients (10 min): ``/clients/active?views=FULL`` → ``wireless_clients``.
     Carries usernames/MACs (PII — spec 10 Q8): disable with
     ``[xiq] clients_enabled = false``.
@@ -85,16 +88,27 @@ def _uptime_s(raw: Any, now_s: float):
 
 
 def build_ap_rows(
-    raw: list[dict], xiq_to_dev: dict[str, int], now_s: float, now: datetime
+    raw: list[dict], xiq_to_dev: dict[str, int], now_s: float, now: datetime,
+    ap_ids: set[int] | None = None,
 ) -> tuple[list[dict], list[dict]]:
-    """FULL fleet rows → (ap_details rows, ap_radios rows) for registry APs."""
+    """FULL fleet rows → (ap_details rows, ap_radios rows) for registry APs.
+
+    NetMon's own registry ``device_type`` is authoritative — ``ap_ids`` is the
+    set of device ids NetMon classifies as APs. A device the operator has
+    typed as a ``switch`` never gets AP-detail rows even when XIQ still reports
+    its ``device_function`` as "AP" (switch port/PoE/FDB detail comes from the
+    SNMP inventory sweep, not the AP path). When ``ap_ids`` is None we fall
+    back to the XIQ payload's ``device_function`` (legacy behaviour)."""
     details: list[dict] = []
     radios: list[dict] = []
     for r in raw:
-        if str(r.get("device_function") or "").strip().upper() not in _AP_FUNCTIONS:
-            continue
         dev_id = xiq_to_dev.get(str(r.get("id")))
         if dev_id is None:
+            continue
+        if ap_ids is not None:
+            if dev_id not in ap_ids:
+                continue
+        elif str(r.get("device_function") or "").strip().upper() not in _AP_FUNCTIONS:
             continue
         mac = str(r.get("mac_address") or "").strip() or None
         details.append({
@@ -231,7 +245,7 @@ class XiqCollector(Collector):
     def _registry(self) -> list[dict[str, Any]]:
         return db.fetch_all(
             self.engine,
-            "SELECT id, xiq_device_id, mgmt_ip FROM devices "
+            "SELECT id, xiq_device_id, mgmt_ip, device_type FROM devices "
             "WHERE enabled = 1 AND xiq_device_id IS NOT NULL AND xiq_device_id <> ''",
         )
 
@@ -262,11 +276,12 @@ class XiqCollector(Collector):
             fleet[str(dev.id)] = dev
 
         written = 0
+        absent: list[dict[str, Any]] = []
         for r in registry:
             dev = fleet.get(str(r["xiq_device_id"]))
             if dev is None:
-                # In our registry but absent from a *successful* fleet fetch —
-                # leave prior state rather than fabricate a down/blind.
+                # In our registry but absent from a *successful* fleet fetch.
+                absent.append(r)
                 continue
             value = "up" if dev.connected else "down"
             severity = "ok" if dev.connected else "crit"
@@ -280,11 +295,24 @@ class XiqCollector(Collector):
                 )
             written += 1
 
+        # A successful fetch means XIQ IS reachable, so nothing is truly
+        # "blind". Present devices cleared to up/down above; also clear a STALE
+        # blind on any registry device XIQ no longer lists (a re-typed switch,
+        # a removed/renamed device, a stale xiq_device_id) — otherwise it stays
+        # blind forever and lingers as a phantom XIQ problem the engine never
+        # closes. Only `blind` is reset (→ unknown); a prior up/down is left as
+        # honest, staleness-badged state and never fabricated.
+        written += self._clear_stale_blind(absent)
+
         xiq_to_dev = {str(r["xiq_device_id"]): int(r["id"]) for r in registry}
+        # Registry device_type is authoritative for which devices flow through
+        # the AP-detail path; switches only get source_status (up/down) here —
+        # their detail comes from the SNMP inventory sweep, never the AP API.
+        ap_ids = {int(r["id"]) for r in registry if r.get("device_type") == "ap"}
         now = datetime.now(timezone.utc)
 
         if detail_due:
-            details, radios = build_ap_rows(raw, xiq_to_dev, time.time(), now)
+            details, radios = build_ap_rows(raw, xiq_to_dev, time.time(), now, ap_ids)
             written += db.replace_rows(self.engine, "ap_details", ["device_id"], details)
             written += db.replace_rows(self.engine, "ap_radios", ["device_id", "radio"], radios)
             self._last_cycle["detail"] = mono
@@ -318,6 +346,30 @@ class XiqCollector(Collector):
     def _mark_blind(self, registry: list[dict[str, Any]]) -> None:
         for r in registry:
             write_state(self.engine, int(r["id"]), DIMENSION, "blind", "warn", "xiq")
+
+    def _clear_stale_blind(self, absent: list[dict[str, Any]]) -> int:
+        """Reset a lingering ``blind`` source_status to ``unknown`` for devices
+        XIQ no longer lists (the fetch succeeded, so the source isn't blind).
+        Returns the number of rows transitioned."""
+        if not absent:
+            return 0
+        ids = [int(r["id"]) for r in absent]
+        ph = ",".join(f":id{i}" for i in range(len(ids)))
+        params = {f"id{i}": v for i, v in enumerate(ids)}
+        stale = db.fetch_all(
+            self.engine,
+            f"SELECT device_id FROM device_state "
+            f"WHERE dimension = :dim AND value = 'blind' AND device_id IN ({ph})",
+            {"dim": DIMENSION, **params},
+        )
+        cleared = 0
+        for row in stale:
+            if write_state(self.engine, int(row["device_id"]), DIMENSION,
+                           "unknown", "unknown", "xiq"):
+                cleared += 1
+        if cleared:
+            log.info("xiq: cleared stale blind on %d device(s) XIQ no longer lists", cleared)
+        return cleared
 
 
 def main(argv: list[str] | None = None) -> int:

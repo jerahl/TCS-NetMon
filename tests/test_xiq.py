@@ -79,7 +79,10 @@ def test_xiq_collector_writes_source_status_and_backfills_ip(tmp_path):
         {"id": 100001, "connected": True, "ip_address": "192.0.2.11"},
         {"id": 100002, "connected": False},
     ]
-    collector = XiqCollector(engine, fake)
+    # Focus on the status/IP-backfill path — the detail/clients/ssids cycles
+    # have their own tests.
+    collector = XiqCollector(engine, fake, detail_enabled=False,
+                             clients_enabled=False, ssids_enabled=False)
     n = asyncio.run(collector.run_once())
     assert n == 2
 
@@ -204,6 +207,67 @@ def test_xiq_detail_clients_ssid_cycles(tmp_path):
     assert set(ssids) == {"TCS-Student", "TCS-Staff", "TCS-IoT"}
     assert ssids["TCS-Staff"]["auth"] == "WPA2_ENTERPRISE"
     assert ssids["TCS-Staff"]["network_policy"] == "TCS-Schools"
+
+
+def test_stale_blind_cleared_when_xiq_no_longer_lists_device(tmp_path):
+    """A device blinded during an XIQ outage that XIQ no longer lists (stale
+    xiq_device_id / re-typed / removed) must not stay blind forever — a later
+    successful fetch clears it to unknown so the source_blind alert resolves,
+    while a device XIQ still lists gets its real up/down."""
+    engine = _db(tmp_path)   # 100001 (ap), 100002 (switch), both have xiq ids
+    fake = FakeXiq()
+
+    # Outage: whole source unreachable → every XIQ device blinded.
+    fake.exc = XiqAuthError("XIQ 401 — token revoked or invalid")
+    asyncio.run(XiqCollector(engine, fake).run_guarded())
+    st = _status(engine)
+    assert st["100001"]["value"] == "blind" and st["100002"]["value"] == "blind"
+
+    # Recovery: XIQ answers again but only 100001 is in the fleet now; 100002's
+    # id is stale (re-typed switch XIQ dropped).
+    fake.exc = None
+    fake.rows = [{"id": 100001, "connected": True}]
+    collector = XiqCollector(engine, fake, detail_enabled=False,
+                             clients_enabled=False, ssids_enabled=False)
+    asyncio.run(collector.run_once())
+
+    st = _status(engine)
+    assert st["100001"]["value"] == "up"          # present → real status
+    assert st["100002"]["value"] == "unknown"     # stale blind cleared, no longer a problem
+    assert st["100002"]["severity"] == "unknown"
+    # The blind→unknown transition is recorded honestly.
+    ev = db.fetch_all(engine, "SELECT new_value FROM state_events WHERE dimension='source_status' "
+                              "ORDER BY id")
+    assert ev[-1]["new_value"] in ("up", "unknown")
+
+
+def test_switch_never_gets_ap_detail_even_when_xiq_calls_it_an_ap(tmp_path):
+    """Registry device_type is authoritative: a device NetMon types as a
+    switch (100002) never gets AP-detail rows, even if the XIQ FULL payload
+    reports its device_function as "AP" — its detail comes from the SNMP
+    inventory sweep, not the AP path. The registry AP (100001) still does."""
+    engine = _db(tmp_path)   # 100001 = ap, 100002 = switch
+    fake = FakeXiq()
+    fake.rows = [
+        {"id": 100001, "connected": True, "device_function": "AP", "product_type": "AP305C",
+         "radios": [{"name": "wifi0", "frequency": "5G", "channel": 36}]},
+        # XIQ mislabels this switch as an AP and even ships radios — must be ignored.
+        {"id": 100002, "connected": True, "device_function": "AP", "product_type": "X440",
+         "radios": [{"name": "wifi0", "frequency": "5G", "channel": 44}]},
+    ]
+    collector = XiqCollector(engine, fake)
+    asyncio.run(collector.run_once())
+
+    details = {r["device_id"] for r in db.fetch_all(engine, "SELECT device_id FROM ap_details")}
+    ap_id = db.fetch_one(engine, "SELECT id FROM devices WHERE xiq_device_id='100001'")["id"]
+    sw_id = db.fetch_one(engine, "SELECT id FROM devices WHERE xiq_device_id='100002'")["id"]
+    assert ap_id in details
+    assert sw_id not in details
+    assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM ap_radios WHERE device_id=:d",
+                        {"d": sw_id})["n"] == 0
+    # …but the switch still gets up/down source_status from the fleet list.
+    st = _status(engine)
+    assert st["100002"]["value"] == "up"
 
 
 def test_xiq_cycles_are_interval_gated_and_disableable(tmp_path):

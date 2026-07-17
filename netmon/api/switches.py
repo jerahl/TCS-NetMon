@@ -83,7 +83,7 @@ def switch_ports(
     _switch_or_404(engine, sid)
     return [dict(r) for r in db.fetch_all(
         engine,
-        "SELECT ifindex, name, member, oper_state, admin_up, speed_mbps, duplex, "
+        "SELECT ifindex, name, member, oper_state, admin_up, speed_mbps, duplex, is_sfp, "
         "poe_admin, poe_delivering, poe_class, poe_watts, in_kbps, out_kbps, util_pct, "
         "err_in_delta, err_out_delta, disc_in_delta, disc_out_delta, updated_at "
         "FROM switch_ports WHERE device_id = :d ORDER BY member, ifindex",
@@ -104,7 +104,7 @@ def port_detail(
     _switch_or_404(engine, sid)
     port = db.fetch_one(
         engine,
-        "SELECT ifindex, name, member, oper_state, admin_up, speed_mbps, duplex, "
+        "SELECT ifindex, name, member, oper_state, admin_up, speed_mbps, duplex, is_sfp, "
         "poe_admin, poe_delivering, poe_class, poe_watts, in_kbps, out_kbps, util_pct, "
         "err_in_delta, err_out_delta, disc_in_delta, disc_out_delta, updated_at "
         "FROM switch_ports WHERE device_id = :d AND ifindex = :i",

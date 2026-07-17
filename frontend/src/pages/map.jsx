@@ -102,7 +102,9 @@ export function MapPage() {
   const [editMsg, setEditMsg] = React.useState(null);
   const [linkForm, setLinkForm] = React.useState(null);  // {kind,provider,aDev,aIf,bDev,bIf} for the edited link
   const [fleet, setFleet] = React.useState([]);          // switches for the port pickers
+  const [siteJoinKeys, setSiteJoinKeys] = React.useState({});  // map site name → devices.site join key
   const [portsByDev, setPortsByDev] = React.useState({});// deviceId → [{ifindex,name,oper_state}]
+  const [edpByDev, setEdpByDev] = React.useState({});    // deviceId → [{ifindex, port}] discovered EDP uplinks
 
   const rootRef = React.useRef(null);
   const mapEl = React.useRef(null);
@@ -134,7 +136,7 @@ export function MapPage() {
     if (edit) return;
     let live = true;
     const load = () =>
-      Promise.all([getJSON("/api/sites"), getJSON("/api/links"), getJSON("/api/events?limit=40")])
+      Promise.all([getJSON("/api/sites"), getJSON("/api/links"), getJSON("/api/events?limit=40&exclude_device_type=ap")])
         .then(([sites, links, events]) => {
           if (live) setData({ sites, links, events, at: Date.now(), error: null });
         })
@@ -342,7 +344,7 @@ export function MapPage() {
   const refetch = React.useCallback(async () => {
     try {
       const [sites, links, events] = await Promise.all([
-        getJSON("/api/sites"), getJSON("/api/links"), getJSON("/api/events?limit=40")]);
+        getJSON("/api/sites"), getJSON("/api/links"), getJSON("/api/events?limit=40&exclude_device_type=ap")]);
       setData({ sites, links, events, at: Date.now(), error: null });
     } catch { /* keep last good data */ }
   }, []);
@@ -351,7 +353,12 @@ export function MapPage() {
   React.useEffect(() => {
     if (!edit) return;
     getJSON("/api/registry/sites")
-      .then((rows) => { editRef.current.siteIds = Object.fromEntries(rows.map((r) => [r.name, r.id])); })
+      .then((rows) => {
+        editRef.current.siteIds = Object.fromEntries(rows.map((r) => [r.name, r.id]));
+        // name → effective devices.site join key, to filter port-picker switches
+        // to the switches actually at each end's site.
+        setSiteJoinKeys(Object.fromEntries(rows.map((r) => [r.name, r.join_key || r.name])));
+      })
       .catch(() => { /* saves will error with a clear message */ });
   }, [edit]);
 
@@ -449,13 +456,29 @@ export function MapPage() {
     } catch (e) { setEditMsg({ ok: false, text: String(e.message || e) }); }
   };
 
-  // Load ports for a switch on demand (port pickers), cached per device.
+  // Load ports for a switch on demand (port pickers), cached per device. Also
+  // load its EDP neighbors so the fiber-link port picker can offer ONLY the
+  // ports that have an EDP neighbor — the inter-switch trunk uplinks a fiber
+  // link actually patches into (owner directive 2026-07-17).
   const loadPorts = React.useCallback((devId) => {
     if (!devId) return;
     setPortsByDev((m) => (m[devId] ? m : { ...m, [devId]: [] }));   // mark loading
     getJSON(`/api/switches/${devId}/ports`)
       .then((ps) => setPortsByDev((m) => ({ ...m, [devId]: ps })))
       .catch(() => { /* leave empty; free-typing still works via ifindex */ });
+    getJSON(`/api/switches/${devId}/neighbors`)
+      .then((ns) => setEdpByDev((m) => ({
+        ...m,
+        // Built straight from the neighbor rows (not intersected with the port
+        // table) so a discovered uplink always shows even if its ifIndex isn't
+        // in switch_ports. This fleet's neighbors are EDP; a null protocol is
+        // treated as EDP, a non-EDP protocol (e.g. lldp) is excluded.
+        [devId]: (ns || [])
+          .filter((n) => !n.protocol || String(n.protocol).toLowerCase() === "edp")
+          .map((n) => ({ ifindex: n.local_ifindex, port: n.local_port,
+                         remote: n.remote_sysname, remotePort: n.remote_port })),
+      })))
+      .catch(() => { /* leave unset → picker falls back to all ports */ });
   }, []);
 
   // When a link is opened for editing, prime the details/ports form from the
@@ -713,12 +736,55 @@ export function MapPage() {
 
                       <div className="map-panel-kicker mono" style={{ marginTop: 14 }}>ATTACHED PORTS</div>
                       <div className="dim" style={{ fontSize: 11, margin: "2px 0 6px" }}>
-                        Patch each end into a switch port to drive the link's up/down, speed, and utilization from the real circuit.
+                        Patch each end into a switch port to drive the link's up/down, speed, and utilization from the real circuit. Lists the switch's SFP/fiber ports and any EDP-discovered uplinks (◆ = SFP).
                       </div>
                       {["a", "b"].map((end) => {
                         const dk = `${end}Dev`, ik = `${end}If`;
                         const devVal = linkForm?.[dk] ?? "";
-                        const ports = portsByDev[devVal] || [];
+                        const curIf = linkForm?.[ik] ?? "";
+                        const ports = portsByDev[devVal];     // [{ifindex,name,oper_state,is_sfp}] or undefined (loading)
+                        const edp = edpByDev[devVal];         // [{ifindex,port,remote,remotePort}] or undefined
+                        const portByIf = {};
+                        for (const p of ports || []) portByIf[p.ifindex] = p;
+                        const nbByIf = {};
+                        for (const e of edp || []) nbByIf[e.ifindex] = e;
+                        const optText = (ifx) => {
+                          const p = portByIf[ifx] || {};
+                          const nb = nbByIf[ifx];
+                          const nbtxt = nb && nb.remote ? ` → ${nb.remote}${nb.remotePort ? ` ${nb.remotePort}` : ""}` : "";
+                          const name = p.name || (nb && nb.port) || ifx;
+                          return `${name}${p.oper_state ? ` (${p.oper_state})` : ""}${p.is_sfp === 1 ? " ◆" : ""}${nbtxt}`;
+                        };
+                        // Show the union of SFP/fiber ports and EDP-discovered uplinks.
+                        let options = [];
+                        if (ports) {
+                          const ids = new Set();
+                          for (const p of ports) if (p.is_sfp === 1 || nbByIf[p.ifindex]) { ids.add(p.ifindex); }
+                          for (const e of edp || []) ids.add(e.ifindex);   // EDP port not in the port table (rare)
+                          options = [...ids].map((ifx) => ({ ifindex: ifx, text: optText(ifx) }));
+                          // Fall back to every port only when nothing qualified, so a switch
+                          // with no classified SFP/EDP data isn't a dead end.
+                          if (options.length === 0) {
+                            options = ports.map((p) => ({ ifindex: p.ifindex, text: optText(p.ifindex) }));
+                          }
+                        }
+                        // Keep the currently-saved port selectable even if it isn't SFP/EDP.
+                        if (curIf !== "" && !options.some((o) => String(o.ifindex) === String(curIf))) {
+                          options = [{ ifindex: curIf, text: `${optText(curIf)} — current` }, ...options];
+                        }
+                        // Show only switches at THIS end's site (fall back to the
+                        // whole fleet if none are classified there, so the picker
+                        // is never empty).
+                        const endSite = end === "a" ? elink.site_a : elink.site_b;
+                        const joinKey = siteJoinKeys[endSite] || endSite;
+                        let switches = fleet.filter((s) => s.site === joinKey);
+                        // Always keep the currently-selected switch visible even if
+                        // it's sited elsewhere (a legacy attach).
+                        if (devVal && !switches.some((s) => String(s.id) === String(devVal))) {
+                          const cur = fleet.find((s) => String(s.id) === String(devVal));
+                          if (cur) switches = [cur, ...switches];
+                        }
+                        if (switches.length === 0) switches = fleet;
                         return (
                           <div className="edit-row" key={end} style={{ marginTop: 4 }}>
                             <label className="dim" style={{ width: 42 }}>{end === "a" ? elink.site_a : elink.site_b}</label>
@@ -726,18 +792,19 @@ export function MapPage() {
                                     onChange={(e) => { const v = e.target.value;
                                       setLinkForm((f) => ({ ...f, [dk]: v, [ik]: "" })); if (v) loadPorts(v); }}>
                               <option value="">— switch —</option>
-                              {fleet.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                              {switches.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                             </select>
-                            <select className="enum-in" style={{ width: 110 }} value={linkForm?.[ik] ?? ""}
+                            <select className="enum-in" style={{ width: 150 }} value={curIf}
                                     disabled={!devVal}
                                     onChange={(e) => setLinkForm((f) => ({ ...f, [ik]: e.target.value }))}>
                               <option value="">— port —</option>
-                              {ports.map((p) => (
-                                <option key={p.ifindex} value={p.ifindex}>
-                                  {(p.name || p.ifindex) + (p.oper_state ? ` (${p.oper_state})` : "")}
-                                </option>
+                              {options.map((o) => (
+                                <option key={o.ifindex} value={o.ifindex}>{o.text}</option>
                               ))}
                             </select>
+                            {devVal && ports && options.length === 0 && (
+                              <span className="dim" style={{ fontSize: 11 }}>no ports found</span>
+                            )}
                           </div>
                         );
                       })}
@@ -793,7 +860,7 @@ export function MapPage() {
                     <div className="dim mono">
                       {sel.name} · {TIER_LABEL[sel.tier] || sel.tier} · {sel.devices_total} device{sel.devices_total === 1 ? "" : "s"}
                       {sel.devices_down > 0 && ` · ${sel.devices_down} down`}
-                      {sel.devices_degraded > 0 && ` · ${sel.devices_degraded} impaired`}
+                      {sel.devices_degraded > 0 && ` · ${sel.devices_degraded} switch${sel.devices_degraded === 1 ? "" : "es"} down`}
                     </div>
                   </div>
                   <span
@@ -852,7 +919,7 @@ export function MapPage() {
                         <div className="dim mono">
                           {s.name} · {s.devices_total} dev
                           {s.devices_down > 0 && ` · ${s.devices_down} down`}
-                          {s.devices_degraded > 0 && ` · ${s.devices_degraded} impaired`}
+                          {s.devices_degraded > 0 && ` · ${s.devices_degraded} switch${s.devices_degraded === 1 ? "" : "es"} down`}
                         </div>
                       </div>
                       <span className="mono map-site-row-status" style={{ color: C[s.status] || C.unknown }}>
