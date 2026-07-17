@@ -55,6 +55,8 @@ export function SurveillancePage() {
         {!summary.updated_at && <span style={{ color: sevColor("warn") }}> · no camera data yet</span>}
       </div>
 
+      <UnlinkedBanner overview={summary.overview} />
+
       <div className="stat-row">
         <div className="stat"><div className="stat-value">{summary.cameras_total}</div><div className="stat-label">Cameras</div></div>
         <div className="stat"><div className="stat-value" style={{ color: sevColor("ok") }}>{summary.cameras_recording}</div>
@@ -243,5 +245,23 @@ function StorageTab() {
         </table>
       )}
     </Card>
+  );
+}
+
+// Milestone answered but no entity is linked to a registry device → the page
+// would be blank with no explanation. Point the operator at the import.
+function UnlinkedBanner({ overview }) {
+  const p = overview && overview.payload;
+  if (!p) return null;
+  const discovered = (p.discovered_cameras || 0) + (p.discovered_servers || 0);
+  const linked = (p.linked_cameras || 0) + (p.linked_servers || 0);
+  if (discovered === 0 || linked > 0) return null;
+  return (
+    <div className="msg error" style={{ borderLeft: `3px solid ${sevColor("warn")}`, paddingLeft: 10 }}>
+      Milestone is reachable and reports {p.discovered_cameras || 0} camera(s) and{" "}
+      {p.discovered_servers || 0} recording server(s), but none are linked to the device registry —
+      so nothing can be shown here. Import them in{" "}
+      <a href="#/registry">Registry → Import from Milestone</a> (admin).
+    </div>
   );
 }

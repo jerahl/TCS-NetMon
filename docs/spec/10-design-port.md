@@ -635,6 +635,22 @@ row. Verified end-to-end against a live uvicorn + seeded SQLite (sampler wrote
 14 series, pruning drops >24 h, API + status served); suite green
 (`test_history`, migration `019`, config-cap guards).
 
+**2026-07-17 — Milestone "configured but no data" fix.** Root cause: nothing
+ever populated `devices.milestone_hardware_id`, and the collector only writes
+state/inventory for devices carrying it — so a fully-configured Milestone source
+produced an empty Surveillance page. `seed.upsert_devices` also silently dropped
+`milestone_hardware_id`/`rconfig_device_id`/`threecx_ref` (only XIQ/PF keys were
+persisted) — fixed. Added `seed.normalize_milestone()` (RS + cameras → Device
+rows linked by GUID) and `POST /api/registry/import-milestone` (mirrors the XIQ
+import: dry-run preview + upsert, sites preserved per D9), plus a Registry-page
+"Import from Milestone" panel. Made the collector **fail loud** on the silent-
+empty trap: the `milestone.overview` snapshot now carries `discovered_*` vs
+`linked_*` counts and the collector logs a warning when Milestone answers but no
+entity is linked; the Surveillance page shows a banner pointing at the import.
+(The client's flat `/api/rest/v1/{recordingServers,cameras}` paths remain
+pending live validation — if they 404 the collector now errors honestly into
+`collector_health` rather than showing blank.)
+
 ## Next session
 
 - **Phases 10.0–10.6 are all built (2026-07-16/17).** The ZCD page-parity set
