@@ -27,11 +27,13 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 from netmon import __version__, db, migrate
 from netmon import settings as settings_engine
 from netmon.api import (
-    alerts, auth_routes, devices, events, health, nac, registry, settings, sites,
-    status, surveillance, switches, voip, wireless,
+    alerts, auth_routes, devices, events, health, history as history_api, nac,
+    registry, search, settings, sites, status, summary, surveillance, switches,
+    voip, wireless,
 )
 from netmon.auth.sessions import DbSessionStore, SessionStore
 from netmon.engine.engine import AlertEngine
+from netmon.history import HistorySampler
 from netmon.collectors.milestone import MilestoneCollector, MilestoneError
 from netmon.collectors.packetfence import PfCollector
 from netmon.collectors.pf_client import PfError
@@ -131,6 +133,13 @@ def register_tasks(app: FastAPI, cfg: Config, engine) -> None:
                             interval_s=alert_engine.interval_s, timeout_s=alert_engine.timeout_s)
         log.info("alert engine enabled: %ss, shadow=%s", cfg.engine.interval_s, cfg.engine.shadow)
 
+    if cfg.history.enabled:
+        sampler = HistorySampler.from_config(engine, cfg)
+        supervisor.register("history", sampler.run_guarded,
+                            interval_s=sampler.interval_s, timeout_s=sampler.timeout_s)
+        log.info("history sampler enabled: %ss, retain %dh",
+                 cfg.history.interval_s, cfg.history.retention_hours)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -215,6 +224,9 @@ def create_app(
     app.include_router(devices.router)
     app.include_router(status.router)
     app.include_router(sites.router)
+    app.include_router(summary.router)
+    app.include_router(search.router)
+    app.include_router(history_api.router)
     app.include_router(events.router)
     app.include_router(switches.router)
     app.include_router(wireless.router)

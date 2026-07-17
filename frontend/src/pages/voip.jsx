@@ -1,22 +1,14 @@
 import React from "react";
 import { getJSON, qs } from "../api.js";
 import { Card, Loading, ErrorMsg, SourceBadge, sevColor } from "../primitives.jsx";
+import { ageOf } from "../format.js";
+import { HistoryChart } from "../history.jsx";
 
 // VoIP (3CX) — Phase 10.4. Trunks + extensions + SystemStatus, all from
 // NetMon's DB. Active calls / MOS / queues depend on the Phase 0 ODBC
 // decision and aren't persisted (spec §7).
 
 const REFRESH_MS = 30000;
-
-function ageOf(iso) {
-  if (!iso) return null;
-  const t = Date.parse(iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z");
-  if (Number.isNaN(t)) return null;
-  const s = Math.max(0, (Date.now() - t) / 1000);
-  if (s < 90) return `${Math.round(s)}s`;
-  if (s < 5400) return `${Math.round(s / 60)}m`;
-  return `${Math.round(s / 3600)}h`;
-}
 
 function ChannelBar({ used, total }) {
   if (!total) return <span className="dim">—</span>;
@@ -83,6 +75,13 @@ export function VoipPage() {
         {sys && sys.Version && (
           <div className="stat"><div className="stat-value" style={{ fontSize: 16 }}>{sys.Version}</div><div className="stat-label">3CX version</div></div>)}
       </div>
+
+      <Card title="24-hour trends" kicker="history ring buffer">
+        <div className="hchart-row">
+          <HistoryChart series="voip.channels_in_use" label="Channels in use" color={sevColor("ok")} />
+          <HistoryChart series="voip.trunks_registered" label="Trunks registered" color={sevColor("unknown")} />
+        </div>
+      </Card>
 
       <Card kicker={`${trunks.length} trunk(s)`}>
         {trunks.length === 0 ? <div className="msg">No trunks cached — the 3CX collector hasn't populated the trunk table.</div> : (

@@ -1,6 +1,7 @@
 import React from "react";
 import { getJSON, qs } from "../api.js";
 import { Card, Loading, ErrorMsg, SourceBadge, sevColor } from "../primitives.jsx";
+import { ageOf } from "../format.js";
 
 // NAC (PacketFence) — Phase 10.3: five ZCD PF views as tabs over pf_nodes +
 // snapshot_cache. All reads from NetMon's DB (5-minute collector cadence,
@@ -16,16 +17,6 @@ const TABS = [
   { id: "policies", label: "NAC Policies" },
   { id: "cluster", label: "Cluster Status" },
 ];
-
-function ageOf(iso) {
-  if (!iso) return null;
-  const t = Date.parse(iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z");
-  if (Number.isNaN(t)) return null;
-  const s = Math.max(0, (Date.now() - t) / 1000);
-  if (s < 90) return `${Math.round(s)}s`;
-  if (s < 5400) return `${Math.round(s / 60)}m`;
-  return `${Math.round(s / 3600)}h`;
-}
 
 function RegBadge({ status }) {
   if (!status) return <span className="dim">—</span>;
@@ -105,10 +96,17 @@ function GenericSnapshot({ payload }) {
   return <pre className="mono dim" style={{ fontSize: 11, overflowX: "auto" }}>{JSON.stringify(payload, null, 2).slice(0, 4000)}</pre>;
 }
 
-export function NacPage() {
+export function NacPage({ query }) {
   const [tab, setTab] = React.useState("devices");
   const [summary, setSummary] = React.useState(null);
   const [error, setError] = React.useState(null);
+  const initialQ = query?.q || "";
+
+  // Arriving from the ⌘K palette with ?q=<mac> jumps to the Connected Devices
+  // tab pre-filtered to that endpoint (re-fires if the deep-link changes).
+  React.useEffect(() => {
+    if (initialQ) setTab("devices");
+  }, [initialQ]);
 
   React.useEffect(() => {
     let live = true;
@@ -160,7 +158,7 @@ export function NacPage() {
         ))}
       </div>
 
-      {tab === "devices" && <DevicesTab />}
+      {tab === "devices" && <DevicesTab initialQ={initialQ} />}
       {tab === "sessions" && <SessionsTab />}
       {tab === "quarantine" && <QuarantineTab />}
       {tab === "policies" && <PoliciesTab />}
@@ -169,10 +167,13 @@ export function NacPage() {
   );
 }
 
-function DevicesTab() {
+function DevicesTab({ initialQ = "" }) {
   const [rows, setRows] = React.useState(null);
-  const [q, setQ] = React.useState("");
+  const [q, setQ] = React.useState(initialQ);
   const [status, setStatus] = React.useState("");
+  // Follow the deep-link: a new ?q= from the palette updates the filter even if
+  // the tab is already mounted.
+  React.useEffect(() => { setQ(initialQ); }, [initialQ]);
   React.useEffect(() => {
     const id = setTimeout(() =>
       getJSON("/api/nac/nodes" + qs({ q, status, limit: 500 })).then(setRows).catch(() => setRows([])),

@@ -1,6 +1,7 @@
 import React from "react";
 import { getJSON } from "../api.js";
 import { Card, Loading, ErrorMsg, Stat } from "../primitives.jsx";
+import { ageOf } from "../format.js";
 
 // NetMon Status (spec 11 D2) — the standalone replacement for ZCD's Zabbix
 // Status page: NetMon's own self-health instead of Zabbix internals. Reads
@@ -10,17 +11,6 @@ import { Card, Loading, ErrorMsg, Stat } from "../primitives.jsx";
 const REFRESH_MS = 30000;
 
 const HEALTH_COLOR = { ok: "#1fb75a", error: "#e5484d", unknown: "#8a8f98" };
-
-function ageOf(iso) {
-  if (!iso) return "—";
-  const t = Date.parse(iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z");
-  if (Number.isNaN(t)) return "—";
-  const s = Math.max(0, (Date.now() - t) / 1000);
-  if (s < 90) return `${Math.round(s)}s`;
-  if (s < 5400) return `${Math.round(s / 60)}m`;
-  if (s < 129600) return `${Math.round(s / 3600)}h`;
-  return `${Math.round(s / 86400)}d`;
-}
 
 function uptime(s) {
   if (s === null || s === undefined) return "—";

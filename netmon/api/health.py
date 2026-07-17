@@ -173,6 +173,7 @@ def netmon_status(
         engine_shadow=cfg.engine.shadow,
         poller_enabled=cfg.poller.enabled,
         snmp_inventory_enabled=cfg.snmp_inventory.enabled,
+        history_enabled=cfg.history.enabled,
         tasks=tasks,
         collectors=_collector_health_rows(engine),
         db=_db_stats(engine, sessions.count() if sessions is not None else 0),

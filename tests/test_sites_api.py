@@ -151,6 +151,31 @@ def test_sites_rollup(tmp_path):
         assert isinstance(sites["CO"]["lat"], float)
 
 
+def test_sites_carry_open_problem_rollup(tmp_path):
+    """Site tiles (Global page) surface open-alert count + worst severity
+    scoped to the site (spec 10 §6 / phase 10.5)."""
+    url = f"sqlite:///{tmp_path/'netmon.db'}"
+    _seed(url)   # devices 1,2 in BHS; 3,4 in CHS
+    engine = db.make_engine(url)
+    now = datetime.now(timezone.utc)
+    db.execute(engine, "INSERT INTO alert_rules (id, name, dimension, `condition`, severity) "
+                       "VALUES (1,'ping-down','ping','value=down','crit'),"
+                       "       (2,'blind','source_status','value=blind','warn')")
+    # Two open alerts on BHS (worst = crit); one open + one closed on CHS.
+    db.execute(engine, "INSERT INTO alerts (device_id, rule_id, opened_at) "
+                       "VALUES (1,1,:t),(2,2,:t),(4,2,:t)", {"t": now})
+    db.execute(engine, "INSERT INTO alerts (device_id, rule_id, opened_at, closed_at) "
+                       "VALUES (3,1,:t,:t)", {"t": now})   # closed → ignored
+    with TestClient(_app(write_config(tmp_path, db_url=url))) as client:
+        sites = {s["name"]: s for s in client.get("/api/sites").json()}
+        assert sites["BHS"]["problems"] == 2
+        assert sites["BHS"]["worst_severity"] == "crit"
+        assert sites["CHS"]["problems"] == 1          # closed one excluded
+        assert sites["CHS"]["worst_severity"] == "warn"
+        assert sites["CO"]["problems"] == 0
+        assert sites["CO"]["worst_severity"] == "unknown"
+
+
 def test_rollup_follows_group_key_link(tmp_path):
     """A map site linked to a differently-named network group rolls up that
     group's devices (spec: link a map location to a network site/group)."""

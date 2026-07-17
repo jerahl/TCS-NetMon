@@ -164,6 +164,23 @@ class EngineConfig:
 
 
 @dataclass(frozen=True)
+class HistoryConfig:
+    """Bounded 24 h history ring buffer (spec 10.6; CLAUDE.md §2 exception,
+    owner-approved 2026-07-15 as spec 10 §10 Q3 / spec 11 D3).
+
+    The sampler task snapshots a curated set of low-cardinality aggregate series
+    (fleet counts, alert counts, VoIP channels, wireless clients, PoE watts, and
+    per-switch throughput/ports-up) into ``state_samples`` on ``interval_s`` and
+    prunes anything older than ``retention_hours`` — hard-capped at 24 so the
+    charter exception can never drift into long-term storage.
+    """
+
+    enabled: bool = False
+    interval_s: int = 300
+    retention_hours: int = 24
+
+
+@dataclass(frozen=True)
 class SourceToggle:
     """Generic per-source enable flag + opaque settings bag.
 
@@ -185,6 +202,7 @@ class Config:
     poller: PollerConfig
     snmp_inventory: SnmpInventoryConfig
     engine: EngineConfig
+    history: HistoryConfig
     sources: dict[str, SourceToggle]
     path: str
 
@@ -387,6 +405,19 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         default_target=parser.get("engine", "default_target", fallback="").strip(),
     )
 
+    # --- [history] (spec 10.6; bounded ≤24 h ring buffer) ---
+    history = HistoryConfig(
+        enabled=_as_bool(parser.get("history", "enabled", fallback="false")),
+        interval_s=parser.getint("history", "interval_s", fallback=300),
+        retention_hours=parser.getint("history", "retention_hours", fallback=24),
+    )
+    if history.enabled and history.interval_s < 30:
+        raise ConfigError("[history] interval_s must be >= 30")
+    if history.retention_hours < 1 or history.retention_hours > 24:
+        # The charter exception is explicitly bounded at 24 h — refuse to let a
+        # config typo turn the ring buffer into long-term series storage.
+        raise ConfigError("[history] retention_hours must be between 1 and 24")
+
     # --- per-source toggles ---
     sources: dict[str, SourceToggle] = {}
     for name in ("xiq", "packetfence", "milestone", "threecx", "rconfig"):
@@ -400,5 +431,5 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
             sources[name] = SourceToggle(enabled=False)
 
     return Config(db=db, web=web, auth=auth, security=security, poller=poller,
-                  snmp_inventory=snmp_inventory, engine=engine,
+                  snmp_inventory=snmp_inventory, engine=engine, history=history,
                   sources=sources, path=conf_path)

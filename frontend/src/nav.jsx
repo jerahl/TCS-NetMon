@@ -110,6 +110,17 @@ export function Nav({ active }) {
         </div>
       </div>
 
+      <button
+        type="button"
+        className="nav-search"
+        onClick={() => window.dispatchEvent(new CustomEvent("netmon:open-search"))}
+        title="Search devices, endpoints, MACs (⌘K)"
+      >
+        <Icon name="search" />
+        <span className="nav-label-text">Search</span>
+        <span className="nav-kbd">⌘K</span>
+      </button>
+
       <div className="nav-section">
         <div className="nav-label">Monitoring</div>
         {item("global", NAV.global, "map", "Global")}

@@ -146,6 +146,14 @@ def test_014_renames_neighbors_and_adds_edp_columns():
     assert "ADD COLUMN protocol" in sql and "ADD COLUMN age_s" in sql
 
 
+def test_019_creates_state_samples():
+    migs = {m.version: m for m in discover_migrations()}
+    assert "019" in migs, "expected 019 history ring-buffer migration"
+    sql = migs["019"].path.read_text()
+    assert "CREATE TABLE IF NOT EXISTS state_samples" in sql
+    assert "PRIMARY KEY (series, ts)" in sql
+
+
 def test_every_migration_has_rollback_note():
     for mig in discover_migrations():
         text_ = mig.path.read_text().lower()

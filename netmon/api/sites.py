@@ -19,6 +19,7 @@ from netmon.api.deps import get_engine, require_role
 from netmon.models.schemas import (
     FiberLink,
     Role,
+    Severity,
     SiteRollup,
     SiteStatus,
     SiteTier,
@@ -159,11 +160,43 @@ def _sites_with_trunk_alarm(engine: Engine) -> set[str]:
     return alarmed
 
 
+# Open alerts per site, with the worst rule severity. Keyed by devices.site so
+# it joins the roll-up on the same effective key (group_key or marker name).
+_SITE_PROBLEMS_SQL = """
+SELECT d.site AS site, COUNT(*) AS n, r.severity AS severity
+FROM alerts a
+JOIN devices d ON d.id = a.device_id
+JOIN alert_rules r ON r.id = a.rule_id
+WHERE a.closed_at IS NULL AND d.site IS NOT NULL
+GROUP BY d.site, r.severity
+"""
+
+_SEV_RANK = {Severity.unknown: 0, Severity.ok: 1, Severity.warn: 2, Severity.crit: 3}
+
+
+def _site_problems(engine: Engine) -> dict[str, tuple[int, Severity]]:
+    """site (devices.site) → (open-alert count, worst severity)."""
+    acc: dict[str, tuple[int, Severity]] = {}
+    for row in db.fetch_all(engine, _SITE_PROBLEMS_SQL):
+        site = row["site"]
+        try:
+            sev = Severity(row.get("severity") or "unknown")
+        except ValueError:
+            sev = Severity.unknown
+        count, worst = acc.get(site, (0, Severity.unknown))
+        count += int(row.get("n") or 0)
+        if _SEV_RANK[sev] > _SEV_RANK[worst]:
+            worst = sev
+        acc[site] = (count, worst)
+    return acc
+
+
 def _site_rollups(engine: Engine) -> list[SiteRollup]:
     flags_by_site: dict[str, list[dict[str, Any]]] = {}
     for row in db.fetch_all(engine, _DEVICE_FLAGS_SQL):
         flags_by_site.setdefault(row["site"], []).append(row)
     trunk_alarm_sites = _sites_with_trunk_alarm(engine)
+    problems_by_site = _site_problems(engine)
 
     out: list[SiteRollup] = []
     for site in db.fetch_all(engine, _SITES_SQL):
@@ -173,6 +206,7 @@ def _site_rollups(engine: Engine) -> list[SiteRollup]:
         status, total, down, degraded = rollup_site(
             flags_by_site.get(join_key, []), site["name"] in trunk_alarm_sites
         )
+        problems, worst = problems_by_site.get(join_key, (0, Severity.unknown))
         out.append(
             SiteRollup(
                 name=site["name"],
@@ -185,6 +219,8 @@ def _site_rollups(engine: Engine) -> list[SiteRollup]:
                 devices_total=total,
                 devices_down=down,
                 devices_degraded=degraded,
+                problems=problems,
+                worst_severity=worst,
             )
         )
     return out

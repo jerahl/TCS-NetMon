@@ -2,6 +2,7 @@ import React from "react";
 import { getJSON, qs } from "../api.js";
 import { Card, Loading, ErrorMsg, Dot, SevText, SourceBadge, sevColor } from "../primitives.jsx";
 import { sevLabel } from "../severity.js";
+import { ageOf } from "../format.js";
 
 // Events Console (spec 10 §7). The state-transition feed from /api/events with
 // the design's filter bar, KPI tiles and 24h severity histogram (from
@@ -14,17 +15,6 @@ const SEVERITIES = ["crit", "warn", "ok", "unknown"];
 const DIMENSIONS = ["ping", "snmp", "source_status", "config_backup", "recording", "trunk"];
 const DEVICE_TYPES = ["switch", "ap", "camera", "recording_server", "trunk", "pbx", "other"];
 const PAGE = 100;
-
-function ageOf(iso) {
-  if (!iso) return "—";
-  const t = Date.parse(iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z");
-  if (Number.isNaN(t)) return "—";
-  const s = Math.max(0, (Date.now() - t) / 1000);
-  if (s < 90) return `${Math.round(s)}s`;
-  if (s < 5400) return `${Math.round(s / 60)}m`;
-  if (s < 129600) return `${Math.round(s / 3600)}h`;
-  return `${Math.round(s / 86400)}d`;
-}
 
 function hourLabel(iso) {
   const t = Date.parse(iso && (iso.endsWith("Z") || iso.includes("+")) ? iso : iso + "Z");
@@ -164,7 +154,7 @@ export function EventsPage() {
                   <td><Dot severity={e.severity} /></td>
                   <td><SevText severity={e.severity} /></td>
                   <td className="mono">{e.occurred_at || "—"}</td>
-                  <td className="mono dim">{ageOf(e.occurred_at)}</td>
+                  <td className="mono dim">{ageOf(e.occurred_at) || "—"}</td>
                   <td><SourceBadge source={e.source} /></td>
                   <td>{e.device}</td>
                   <td>{e.site || "—"}</td>

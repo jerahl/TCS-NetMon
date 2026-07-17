@@ -57,6 +57,10 @@ def test_nac_nodes_filters(tmp_path):
     with _client(tmp_path, url) as client:
         assert len(client.get("/api/nac/nodes").json()) == 3
         assert len(client.get("/api/nac/nodes?q=student").json()) == 1
+        # MAC search works in any separator format (spec 10.5 follow-up).
+        assert len(client.get("/api/nac/nodes?q=aabbcc000011").json()) == 1
+        assert len(client.get("/api/nac/nodes?q=AA-BB-CC-00-00-11").json()) == 1
+        assert len(client.get("/api/nac/nodes?q=aabbcc").json()) == 3   # shared OUI
         assert len(client.get("/api/nac/nodes?status=pending").json()) == 1
         assert len(client.get("/api/nac/nodes?role=Printer").json()) == 1
         assert len(client.get("/api/nac/nodes?online=true").json()) == 2

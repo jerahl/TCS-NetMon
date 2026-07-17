@@ -161,7 +161,12 @@ class FiberLinkSpec(BaseModel):
 
 
 class SiteRollup(BaseModel):
-    """/api/sites: a curated site plus its live device roll-up."""
+    """/api/sites: a curated site plus its live device roll-up.
+
+    ``problems``/``worst_severity`` are the Global-page site-tile additions
+    (spec 10 §6 / phase 10.5): the count of open alerts scoped to the site and
+    the worst of their severities. Additive — the map ignores them.
+    """
 
     name: str
     display_name: str | None = None
@@ -173,6 +178,8 @@ class SiteRollup(BaseModel):
     devices_total: int = 0
     devices_down: int = 0
     devices_degraded: int = 0
+    problems: int = 0
+    worst_severity: Severity = Severity.unknown
 
 
 class FiberLink(BaseModel):
@@ -293,6 +300,7 @@ class NetmonStatus(BaseModel):
     engine_shadow: bool = True
     poller_enabled: bool = False
     snmp_inventory_enabled: bool = False
+    history_enabled: bool = False
     tasks: list[SupervisedTask] = Field(default_factory=list)
     collectors: list[CollectorHealth] = Field(default_factory=list)
     db: NetmonDbStats = Field(default_factory=NetmonDbStats)
@@ -322,3 +330,89 @@ class HealthResponse(BaseModel):
     status: str
     version: str
     db_ok: bool
+
+
+# ---------------------------------------------------------------- Global page
+# (spec 10 §6 / phase 10.5) — /api/summary system cards + severity strip, and
+# /api/search ⌘K palette. All DB-only roll-ups; zero source calls at render.
+
+class SummaryKpi(BaseModel):
+    """One number on a system card (e.g. "312 / 318 ports up")."""
+
+    label: str
+    value: str
+    severity: Severity = Severity.unknown
+
+
+class SystemDomain(BaseModel):
+    """One system card on the Global page: a monitored domain, its worst
+    current severity, the freshness of the backing source, and a few KPIs.
+
+    ``status`` folds two honest signals (§4.5): the source's own health
+    (``blind`` when its collector is failing) and the domain's device-state
+    roll-up. A blind source never reports ``ok``.
+    """
+
+    key: str            # switching | wireless | nac | surveillance | voip | config
+    label: str
+    status: Severity = Severity.unknown
+    blind: bool = False           # backing source is failing/unreachable
+    source: str | None = None     # collector_health name
+    updated_at: datetime | None = None   # source's last successful refresh
+    headline: str | None = None
+    href: str | None = None       # SPA route for the card's "open" affordance
+    kpis: list[SummaryKpi] = Field(default_factory=list)
+
+
+class SummaryFleet(BaseModel):
+    """Top-line device counts for the Global severity strip."""
+
+    total: int = 0
+    up: int = 0
+    down: int = 0
+    unknown: int = 0
+    blind: int = 0
+    by_type: dict[str, int] = Field(default_factory=dict)
+
+
+class SummaryAlerts(BaseModel):
+    """Open-alert roll-up for the Global severity strip / triggers header."""
+
+    open: int = 0
+    crit: int = 0
+    warn: int = 0
+    acked: int = 0
+    unacked: int = 0
+    assigned: int = 0
+
+
+class Summary(BaseModel):
+    """/api/summary: everything the Global dashboard needs above the site
+    heatmap / event stream (both of which have their own endpoints)."""
+
+    generated_at: datetime
+    fleet: SummaryFleet = Field(default_factory=SummaryFleet)
+    severity: dict[str, int] = Field(default_factory=dict)  # device worst-of roll-up
+    alerts: SummaryAlerts = Field(default_factory=SummaryAlerts)
+    domains: list[SystemDomain] = Field(default_factory=list)
+
+
+class SearchHit(BaseModel):
+    """One ⌘K result row. ``href`` is the SPA route to navigate to; ``kind``
+    groups the palette (device | endpoint | mac)."""
+
+    kind: str
+    title: str
+    subtitle: str | None = None
+    href: str | None = None
+    badge: str | None = None          # source/provenance chip (POLLER/PF/SNMP)
+
+
+class SearchResults(BaseModel):
+    """/api/search?q= : grouped hits from devices + pf_nodes + fdb_entries."""
+
+    query: str
+    devices: list[SearchHit] = Field(default_factory=list)
+    endpoints: list[SearchHit] = Field(default_factory=list)   # pf_nodes
+    macs: list[SearchHit] = Field(default_factory=list)         # fdb_entries
+    total: int = 0
