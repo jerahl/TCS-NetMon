@@ -186,9 +186,15 @@ shadow-alert diff has run clean for the agreed window.
   (filterable) + `POST /api/registry/devices/assign` (batch move/unassign,
   target site must exist, writes only `devices.site`); UI is a filter-by-
   site/type table with checkbox multi-select + a "Move to…" control. Same
-  admin + `allow_web_edit` gate. Also this session: **topology switched
-  LLDP→EDP** (EXTREME-EDP-MIB, migration 014, table `lldp_neighbors`→
-  `neighbors`).
+  admin + `allow_web_edit` gate. **Extended 2026-07-17**: the registry page
+  also **edits SNMP status-label maps** — `GET/PUT/DELETE
+  /api/registry/enums/<name>` over `netmon/enums.py` defaults; overrides live
+  in `snapshot_cache` (`enum.<name>`), merged over the default at sweep start
+  and picked up live on the next sweep (no restart). First map exposed:
+  `stack_status` (extremeStackMemberOperStatus 0=unknown/1=up/2=down/
+  3=mismatch), after the field-confirmed enum was corrected twice. Also this
+  session: **topology switched LLDP→EDP** (EXTREME-EDP-MIB, migration 014,
+  table `lldp_neighbors`→`neighbors`).
 - **SSHEASY integration landed 2026-07-16.** SSHEASY (`jerahl/ssheasy`) is a
   browser SSH client (xterm.js + WASM) embeddable in an iframe. NetMon adds an
   operator/admin-gated **"SSH" button** on device detail pages (switch + AP)

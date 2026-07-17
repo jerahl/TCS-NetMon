@@ -69,6 +69,8 @@ export function RegistryPage() {
 
       <DeviceAssignments sites={sites} onDone={load} />
 
+      <EnumMaps />
+
       <Card kicker={`${sites.length} site(s)`} title="Sites">
         <button type="button" className="btn" style={{ marginBottom: 10 }}
                 onClick={() => { setEdit({ ...BLANK }); setMsg(null); }}>+ Add site</button>
@@ -221,6 +223,104 @@ function DeviceAssignments({ sites, onDone }) {
         <button type="button" className="btn" disabled={busy || !sel.size || !target} onClick={move}>Move</button>
       </div>
       {msg && <div className={"msg" + (msg.ok ? "" : " error")}>{msg.text}</div>}
+    </Card>
+  );
+}
+
+// Edit the SNMP enum-decode maps (e.g. Extreme stack member oper-status)
+// without a code change. Codes are integers; labels are free text. Saving
+// stores the whole map as an override; the next sweep re-labels rows. Reset
+// drops the override and reverts to the code default.
+function EnumMaps() {
+  const [maps, setMaps] = React.useState(null);
+  const [drafts, setDrafts] = React.useState({});   // name → [{code,label}]
+  const [msg, setMsg] = React.useState(null);
+
+  const load = React.useCallback(() => {
+    getJSON("/api/registry/enums")
+      .then((rows) => {
+        setMaps(rows);
+        const d = {};
+        for (const m of rows) {
+          d[m.name] = Object.entries(m.effective)
+            .sort((a, b) => Number(a[0]) - Number(b[0]))
+            .map(([code, label]) => ({ code, label }));
+        }
+        setDrafts(d);
+      })
+      .catch((e) => setMsg({ ok: false, text: String(e.message || e) }));
+  }, []);
+  React.useEffect(load, [load]);
+
+  if (!maps) return <Card title="SNMP status labels"><Loading what="enum maps" /></Card>;
+
+  const setRow = (name, i, field, val) => setDrafts((d) => {
+    const rows = d[name].map((r, j) => (j === i ? { ...r, [field]: val } : r));
+    return { ...d, [name]: rows };
+  });
+  const addRow = (name) => setDrafts((d) => ({ ...d, [name]: [...d[name], { code: "", label: "" }] }));
+  const delRow = (name, i) => setDrafts((d) => ({ ...d, [name]: d[name].filter((_, j) => j !== i) }));
+
+  const save = async (name) => {
+    setMsg(null);
+    const entries = {};
+    for (const r of drafts[name]) {
+      const code = String(r.code).trim();
+      if (code === "") continue;
+      entries[code] = String(r.label).trim();
+    }
+    try {
+      await req("PUT", `/api/registry/enums/${name}`, { entries });
+      setMsg({ ok: true, text: `Saved ${name}. The next sweep applies the new labels.` });
+      load();
+    } catch (e) { setMsg({ ok: false, text: String(e.message || e) }); }
+  };
+  const reset = async (name) => {
+    setMsg(null);
+    try {
+      await req("DELETE", `/api/registry/enums/${name}`);
+      setMsg({ ok: true, text: `Reset ${name} to defaults.` });
+      load();
+    } catch (e) { setMsg({ ok: false, text: String(e.message || e) }); }
+  };
+
+  return (
+    <Card kicker="SNMP decode" title="Status labels">
+      <div className="dim" style={{ marginBottom: 8 }}>
+        Map raw SNMP enum codes to the labels shown in the UI — edit these when a
+        vendor MIB's meaning differs from the default.
+      </div>
+      {msg && <div className={"msg" + (msg.ok ? "" : " error")}>{msg.text}</div>}
+      {maps.map((m) => (
+        <div key={m.name} className="enum-block">
+          <div className="enum-head">
+            <b>{m.label || m.name}</b>
+            {m.overridden && <span className="pill" style={{ marginLeft: 8 }}>overridden</span>}
+            {m.oid && <span className="mono dim" style={{ marginLeft: 8, fontSize: 11 }}>{m.oid}</span>}
+          </div>
+          {m.description && <div className="dim" style={{ fontSize: 11, margin: "2px 0 6px" }}>{m.description}</div>}
+          <table className="grid" style={{ maxWidth: 420 }}>
+            <thead><tr><th style={{ width: 90 }}>Code</th><th>Label</th><th style={{ width: 30 }}></th></tr></thead>
+            <tbody>
+              {(drafts[m.name] || []).map((r, i) => (
+                <tr key={i}>
+                  <td><input className="enum-in" value={r.code} inputMode="numeric"
+                             onChange={(e) => setRow(m.name, i, "code", e.target.value)} /></td>
+                  <td><input className="enum-in" value={r.label}
+                             onChange={(e) => setRow(m.name, i, "label", e.target.value)} /></td>
+                  <td><button type="button" className="btn" title="Remove"
+                              onClick={() => delRow(m.name, i)}>✕</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ marginTop: 8, display: "flex", gap: 6 }}>
+            <button type="button" className="btn" onClick={() => addRow(m.name)}>+ Add code</button>
+            <button type="button" className="btn" onClick={() => save(m.name)}>Save</button>
+            <button type="button" className="btn" disabled={!m.overridden} onClick={() => reset(m.name)}>Reset to default</button>
+          </div>
+        </div>
+      ))}
     </Card>
   );
 }

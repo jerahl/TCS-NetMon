@@ -164,6 +164,15 @@ def test_build_stack_status_decode():
     assert one("7") == "7"           # unrecognised code preserved
 
 
+def test_build_stack_honors_custom_status_map():
+    """An owner-edited decode map overrides the default labels."""
+    walks = {"stack_status": {"1": "1"}}
+    custom = {"1": "online"}
+    assert si.build_stack(walks, custom)[0]["status"] == "online"
+    # a code missing from the custom map falls through to the raw value
+    assert si.build_stack({"stack_status": {"1": "2"}}, custom)[0]["status"] == "2"
+
+
 # ---- rate computation ------------------------------------------------------
 
 def test_compute_rates_first_sample_is_null():

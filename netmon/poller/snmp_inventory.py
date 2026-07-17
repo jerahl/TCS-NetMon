@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from netmon import db, health
+from netmon import db, enums, health
 from netmon.config import PollerConfig, SnmpInventoryConfig
 
 log = logging.getLogger("netmon.snmp_inventory")
@@ -427,7 +427,9 @@ def build_entity_slots(walks: dict[str, dict[str, str]]) -> list[dict]:
     return [slots[k] for k in sorted(slots)]
 
 
-def build_stack(walks: dict[str, dict[str, str]]) -> list[dict]:
+def build_stack(walks: dict[str, dict[str, str]],
+                status_map: dict[str, str] | None = None) -> list[dict]:
+    status_map = _STACK_STATUS if status_map is None else status_map
     slots = set()
     for k in ("stack_status", "stack_temp", "cpu_5m", "mem_total"):
         slots.update(walks.get(k, {}))
@@ -443,9 +445,10 @@ def build_stack(walks: dict[str, dict[str, str]]) -> list[dict]:
         status_raw = _enum_int(walks.get("stack_status", {}).get(idx))
         rows.append({
             "slot": slot,
-            # Decode the Extreme oper-status enum; fall back to the raw value if
-            # a firmware reports a code we don't have a label for (never blank).
-            "status": _STACK_STATUS.get(status_raw or "", status_raw),
+            # Decode the Extreme oper-status enum (map is owner-editable via the
+            # web); fall back to the raw value for a code we have no label for
+            # (never blank).
+            "status": status_map.get(status_raw or "", status_raw),
             "cpu_pct": _to_int(walks.get("cpu_5m", {}).get(idx)),
             "mem_pct": mem_pct,
             "temp_c": temp_raw,
@@ -653,6 +656,9 @@ class SnmpInventory:
         if not due:
             return 0
         self._check_credentials()
+        # Owner-editable decode maps, read once per run (picked up on the next
+        # sweep after an admin edits them — no restart).
+        self._stack_status_map = enums.effective_map(self.engine, "stack_status")
         switches = db.fetch_all(self.engine, _SWITCHES_SQL)
         log.info("run: sweep(s) due: %s · %d switch(es), concurrency %d",
                  ", ".join(due), len(switches), self.cfg.concurrency)
@@ -715,7 +721,9 @@ class SnmpInventory:
             written += self._write_entity(dev_id, build_entity_slots(walks))
         if "stack" in due:
             walks = await self._walk_keys(host, _SWEEP_OIDS["stack"][2])
-            written += self._replace(dev_id, "stack_members", "slot", build_stack(walks))
+            status_map = getattr(self, "_stack_status_map", None)
+            written += self._replace(dev_id, "stack_members", "slot",
+                                     build_stack(walks, status_map))
         return written
 
     # -- persistence: upsert seen rows, prune rows not seen this sweep --

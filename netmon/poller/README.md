@@ -79,7 +79,7 @@ template). Writes the `006` inventory tables read by the Switches dashboard —
 | fdb | BRIDGE-MIB dot1dTpFdb ⋈ dot1dBasePortIfIndex | 900s | `fdb_entries` (MAC→ifIndex) |
 | edp | EXTREME-EDP-MIB extremeEdpTable (Extreme-native; replaced LLDP) | 1800s | `neighbors` |
 | vlans | Extreme extremeVlanIfTable | 3600s | `switch_vlans` |
-| stack | Extreme stacking + CPU/mem/temp sensors | 300s | `stack_members` (member `status` decoded from extremeStackMemberOperStatus: 0=unknown, 1=up, 2=down, 3=mismatch) |
+| stack | Extreme stacking + CPU/mem/temp sensors | 300s | `stack_members` (member `status` decoded from extremeStackMemberOperStatus: 0=unknown, 1=up, 2=down, 3=mismatch — labels are owner-editable, see below) |
 
 One supervised task (registered at the fastest interval) gates each sweep
 internally by its own elapsed interval. Targets: enabled `device_type='switch'`
@@ -90,6 +90,16 @@ write time and overwrites. Counter resets → NULL (no fabricated spikes).
 Replace-on-refresh: rows seen this sweep are upserted, rows not seen are pruned;
 a *failed* sweep raises before pruning, so its rows stay visibly stale (§4.5),
 never blanked.
+
+**Editable decode maps.** Some SNMP status columns are integer enums whose
+labels a vendor MIB may define differently than expected. Those maps live in
+`netmon/enums.py` (`DEFAULTS`) and are owner-editable from the web (Registry →
+Status labels, admin + `[security] allow_web_edit`). An override is stored in
+`snapshot_cache` under `enum.<name>` and merged over the default at run start
+(`effective = {**default, **override}`), so an unrecognised code always falls
+through to the baseline and then to the raw value — never blanked. Editing is
+live: the next sweep re-labels rows, no restart. Currently one map is exposed:
+`stack_status` (extremeStackMemberOperStatus).
 
 ## Running
 

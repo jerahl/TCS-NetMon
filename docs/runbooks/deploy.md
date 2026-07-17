@@ -194,10 +194,12 @@ per-source key that a fresh export happens to lack.
 
 **Web registry management (admin, edit-gated):** with `[security]
 allow_web_edit = true`, an admin can add/edit/delete sites, **reassign
-devices between sites**, and **import switches/APs from XIQ** (dry-run
-preview) from the `#/registry` page — no CLI needed. All of it writes only
-NetMon's own `sites`/`devices` rows (never a source) and is refused when
-`allow_web_edit` is false.
+devices between sites**, **import switches/APs from XIQ** (dry-run preview),
+and **edit SNMP status-label maps** (e.g. the Extreme stack member
+oper-status decode) from the `#/registry` page — no CLI needed. Site/device
+edits write only NetMon's own `sites`/`devices` rows (never a source); enum
+overrides live in `snapshot_cache` and are picked up by the next sweep. All of
+it is refused when `allow_web_edit` is false.
 
 **SSH to a device (SSHEASY):** set `[web] ssheasy_url` to the base URL of a
 deployed SSHEASY (`jerahl/ssheasy`) web SSH client. An "SSH" button then

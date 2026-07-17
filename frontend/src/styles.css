@@ -410,3 +410,7 @@ table.grid.kv td:first-child { color: var(--dim); width: 160px; }
 .reg-filters select { padding: 6px 8px; background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; color: var(--text); }
 .reg-move { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
 .reg-move select { padding: 6px 8px; background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; color: var(--text); }
+.enum-block { padding: 10px 0; border-top: 1px solid var(--border); }
+.enum-block:first-of-type { border-top: none; }
+.enum-head { display: flex; align-items: center; }
+.enum-in { width: 100%; padding: 4px 6px; background: var(--panel2); border: 1px solid var(--border); border-radius: 5px; color: var(--text); font: inherit; }

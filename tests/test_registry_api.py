@@ -134,6 +134,46 @@ def test_assign_unassign_and_edit_gate(tmp_path):
                            json={"device_ids": [d["id"]], "site": "BHS"}).status_code == 403
 
 
+def test_enum_map_edit_and_reset(tmp_path):
+    url = f"sqlite:///{tmp_path/'r.db'}"
+    _seed(url)
+    with _client(_conf(tmp_path, url)) as client:
+        rows = client.get("/api/registry/enums").json()
+        stack = [r for r in rows if r["name"] == "stack_status"][0]
+        assert stack["default"]["1"] == "up" and stack["overridden"] is False
+
+        # override one label; effective reflects it, default is untouched
+        r = client.put("/api/registry/enums/stack_status",
+                       json={"entries": {"0": "unknown", "1": "online", "2": "down", "3": "mismatch"}})
+        assert r.status_code == 200 and r.json()["overridden"] is True
+        assert r.json()["effective"]["1"] == "online"
+
+        eff = [x for x in client.get("/api/registry/enums").json() if x["name"] == "stack_status"][0]
+        assert eff["effective"]["1"] == "online" and eff["default"]["1"] == "up"
+
+        # reset drops the override
+        assert client.delete("/api/registry/enums/stack_status").json()["overridden"] is False
+        back = [x for x in client.get("/api/registry/enums").json() if x["name"] == "stack_status"][0]
+        assert back["effective"]["1"] == "up"
+
+
+def test_enum_map_validation_and_gate(tmp_path):
+    url = f"sqlite:///{tmp_path/'r.db'}"
+    _seed(url)
+    with _client(_conf(tmp_path, url)) as client:
+        assert client.put("/api/registry/enums/nope", json={"entries": {"1": "x"}}).status_code == 404
+        # non-integer code and empty label are rejected
+        assert client.put("/api/registry/enums/stack_status",
+                          json={"entries": {"x": "up"}}).status_code == 422
+        assert client.put("/api/registry/enums/stack_status",
+                          json={"entries": {"1": "  "}}).status_code == 422
+    # edit gate off → write is 403, read still works
+    with _client(_conf(tmp_path, url, allow_edit=False)) as client:
+        assert client.get("/api/registry/enums").status_code == 200
+        assert client.put("/api/registry/enums/stack_status",
+                          json={"entries": {"1": "up"}}).status_code == 403
+
+
 def test_import_xiq_dry_run(tmp_path, monkeypatch):
     url = f"sqlite:///{tmp_path/'r.db'}"
     _seed(url)

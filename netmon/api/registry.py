@@ -11,12 +11,13 @@ one switch disables every web write path.
 from __future__ import annotations
 
 import logging
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.engine import Engine
 
-from netmon import db
+from netmon import db, enums
 from netmon.api.deps import get_config, get_engine, require_role
 from netmon.config import Config
 from netmon.models.schemas import Role, SiteTier, UserSession
@@ -203,6 +204,78 @@ def assign_devices(
     log.info("assign %d device(s) to site %r by %s", len(ids), target, user.username)
     return {"status": "assigned", "count": n if n is not None and n >= 0 else len(ids),
             "site": target}
+
+
+# ── editable SNMP enum-decode maps ──────────────────────────────────────────
+
+def _enum_view(engine: Engine, name: str) -> dict:
+    override = enums.get_override(engine, name)
+    return {
+        "name": name,
+        **enums.META.get(name, {}),
+        "default": enums.DEFAULTS[name],
+        "effective": enums.effective_map(engine, name),
+        "override": override,
+        "overridden": bool(override),
+    }
+
+
+@router.get("/enums")
+def list_enums(
+    engine: Engine = Depends(get_engine),
+    _user: UserSession = Depends(require_role(Role.admin)),
+) -> list[dict]:
+    """Owner-editable SNMP decode maps — default vs. effective vs. override."""
+    return [_enum_view(engine, name) for name in enums.NAMES]
+
+
+class EnumMapIn(BaseModel):
+    entries: dict[str, str]
+
+
+@router.put("/enums/{name}")
+def set_enum(
+    name: str,
+    body: EnumMapIn,
+    engine: Engine = Depends(get_engine),
+    cfg: Config = Depends(get_config),
+    user: UserSession = Depends(require_role(Role.admin)),
+) -> dict:
+    """Override an enum's labels. Codes must be integers (SNMP enum values);
+    labels must be non-empty. Stored whole; the next sweep picks it up."""
+    _require_edit(cfg)
+    if name not in enums.DEFAULTS:
+        raise HTTPException(status_code=404, detail=f"unknown enum map {name!r}")
+    cleaned: dict[str, str] = {}
+    for k, v in body.entries.items():
+        code = str(k).strip()
+        if not re.fullmatch(r"\d+", code):
+            raise HTTPException(status_code=422, detail=f"code {k!r} must be a non-negative integer")
+        label = str(v).strip()
+        if not label:
+            raise HTTPException(status_code=422, detail=f"label for code {code} must not be empty")
+        cleaned[code] = label
+    if not cleaned:
+        raise HTTPException(status_code=422, detail="at least one code→label entry is required")
+    enums.set_override(engine, name, cleaned)
+    log.info("enum map %r overridden by %s (%d entries)", name, user.username, len(cleaned))
+    return {"status": "saved", **_enum_view(engine, name)}
+
+
+@router.delete("/enums/{name}")
+def reset_enum(
+    name: str,
+    engine: Engine = Depends(get_engine),
+    cfg: Config = Depends(get_config),
+    user: UserSession = Depends(require_role(Role.admin)),
+) -> dict:
+    """Drop the override, reverting to the code default."""
+    _require_edit(cfg)
+    if name not in enums.DEFAULTS:
+        raise HTTPException(status_code=404, detail=f"unknown enum map {name!r}")
+    enums.clear_override(engine, name)
+    log.info("enum map %r reset to default by %s", name, user.username)
+    return {"status": "reset", **_enum_view(engine, name)}
 
 
 class XiqImport(BaseModel):
