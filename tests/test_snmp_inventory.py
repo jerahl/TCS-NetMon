@@ -93,6 +93,22 @@ def test_build_edp():
     assert n["remote_chassis"] is None       # EDP carries no chassis MAC
 
 
+EDP_FIXTURE = (Path(__file__).parent / "fixtures" / "snmp_exos_edp.txt").read_text()
+
+
+def test_build_edp_real_walk_multi_octet_index():
+    """Real extremeEdpTable index is <localIfIndex>.<neighbor MAC octets>; the
+    local ifIndex is the first component verbatim (1049 = 1:49), never
+    slot*1000+port."""
+    walks = {k: si.parse_walk(EDP_FIXTURE, si.OID[k]) for k in si._SWEEP_OIDS["edp"][2]}
+    rows = {r["local_ifindex"]: r for r in si.build_edp(walks)}
+    assert set(rows) == {1049, 1050, 2051}
+    assert rows[1049]["remote_sysname"] == "EMS-MDF-CORE"
+    assert rows[1049]["remote_port"] == "1:50"        # neighbor slot 1 port 50
+    assert rows[1050]["remote_sysname"] == "BHS_G109" and rows[1050]["remote_port"] == "1:49"
+    assert rows[2051]["age_s"] == 24
+
+
 def test_build_vlans():
     rows = {r["vlan_id"]: r for r in si.build_vlans(_walks(si._SWEEP_OIDS["vlans"][2]))}
     assert set(rows) == {100, 200}

@@ -730,32 +730,41 @@ export function MapPage() {
 
                       <div className="map-panel-kicker mono" style={{ marginTop: 14 }}>ATTACHED PORTS</div>
                       <div className="dim" style={{ fontSize: 11, margin: "2px 0 6px" }}>
-                        Patch each end into a switch's EDP uplink port to drive the link's up/down, speed, and utilization from the real circuit. Only EDP-discovered ports are listed.
+                        Patch each end into a switch port to drive the link's up/down, speed, and utilization from the real circuit. Lists the switch's SFP/fiber ports and any EDP-discovered uplinks (◆ = SFP).
                       </div>
                       {["a", "b"].map((end) => {
                         const dk = `${end}Dev`, ik = `${end}If`;
                         const devVal = linkForm?.[dk] ?? "";
                         const curIf = linkForm?.[ik] ?? "";
-                        const edp = edpByDev[devVal];   // [{ifindex,port}] or undefined (loading / fetch failed)
+                        const ports = portsByDev[devVal];     // [{ifindex,name,oper_state,is_sfp}] or undefined (loading)
+                        const edp = edpByDev[devVal];         // [{ifindex,port,remote,remotePort}] or undefined
                         const portByIf = {};
-                        for (const p of portsByDev[devVal] || []) portByIf[p.ifindex] = p;
-                        const label = (ifx, name) => {
+                        for (const p of ports || []) portByIf[p.ifindex] = p;
+                        const nbByIf = {};
+                        for (const e of edp || []) nbByIf[e.ifindex] = e;
+                        const optText = (ifx) => {
                           const p = portByIf[ifx] || {};
-                          return (name || p.name || ifx) + (p.oper_state ? ` (${p.oper_state})` : "");
+                          const nb = nbByIf[ifx];
+                          const nbtxt = nb && nb.remote ? ` → ${nb.remote}${nb.remotePort ? ` ${nb.remotePort}` : ""}` : "";
+                          const name = p.name || (nb && nb.port) || ifx;
+                          return `${name}${p.oper_state ? ` (${p.oper_state})` : ""}${p.is_sfp === 1 ? " ◆" : ""}${nbtxt}`;
                         };
-                        // Options come straight from the discovered EDP uplinks. If the
-                        // neighbors fetch hasn't resolved (or failed), fall back to all
-                        // ports so the picker is never mysteriously empty.
-                        let options = edp
-                          ? edp.map((e) => {
-                              const nb = e.remote ? ` → ${e.remote}${e.remotePort ? ` ${e.remotePort}` : ""}` : "";
-                              return { ifindex: e.ifindex, text: label(e.ifindex, e.port) + nb };
-                            })
-                          : (portsByDev[devVal] || []).map((p) => ({ ifindex: p.ifindex, text: label(p.ifindex, p.name) }));
-                        // Keep the currently-saved port selectable even if it's not an
-                        // EDP uplink (a legacy/manual attach), so the selection renders.
+                        // Show the union of SFP/fiber ports and EDP-discovered uplinks.
+                        let options = [];
+                        if (ports) {
+                          const ids = new Set();
+                          for (const p of ports) if (p.is_sfp === 1 || nbByIf[p.ifindex]) { ids.add(p.ifindex); }
+                          for (const e of edp || []) ids.add(e.ifindex);   // EDP port not in the port table (rare)
+                          options = [...ids].map((ifx) => ({ ifindex: ifx, text: optText(ifx) }));
+                          // Fall back to every port only when nothing qualified, so a switch
+                          // with no classified SFP/EDP data isn't a dead end.
+                          if (options.length === 0) {
+                            options = ports.map((p) => ({ ifindex: p.ifindex, text: optText(p.ifindex) }));
+                          }
+                        }
+                        // Keep the currently-saved port selectable even if it isn't SFP/EDP.
                         if (curIf !== "" && !options.some((o) => String(o.ifindex) === String(curIf))) {
-                          options = [{ ifindex: curIf, text: `${label(curIf)} — current` }, ...options];
+                          options = [{ ifindex: curIf, text: `${optText(curIf)} — current` }, ...options];
                         }
                         return (
                           <div className="edit-row" key={end} style={{ marginTop: 4 }}>
@@ -766,7 +775,7 @@ export function MapPage() {
                               <option value="">— switch —</option>
                               {fleet.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                             </select>
-                            <select className="enum-in" style={{ width: 130 }} value={curIf}
+                            <select className="enum-in" style={{ width: 150 }} value={curIf}
                                     disabled={!devVal}
                                     onChange={(e) => setLinkForm((f) => ({ ...f, [ik]: e.target.value }))}>
                               <option value="">— port —</option>
@@ -774,8 +783,8 @@ export function MapPage() {
                                 <option key={o.ifindex} value={o.ifindex}>{o.text}</option>
                               ))}
                             </select>
-                            {devVal && edp && options.length === 0 && (
-                              <span className="dim" style={{ fontSize: 11 }}>no EDP uplinks discovered</span>
+                            {devVal && ports && options.length === 0 && (
+                              <span className="dim" style={{ fontSize: 11 }}>no ports found</span>
                             )}
                           </div>
                         );
