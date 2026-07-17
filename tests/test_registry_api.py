@@ -284,6 +284,24 @@ def test_link_kind_provider_and_ports(tmp_path):
         assert link["a_device_id"] is None and link["b_device_id"] is None
 
 
+def test_redundant_links_between_same_pair_allowed(tmp_path):
+    """A site pair may carry several links (redundant fiber) — the old
+    duplicate-pair 409 is gone."""
+    url = f"sqlite:///{tmp_path/'r.db'}"
+    _seed(url)   # site BHS
+    engine = db.make_engine(url)
+    db.execute(engine, "INSERT INTO sites (name, tier, lat, lon, enabled) VALUES ('CHS','high',0,0,1)")
+    with _client(_conf(tmp_path, url)) as client:
+        assert client.post("/api/registry/links",
+                           json={"site_a": "BHS", "site_b": "CHS", "capacity_gbps": 10}).status_code == 200
+        # reversed order normalises to the same pair — still allowed, not a 409
+        assert client.post("/api/registry/links",
+                           json={"site_a": "CHS", "site_b": "BHS", "capacity_gbps": 1}).status_code == 200
+        pair = [l for l in client.get("/api/registry/links").json()
+                if {l["site_a"], l["site_b"]} == {"BHS", "CHS"}]
+        assert len(pair) == 2
+
+
 def test_group_key_link_and_counts(tmp_path):
     url = f"sqlite:///{tmp_path/'r.db'}"
     _seed(url)   # site BHS + device sw-1 at site 'BHS'
@@ -369,10 +387,8 @@ def test_fiber_link_crud(tmp_path):
         # create (endpoints normalised to sorted-name order)
         r = client.post("/api/registry/links", json={"site_a": "CHS", "site_b": "BHS", "capacity_gbps": 10})
         assert r.status_code == 200 and r.json()["site_a"] == "BHS" and r.json()["site_b"] == "CHS"
-        # duplicate (reversed) → 409
-        assert client.post("/api/registry/links",
-                           json={"site_a": "BHS", "site_b": "CHS"}).status_code == 409
-        # unknown site → 404; same-site → 422
+        # unknown site → 404; same-site → 422 (redundant same-pair links are
+        # allowed now — see test_redundant_links_between_same_pair_allowed)
         assert client.post("/api/registry/links",
                            json={"site_a": "BHS", "site_b": "NOPE"}).status_code == 404
         assert client.post("/api/registry/links",

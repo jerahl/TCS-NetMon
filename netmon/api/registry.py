@@ -578,16 +578,14 @@ def create_link(
     user: UserSession = Depends(require_role(Role.admin)),
 ) -> dict:
     """Register a fiber link between two sites. Endpoints stored in sorted-name
-    order so A↔B can't be registered twice reversed (matches the importer)."""
+    order (A↔B == B↔A). A pair may have several links — redundant fiber paths
+    are allowed, so no duplicate-pair check; distinguish them by path/capacity."""
     _require_edit(cfg)
     a, b = body.site_a.strip(), body.site_b.strip()
     if a == b:
         raise HTTPException(status_code=422, detail="a link needs two distinct sites")
     a, b = (a, b) if a <= b else (b, a)   # _norm_pair, mirroring topology.py
     aid, bid = _site_id(engine, a), _site_id(engine, b)
-    if db.fetch_one(engine, "SELECT 1 FROM fiber_links WHERE site_a_id = :a AND site_b_id = :b",
-                    {"a": aid, "b": bid}):
-        raise HTTPException(status_code=409, detail=f"a link between {a} and {b} already exists")
     path = _validate_path(body.path)
     kind = _norm_kind(body.link_kind)
     provider = (body.provider or "").strip() or None

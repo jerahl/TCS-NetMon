@@ -102,6 +102,7 @@ export function MapPage() {
   const [editMsg, setEditMsg] = React.useState(null);
   const [linkForm, setLinkForm] = React.useState(null);  // {kind,provider,aDev,aIf,bDev,bIf} for the edited link
   const [fleet, setFleet] = React.useState([]);          // switches for the port pickers
+  const [siteJoinKeys, setSiteJoinKeys] = React.useState({});  // map site name → devices.site join key
   const [portsByDev, setPortsByDev] = React.useState({});// deviceId → [{ifindex,name,oper_state}]
   const [edpByDev, setEdpByDev] = React.useState({});    // deviceId → [{ifindex, port}] discovered EDP uplinks
 
@@ -352,7 +353,12 @@ export function MapPage() {
   React.useEffect(() => {
     if (!edit) return;
     getJSON("/api/registry/sites")
-      .then((rows) => { editRef.current.siteIds = Object.fromEntries(rows.map((r) => [r.name, r.id])); })
+      .then((rows) => {
+        editRef.current.siteIds = Object.fromEntries(rows.map((r) => [r.name, r.id]));
+        // name → effective devices.site join key, to filter port-picker switches
+        // to the switches actually at each end's site.
+        setSiteJoinKeys(Object.fromEntries(rows.map((r) => [r.name, r.join_key || r.name])));
+      })
       .catch(() => { /* saves will error with a clear message */ });
   }, [edit]);
 
@@ -766,6 +772,19 @@ export function MapPage() {
                         if (curIf !== "" && !options.some((o) => String(o.ifindex) === String(curIf))) {
                           options = [{ ifindex: curIf, text: `${optText(curIf)} — current` }, ...options];
                         }
+                        // Show only switches at THIS end's site (fall back to the
+                        // whole fleet if none are classified there, so the picker
+                        // is never empty).
+                        const endSite = end === "a" ? elink.site_a : elink.site_b;
+                        const joinKey = siteJoinKeys[endSite] || endSite;
+                        let switches = fleet.filter((s) => s.site === joinKey);
+                        // Always keep the currently-selected switch visible even if
+                        // it's sited elsewhere (a legacy attach).
+                        if (devVal && !switches.some((s) => String(s.id) === String(devVal))) {
+                          const cur = fleet.find((s) => String(s.id) === String(devVal));
+                          if (cur) switches = [cur, ...switches];
+                        }
+                        if (switches.length === 0) switches = fleet;
                         return (
                           <div className="edit-row" key={end} style={{ marginTop: 4 }}>
                             <label className="dim" style={{ width: 42 }}>{end === "a" ? elink.site_a : elink.site_b}</label>
@@ -773,7 +792,7 @@ export function MapPage() {
                                     onChange={(e) => { const v = e.target.value;
                                       setLinkForm((f) => ({ ...f, [dk]: v, [ik]: "" })); if (v) loadPorts(v); }}>
                               <option value="">— switch —</option>
-                              {fleet.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                              {switches.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                             </select>
                             <select className="enum-in" style={{ width: 150 }} value={curIf}
                                     disabled={!devVal}
