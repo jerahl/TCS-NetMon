@@ -103,7 +103,7 @@ export function MapPage() {
   const [linkForm, setLinkForm] = React.useState(null);  // {kind,provider,aDev,aIf,bDev,bIf} for the edited link
   const [fleet, setFleet] = React.useState([]);          // switches for the port pickers
   const [portsByDev, setPortsByDev] = React.useState({});// deviceId → [{ifindex,name,oper_state}]
-  const [edpByDev, setEdpByDev] = React.useState({});    // deviceId → Set(ifindex) with an EDP neighbor
+  const [edpByDev, setEdpByDev] = React.useState({});    // deviceId → [{ifindex, port}] discovered EDP uplinks
 
   const rootRef = React.useRef(null);
   const mapEl = React.useRef(null);
@@ -463,13 +463,15 @@ export function MapPage() {
     getJSON(`/api/switches/${devId}/neighbors`)
       .then((ns) => setEdpByDev((m) => ({
         ...m,
-        [devId]: new Set(
-          (ns || [])
-            .filter((n) => String(n.protocol || "").toLowerCase() === "edp")
-            .map((n) => n.local_ifindex)
-        ),
+        // Built straight from the neighbor rows (not intersected with the port
+        // table) so a discovered uplink always shows even if its ifIndex isn't
+        // in switch_ports. This fleet's neighbors are EDP; a null protocol is
+        // treated as EDP, a non-EDP protocol (e.g. lldp) is excluded.
+        [devId]: (ns || [])
+          .filter((n) => !n.protocol || String(n.protocol).toLowerCase() === "edp")
+          .map((n) => ({ ifindex: n.local_ifindex, port: n.local_port })),
       })))
-      .catch(() => { /* no neighbor data → picker shows all ports as fallback */ });
+      .catch(() => { /* leave unset → picker falls back to all ports */ });
   }, []);
 
   // When a link is opened for editing, prime the details/ports form from the
@@ -733,12 +735,24 @@ export function MapPage() {
                         const dk = `${end}Dev`, ik = `${end}If`;
                         const devVal = linkForm?.[dk] ?? "";
                         const curIf = linkForm?.[ik] ?? "";
-                        const edp = edpByDev[devVal];   // Set(ifindex), or undefined while loading
-                        // Only EDP ports; keep the currently-saved port visible even if it
-                        // isn't (a legacy attach), so the selection still renders.
-                        const ports = (portsByDev[devVal] || []).filter(
-                          (p) => !edp || edp.has(p.ifindex) || String(p.ifindex) === String(curIf)
-                        );
+                        const edp = edpByDev[devVal];   // [{ifindex,port}] or undefined (loading / fetch failed)
+                        const portByIf = {};
+                        for (const p of portsByDev[devVal] || []) portByIf[p.ifindex] = p;
+                        const label = (ifx, name) => {
+                          const p = portByIf[ifx] || {};
+                          return (name || p.name || ifx) + (p.oper_state ? ` (${p.oper_state})` : "");
+                        };
+                        // Options come straight from the discovered EDP uplinks. If the
+                        // neighbors fetch hasn't resolved (or failed), fall back to all
+                        // ports so the picker is never mysteriously empty.
+                        let options = edp
+                          ? edp.map((e) => ({ ifindex: e.ifindex, text: label(e.ifindex, e.port) }))
+                          : (portsByDev[devVal] || []).map((p) => ({ ifindex: p.ifindex, text: label(p.ifindex, p.name) }));
+                        // Keep the currently-saved port selectable even if it's not an
+                        // EDP uplink (a legacy/manual attach), so the selection renders.
+                        if (curIf !== "" && !options.some((o) => String(o.ifindex) === String(curIf))) {
+                          options = [{ ifindex: curIf, text: `${label(curIf)} — current` }, ...options];
+                        }
                         return (
                           <div className="edit-row" key={end} style={{ marginTop: 4 }}>
                             <label className="dim" style={{ width: 42 }}>{end === "a" ? elink.site_a : elink.site_b}</label>
@@ -748,18 +762,16 @@ export function MapPage() {
                               <option value="">— switch —</option>
                               {fleet.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                             </select>
-                            <select className="enum-in" style={{ width: 110 }} value={curIf}
+                            <select className="enum-in" style={{ width: 130 }} value={curIf}
                                     disabled={!devVal}
                                     onChange={(e) => setLinkForm((f) => ({ ...f, [ik]: e.target.value }))}>
                               <option value="">— port —</option>
-                              {ports.map((p) => (
-                                <option key={p.ifindex} value={p.ifindex}>
-                                  {(p.name || p.ifindex) + (p.oper_state ? ` (${p.oper_state})` : "")}
-                                </option>
+                              {options.map((o) => (
+                                <option key={o.ifindex} value={o.ifindex}>{o.text}</option>
                               ))}
                             </select>
-                            {devVal && edp && ports.length === 0 && (
-                              <span className="dim" style={{ fontSize: 11 }}>no EDP ports</span>
+                            {devVal && edp && options.length === 0 && (
+                              <span className="dim" style={{ fontSize: 11 }}>no EDP uplinks discovered</span>
                             )}
                           </div>
                         );
