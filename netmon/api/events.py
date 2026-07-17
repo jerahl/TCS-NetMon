@@ -48,6 +48,7 @@ def _filters(
     q: str | None,
     since: datetime | None,
     until: datetime | None,
+    exclude_device_type: str | None = None,
 ) -> tuple[str, dict]:
     """Build a shared WHERE clause + params for the feed and the stats query.
 
@@ -68,6 +69,9 @@ def _filters(
     if device_type:
         clauses.append("d.device_type = :device_type")
         params["device_type"] = device_type
+    if exclude_device_type:
+        clauses.append("d.device_type <> :exclude_device_type")
+        params["exclude_device_type"] = exclude_device_type
     if dimension:
         clauses.append("e.dimension = :dimension")
         params["dimension"] = dimension
@@ -98,9 +102,11 @@ def events_json(
     q: str | None = None,
     since: datetime | None = None,
     until: datetime | None = None,
+    exclude_device_type: str | None = None,
 ) -> list[MapEvent]:
     where, params = _filters(
-        severity, source, site, device_type, dimension, q, since, until
+        severity, source, site, device_type, dimension, q, since, until,
+        exclude_device_type,
     )
     params["limit"] = limit
     params["offset"] = offset

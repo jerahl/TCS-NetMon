@@ -19,8 +19,9 @@ S = SiteStatus
 
 # ---------------------------------------------------------------- pure logic
 
-def _flags(pinged=0, ping_down=0, impaired=0, has_state=1):
-    return {"pinged": pinged, "ping_down": ping_down, "impaired": impaired, "has_state": has_state}
+def _flags(pinged=0, ping_down=0, device_type="switch", has_state=1):
+    return {"pinged": pinged, "ping_down": ping_down,
+            "device_type": device_type, "has_state": has_state}
 
 
 def test_rollup_empty_site_is_unknown():
@@ -36,16 +37,31 @@ def test_rollup_all_pinged_down_is_down():
     assert rollup_site(devs)[0] is S.down
 
 
-def test_rollup_partial_down_is_degraded():
-    devs = [_flags(pinged=1, ping_down=1), _flags(pinged=1)]
-    status, total, down, degraded = rollup_site(devs)
-    assert status is S.degraded and total == 2 and down == 1 and degraded == 0
+def test_rollup_switch_down_is_degraded():
+    # A switch down (but not a full outage) → degraded; switch_down is counted.
+    devs = [_flags(pinged=1, ping_down=1, device_type="switch"), _flags(pinged=1)]
+    status, total, down, switch_down = rollup_site(devs)
+    assert status is S.degraded and total == 2 and down == 1 and switch_down == 1
 
 
-def test_rollup_impaired_only_is_degraded():
-    # e.g. source_status=blind (warn) while ping is up.
-    devs = [_flags(pinged=1, impaired=1)]
-    assert rollup_site(devs)[0] is S.degraded
+def test_rollup_non_switch_down_does_not_degrade():
+    # A down camera/AP/phone with the switch up → site stays UP (owner rule
+    # 2026-07-17: only a switch down or an alarmed trunk degrades a site).
+    for t in ("ap", "camera", "trunk", "other"):
+        devs = [_flags(pinged=1, device_type="switch"),
+                _flags(pinged=1, ping_down=1, device_type=t)]
+        assert rollup_site(devs)[0] is S.up, t
+
+
+def test_rollup_warn_only_does_not_degrade():
+    # A blind source / a switch with port errors (no ping-down) must NOT
+    # degrade anymore — the old "any warn/crit" rule is gone.
+    assert rollup_site([_flags(pinged=1, device_type="switch")])[0] is S.up
+
+
+def test_rollup_trunk_alarm_degrades():
+    # No device down, but the uplink trunk is alarmed → degraded.
+    assert rollup_site([_flags(pinged=1, device_type="switch")], trunk_alarm=True)[0] is S.degraded
 
 
 def test_rollup_healthy_is_up():
@@ -125,9 +141,11 @@ def test_sites_rollup(tmp_path):
         assert sites["BHS"]["status"] == "down"
         assert sites["BHS"]["devices_total"] == 2
         assert sites["BHS"]["devices_down"] == 2
-        assert sites["CHS"]["status"] == "degraded"      # blind device
+        # CHS has a blind AP (warn) but no switch down and no trunk alarm →
+        # UP now (a mere warning no longer degrades a site — owner rule).
+        assert sites["CHS"]["status"] == "up"
         assert sites["CHS"]["devices_total"] == 2        # disabled one excluded
-        assert sites["CHS"]["devices_degraded"] == 1
+        assert sites["CHS"]["devices_degraded"] == 0
         assert sites["CO"]["status"] == "unknown"        # no devices, never 'up'
         assert sites["CO"]["tier"] == "hub"
         assert isinstance(sites["CO"]["lat"], float)
@@ -177,6 +195,31 @@ def test_link_status_from_attached_ports(tmp_path):
         assert link["status"] == "down"          # port oper down wins
         assert link["speed_mbps"] == 10000
         assert link["utilization_source"] == "snmp_inventory"
+
+
+def test_trunk_alarm_degrades_endpoint_site(tmp_path):
+    """A port-backed fiber link whose attached port is down degrades its
+    endpoint site even when no device is ping-down (owner rule: an alarmed
+    uplink trunk degrades the site)."""
+    url = f"sqlite:///{tmp_path/'netmon.db'}"
+    _seed(url)   # CHS: switch(3) up, ap(4) up+blind → would be 'up' on its own
+    engine = db.make_engine(url)
+    now = datetime.now(timezone.utc)
+    db.execute(engine, "INSERT INTO devices (name, site, device_type, enabled) "
+                       "VALUES ('CHS-Core-2','CHS','switch',1)")
+    swid = db.fetch_one(engine, "SELECT id FROM devices WHERE name='CHS-Core-2'")["id"]
+    db.execute(engine, "INSERT INTO switch_ports (device_id, ifindex, oper_state, speed_mbps, updated_at) "
+                       "VALUES (:d, 1001, 'down', 10000, :now)", {"d": swid, "now": now})
+    lid = db.fetch_one(engine,
+        "SELECT l.id FROM fiber_links l JOIN sites sa ON sa.id=l.site_a_id "
+        "JOIN sites sb ON sb.id=l.site_b_id "
+        "WHERE (sa.name='CHS' AND sb.name='CO') OR (sa.name='CO' AND sb.name='CHS')")["id"]
+    db.execute(engine, "UPDATE fiber_links SET a_device_id=:d, a_ifindex=1001 WHERE id=:id",
+               {"d": swid, "id": lid})
+    with TestClient(_app(write_config(tmp_path, db_url=url))) as client:
+        sites = {s["name"]: s for s in client.get("/api/sites").json()}
+        assert sites["CHS"]["status"] == "degraded"      # trunk alarm, no device down
+        assert sites["CHS"]["devices_down"] == 0
 
 
 def test_links_derive_status_and_null_utilization(tmp_path):

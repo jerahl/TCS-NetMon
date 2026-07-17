@@ -64,6 +64,9 @@ def test_events_filters(tmp_path):
         assert len(client.get("/api/events?source=milestone").json()) == 1
         assert len(client.get("/api/events?site=BHS").json()) == 2
         assert len(client.get("/api/events?device_type=camera").json()) == 1
+        # exclude_device_type drops a whole type (the map hides AP noise this way).
+        assert len(client.get("/api/events?exclude_device_type=camera").json()) == 2
+        assert len(client.get("/api/events?exclude_device_type=switch").json()) == 1
         assert len(client.get("/api/events?dimension=snmp").json()) == 1
         # q matches device name and new_value.
         assert len(client.get("/api/events?q=CHS").json()) == 1

@@ -26,17 +26,21 @@ from netmon.models.schemas import (
 
 router = APIRouter(tags=["map"])
 
-# One row per enabled device: did any of its state rows trip each flag?
+# One row per enabled device: its type + whether its ping dimension is down.
+# device_type is carried so the roll-up can treat switches (infrastructure) as
+# the only devices whose being down degrades a site — a down camera/AP/phone
+# does not, and a mere warn (e.g. a port with errors, or a blind source) never
+# does (spec 09; owner directive 2026-07-17).
 _DEVICE_FLAGS_SQL = """
 SELECT d.site AS site,
+       d.device_type AS device_type,
        MAX(CASE WHEN s.dimension = 'ping' THEN 1 ELSE 0 END) AS pinged,
        MAX(CASE WHEN s.dimension = 'ping' AND s.value = 'down' THEN 1 ELSE 0 END) AS ping_down,
-       MAX(CASE WHEN s.severity IN ('warn','crit') THEN 1 ELSE 0 END) AS impaired,
        MAX(CASE WHEN s.device_id IS NULL THEN 0 ELSE 1 END) AS has_state
 FROM devices d
 LEFT JOIN device_state s ON s.device_id = d.id
 WHERE d.enabled = 1 AND d.site IS NOT NULL
-GROUP BY d.id, d.site
+GROUP BY d.id, d.site, d.device_type
 """
 
 _SITES_SQL = """
@@ -60,25 +64,38 @@ WHERE l.enabled = 1 AND sa.enabled = 1 AND sb.enabled = 1
 ORDER BY l.id
 """
 
-def rollup_site(device_flags: list[dict[str, Any]]) -> tuple[SiteStatus, int, int, int]:
-    """Roll one site's device flag rows up to (status, total, down, degraded).
+def rollup_site(
+    device_flags: list[dict[str, Any]], trunk_alarm: bool = False
+) -> tuple[SiteStatus, int, int, int]:
+    """Roll one site's device flag rows up to (status, total, down, switch_down).
 
-    Semantics (spec 09): down = every ping-monitored device is down (and there
-    is at least one); degraded = any device down or impaired; unknown = no
-    state data at all; else up. Unknown never renders as up.
+    Semantics (spec 09, revised 2026-07-17):
+      * ``down``     — every ping-monitored device is down (a full outage).
+      * ``degraded`` — not fully down, but a **switch** is down OR a trunk
+        fiber link into the site is alarmed (``trunk_alarm``). A down
+        camera/AP/phone does NOT degrade the site, and neither does a mere
+        warning (port errors, a blind source, stale backup) — only a switch
+        actually being down or the uplink being impaired.
+      * ``unknown``  — no state data at all (never renders as up).
+      * else ``up``.
+
+    The 4th return value is the count of switches down (the degraded drivers),
+    surfaced to the UI; it is a subset of ``down``.
     """
     total = len(device_flags)
     pinged = sum(1 for d in device_flags if d["pinged"])
     down = sum(1 for d in device_flags if d["ping_down"])
-    degraded = sum(1 for d in device_flags if not d["ping_down"] and d["impaired"])
+    switch_down = sum(
+        1 for d in device_flags if d["ping_down"] and d.get("device_type") == "switch"
+    )
 
     if total == 0 or not any(d["has_state"] for d in device_flags):
-        return SiteStatus.unknown, total, down, degraded
+        return SiteStatus.unknown, total, down, switch_down
     if pinged > 0 and down == pinged:
-        return SiteStatus.down, total, down, degraded
-    if down or degraded:
-        return SiteStatus.degraded, total, down, degraded
-    return SiteStatus.up, total, down, degraded
+        return SiteStatus.down, total, down, switch_down
+    if switch_down or trunk_alarm:
+        return SiteStatus.degraded, total, down, switch_down
+    return SiteStatus.up, total, down, switch_down
 
 
 _RANK = {SiteStatus.up: 1, SiteStatus.degraded: 2, SiteStatus.down: 3}
@@ -119,17 +136,43 @@ def _tier(value: Any) -> SiteTier:
         return SiteTier.other
 
 
+def _sites_with_trunk_alarm(engine: Engine) -> set[str]:
+    """Site names that have a **port-backed** fiber link whose attached port(s)
+    report down — i.e. an impaired uplink trunk. Only port-backed links count:
+    their status comes from ``switch_ports`` and so is independent of the site
+    roll-up (a non-port-backed link derives its status *from* the endpoints,
+    which would be circular). Both endpoints of an alarmed link are flagged."""
+    rows = db.fetch_all(engine, _LINKS_SQL)
+    refs: set[tuple[int, int]] = set()
+    for r in rows:
+        refs.update(_link_ends(r))
+    ports = _port_index(engine, refs)
+    alarmed: set[str] = set()
+    for r in rows:
+        ends = _link_ends(r)
+        if not ends:
+            continue
+        status, *_ = _port_derived(ends, ports)
+        if status is SiteStatus.down:
+            alarmed.add(r["site_a"])
+            alarmed.add(r["site_b"])
+    return alarmed
+
+
 def _site_rollups(engine: Engine) -> list[SiteRollup]:
     flags_by_site: dict[str, list[dict[str, Any]]] = {}
     for row in db.fetch_all(engine, _DEVICE_FLAGS_SQL):
         flags_by_site.setdefault(row["site"], []).append(row)
+    trunk_alarm_sites = _sites_with_trunk_alarm(engine)
 
     out: list[SiteRollup] = []
     for site in db.fetch_all(engine, _SITES_SQL):
         # Effective join key: an explicit group_key link wins over the marker
         # name, so a map location can point at any devices.site group.
         join_key = site.get("group_key") or site["name"]
-        status, total, down, degraded = rollup_site(flags_by_site.get(join_key, []))
+        status, total, down, degraded = rollup_site(
+            flags_by_site.get(join_key, []), site["name"] in trunk_alarm_sites
+        )
         out.append(
             SiteRollup(
                 name=site["name"],
