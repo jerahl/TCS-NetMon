@@ -276,11 +276,12 @@ class XiqCollector(Collector):
             fleet[str(dev.id)] = dev
 
         written = 0
+        absent: list[dict[str, Any]] = []
         for r in registry:
             dev = fleet.get(str(r["xiq_device_id"]))
             if dev is None:
-                # In our registry but absent from a *successful* fleet fetch —
-                # leave prior state rather than fabricate a down/blind.
+                # In our registry but absent from a *successful* fleet fetch.
+                absent.append(r)
                 continue
             value = "up" if dev.connected else "down"
             severity = "ok" if dev.connected else "crit"
@@ -293,6 +294,15 @@ class XiqCollector(Collector):
                     {"ip": dev.ip_address, "id": int(r["id"])},
                 )
             written += 1
+
+        # A successful fetch means XIQ IS reachable, so nothing is truly
+        # "blind". Present devices cleared to up/down above; also clear a STALE
+        # blind on any registry device XIQ no longer lists (a re-typed switch,
+        # a removed/renamed device, a stale xiq_device_id) — otherwise it stays
+        # blind forever and lingers as a phantom XIQ problem the engine never
+        # closes. Only `blind` is reset (→ unknown); a prior up/down is left as
+        # honest, staleness-badged state and never fabricated.
+        written += self._clear_stale_blind(absent)
 
         xiq_to_dev = {str(r["xiq_device_id"]): int(r["id"]) for r in registry}
         # Registry device_type is authoritative for which devices flow through
@@ -336,6 +346,30 @@ class XiqCollector(Collector):
     def _mark_blind(self, registry: list[dict[str, Any]]) -> None:
         for r in registry:
             write_state(self.engine, int(r["id"]), DIMENSION, "blind", "warn", "xiq")
+
+    def _clear_stale_blind(self, absent: list[dict[str, Any]]) -> int:
+        """Reset a lingering ``blind`` source_status to ``unknown`` for devices
+        XIQ no longer lists (the fetch succeeded, so the source isn't blind).
+        Returns the number of rows transitioned."""
+        if not absent:
+            return 0
+        ids = [int(r["id"]) for r in absent]
+        ph = ",".join(f":id{i}" for i in range(len(ids)))
+        params = {f"id{i}": v for i, v in enumerate(ids)}
+        stale = db.fetch_all(
+            self.engine,
+            f"SELECT device_id FROM device_state "
+            f"WHERE dimension = :dim AND value = 'blind' AND device_id IN ({ph})",
+            {"dim": DIMENSION, **params},
+        )
+        cleared = 0
+        for row in stale:
+            if write_state(self.engine, int(row["device_id"]), DIMENSION,
+                           "unknown", "unknown", "xiq"):
+                cleared += 1
+        if cleared:
+            log.info("xiq: cleared stale blind on %d device(s) XIQ no longer lists", cleared)
+        return cleared
 
 
 def main(argv: list[str] | None = None) -> int:
