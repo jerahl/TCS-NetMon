@@ -68,6 +68,35 @@ def role_from_attributes(attributes: dict[str, list], cfg: AuthConfig) -> Role |
     return best
 
 
+def explain_role_mapping(attributes: dict[str, list], cfg: AuthConfig) -> dict[str, Any]:
+    """Diagnostic breakdown of how ``attributes`` map to a NetMon role.
+
+    Pure — no I/O. Powers the ``saml_debug`` ACS view: it names the claim
+    attributes NetMon looks at, the values it actually saw for each, which
+    configured grant each matched, and the resulting role (mirrors
+    ``role_from_attributes`` exactly). ``matches`` is ordered viewer→admin.
+    """
+    role_vals = [str(v) for v in attributes.get(cfg.role_attr, []) if v is not None]
+    group_vals = [str(v) for v in attributes.get(cfg.group_attr, []) if v is not None]
+
+    matches: list[dict[str, Any]] = []
+    for role_name in ROLES:  # low → high
+        via_role = sorted(set(role_vals) & cfg.role_values.get(role_name, set()))
+        via_group = sorted(set(group_vals) & cfg.group_values.get(role_name, set()))
+        if via_role or via_group:
+            matches.append({"role": role_name, "via_role": via_role, "via_group": via_group})
+
+    mapped = role_from_attributes(attributes, cfg)
+    return {
+        "role_attr": cfg.role_attr,
+        "group_attr": cfg.group_attr,
+        "role_values_seen": role_vals,
+        "group_values_seen": group_vals,
+        "matches": matches,
+        "mapped_role": mapped.value if mapped is not None else None,
+    }
+
+
 def build_auth(request_data: dict[str, Any], cfg: AuthConfig):
     """Construct a OneLogin auth object (lazy import of python3-saml)."""
     try:

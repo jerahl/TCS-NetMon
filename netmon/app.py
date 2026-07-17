@@ -165,6 +165,13 @@ async def lifespan(app: FastAPI):
         )
         app.state.sessions = SessionStore(ttl_seconds=cfg.web.session_ttl)
 
+    if cfg.auth.saml_debug:
+        log.warning(
+            "[auth] saml_debug is ON: the SAML ACS dumps assertion attributes "
+            "and issues NO session. Turn it off and restart once role mapping "
+            "is done."
+        )
+
     supervisor: Supervisor = app.state.supervisor
     register_tasks(app, cfg, app.state.engine)
     await supervisor.start()

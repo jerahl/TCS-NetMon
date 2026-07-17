@@ -2,10 +2,15 @@ import pytest
 from fastapi import Response
 from fastapi.testclient import TestClient
 
-from netmon.api.auth_routes import complete_login
+from netmon.api.auth_routes import complete_login, saml_debug_page
 from netmon.app import create_app
 from netmon.auth.local import check_local, hash_password, verify_password
-from netmon.auth.saml import SamlError, role_from_attributes, sp_metadata
+from netmon.auth.saml import (
+    SamlError,
+    explain_role_mapping,
+    role_from_attributes,
+    sp_metadata,
+)
 from netmon.auth.sessions import SessionStore
 from netmon.config import AuthConfig, load_config
 from netmon.models.schemas import Role
@@ -40,6 +45,61 @@ def test_role_from_attributes_picks_highest():
     assert role_from_attributes({"role": ["Administrator"], "group_ids": ["1"]}, cfg) is Role.admin
     # Nothing mapped → None (denied).
     assert role_from_attributes({"role": ["Nobody"], "group_ids": ["999"]}, cfg) is None
+
+
+def test_explain_role_mapping_reports_matches_and_verdict():
+    cfg = _auth()  # role: Administrator→admin, Staff→viewer; group: 42→operator
+    report = explain_role_mapping({"role": ["Staff"], "group_ids": ["42"]}, cfg)
+    assert report["role_attr"] == "role" and report["group_attr"] == "group_ids"
+    assert report["role_values_seen"] == ["Staff"]
+    assert report["group_values_seen"] == ["42"]
+    assert report["mapped_role"] == "operator"  # highest of viewer+operator
+    # Ordered viewer→admin; each match records what it matched on.
+    roles = [m["role"] for m in report["matches"]]
+    assert roles == ["viewer", "operator"]
+    viewer = next(m for m in report["matches"] if m["role"] == "viewer")
+    operator = next(m for m in report["matches"] if m["role"] == "operator")
+    assert viewer["via_role"] == ["Staff"] and viewer["via_group"] == []
+    assert operator["via_group"] == ["42"] and operator["via_role"] == []
+
+
+def test_explain_role_mapping_unmapped_user():
+    report = explain_role_mapping({"role": ["Nobody"], "group_ids": ["999"]}, _auth())
+    assert report["mapped_role"] is None
+    assert report["matches"] == []
+    assert report["role_values_seen"] == ["Nobody"]
+
+
+def test_saml_debug_page_lists_attributes_and_verdict(tmp_path):
+    cfg = load_config(write_config(tmp_path, dev_bypass=False,
+                                   extra_auth="saml_role_admin = Administrator"))
+    html = saml_debug_page(
+        {"role": ["Administrator"], "email": ["alice@tcs"]},
+        "alice@tcs", "urn:...:emailAddress", "_sess123", cfg,
+    )
+    assert "Administrator" in html and "alice@tcs" in html
+    assert "email" in html  # every released attribute is shown, not just mapped ones
+    assert "_sess123" in html
+    assert "admin" in html and "no session was" in html
+
+
+def test_saml_debug_page_flags_unmapped_and_escapes(tmp_path):
+    cfg = load_config(write_config(tmp_path, dev_bypass=False,
+                                   extra_auth="saml_role_admin = Administrator"))
+    html = saml_debug_page(
+        {"role": ["<script>evil</script>"]}, "m@tcs", None, None, cfg,
+    )
+    assert "no NetMon role" in html
+    # IdP-supplied values are untrusted → must be escaped, never raw.
+    assert "<script>evil</script>" not in html
+    assert "&lt;script&gt;" in html
+
+
+def test_saml_debug_config_flag(tmp_path):
+    cfg = load_config(write_config(tmp_path, dev_bypass=False, extra_auth="saml_debug = true"))
+    assert cfg.auth.saml_debug is True
+    cfg2 = load_config(write_config(tmp_path, dev_bypass=False))
+    assert cfg2.auth.saml_debug is False
 
 
 def test_session_store_lifecycle():

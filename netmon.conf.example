@@ -70,6 +70,15 @@ saml_group_attr = group_ids
 # saml_group_admin = 1001
 # saml_group_operator = 1002
 #
+# DIAGNOSTIC — discover what ClassLink actually releases. When true, the ACS
+# endpoint (POST /auth/saml/acs) validates the assertion then renders a page
+# listing every attribute name + value and the role it maps to, WITHOUT issuing
+# a session. Log in via ClassLink, read off the real attribute names/values,
+# fill in the saml_role_*/saml_group_* maps above, then set this back to false
+# and restart. It cannot be a login backdoor (no session is minted), but leave
+# it off in normal operation — the app logs a warning while it is on.
+# saml_debug = false
+#
 # BREAK-GLASS LOCAL ACCOUNT — works when ClassLink/the network is down. The
 # password is a PBKDF2 hash, never plaintext; generate it with:
 #   python -m netmon.auth.local
