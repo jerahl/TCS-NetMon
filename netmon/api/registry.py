@@ -22,6 +22,7 @@ from netmon import db, enums
 from netmon.api.deps import get_config, get_engine, require_role
 from netmon.config import Config
 from netmon.models.schemas import DeviceType, Role, SiteTier, UserSession
+from netmon.seed import UNASSIGNED_SITE
 
 log = logging.getLogger("netmon.api.registry")
 
@@ -219,7 +220,10 @@ def list_devices(
            "FROM devices")
     params: dict = {}
     if site == "__none__":
-        sql += " WHERE site IS NULL OR site = ''"
+        # "Unassigned" has two on-disk forms: NULL/'' (web unassign) and the
+        # literal seed/import sentinel; both must count as unassigned.
+        sql += " WHERE site IS NULL OR site = '' OR site = :unassigned"
+        params["unassigned"] = UNASSIGNED_SITE
     elif site is not None:
         sql += " WHERE site = :s"
         params["s"] = site

@@ -8,6 +8,9 @@ import { Card, Loading, ErrorMsg, sevColor } from "../primitives.jsx";
 
 const TIERS = ["hub", "high", "middle", "elementary", "other"];
 const DEVICE_TYPES = ["switch", "ap", "camera", "recording_server", "trunk", "pbx", "other"];
+// A device has no real site when its site is null/empty (web "unassign") OR the
+// literal seed/import sentinel "Unassigned" — both must read as unassigned.
+const isUnassigned = (d) => !d.site || d.site === "Unassigned";
 const LABEL_POS = ["", "top", "bottom", "left", "right"];   // "" = default (top)
 const BLANK = { name: "", group_key: "", display_name: "", tier: "other", label_pos: "", lat: "", lon: "", enabled: true };
 
@@ -182,7 +185,7 @@ function DeviceAssignments({ sites, onDone }) {
 
   const types = Array.from(new Set(devices.map((d) => d.device_type))).sort();
   const shown = devices.filter((d) =>
-    (!filterSite || (filterSite === "__none__" ? !d.site : d.site === filterSite)) &&
+    (!filterSite || (filterSite === "__none__" ? isUnassigned(d) : d.site === filterSite)) &&
     (!filterType || d.device_type === filterType));
 
   const toggle = (id) => setSel((s) => {
@@ -331,7 +334,7 @@ function DeviceAssignments({ sites, onDone }) {
               <td>{d.name}</td>
               <td className="dim">{d.device_type}</td>
               <td className="mono dim">{d.mgmt_ip || "—"}</td>
-              <td>{d.site || <span className="dim">unassigned</span>}</td>
+              <td>{isUnassigned(d) ? <span className="dim">unassigned</span> : d.site}</td>
               <td><button type="button" className="btn" onClick={() => {
                 setEditDev({ id: d.id, name: d.name, device_type: d.device_type,
                   mgmt_ip: d.mgmt_ip || "", snmp_capable: !!d.snmp_capable,

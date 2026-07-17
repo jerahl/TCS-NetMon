@@ -107,6 +107,22 @@ def test_list_and_assign_devices(tmp_path):
     assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM devices WHERE site='CHS'")["n"] == 2
 
 
+def test_unassigned_filter_matches_null_and_literal_sentinel(tmp_path):
+    """"Unassigned" has two on-disk forms — NULL (web unassign) and the literal
+    seed/import sentinel "Unassigned". The __none__ filter must catch both."""
+    url = f"sqlite:///{tmp_path/'r.db'}"
+    _seed(url)   # sw-1 at BHS
+    engine = db.make_engine(url)
+    db.execute(engine, "INSERT INTO devices (name, site, device_type, enabled) VALUES "
+                       "('ap-null', NULL, 'ap', 1),"
+                       "('ap-seed', 'Unassigned', 'ap', 1)")
+    with _client(_conf(tmp_path, url)) as client:
+        none = {d["name"] for d in client.get("/api/registry/devices?site=__none__").json()}
+        assert none == {"ap-null", "ap-seed"}   # sw-1 (BHS) excluded
+        # a real site still filters exactly
+        assert {d["name"] for d in client.get("/api/registry/devices?site=BHS").json()} == {"sw-1"}
+
+
 def test_assign_unknown_site_rejected(tmp_path):
     url = f"sqlite:///{tmp_path/'r.db'}"
     _seed(url)
