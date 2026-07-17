@@ -463,7 +463,10 @@ table.grid.kv td:first-child { color: var(--dim); width: 160px; }
 
 /* ---- ⌘K command palette (phase 10.5) -------------------------------- */
 .cmdk-scrim {
-  position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 200;
+  /* Above the SSH modal (2000), the map's Leaflet panes/controls (~1000) and
+     its absolutely-positioned chips/legend (700–900) — the palette is the
+     top-most overlay, reachable from any page including the full-bleed map. */
+  position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 2500;
   display: flex; justify-content: center; align-items: flex-start; padding-top: 12vh;
 }
 .cmdk {
