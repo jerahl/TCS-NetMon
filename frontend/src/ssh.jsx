@@ -29,11 +29,12 @@ function loadFacts() {
 const CAN_SSH = new Set(["operator", "admin"]);
 
 // Build the embed URL. /terminal is ssheasy's chrome-free, iframe-first page
-// (xterm.js + WASM client only). connect=true auto-connects to the host and
-// then prompts for credentials in the terminal — we deliberately pass no user
-// or password in the URL.
+// (xterm.js + WASM client only). embed=1 strips the chrome; passing host+port
+// auto-connects, then ssheasy prompts for credentials in the terminal — we
+// deliberately pass no user or password in the URL. This mirrors the proven
+// ZCD/Zabbix embed exactly: /terminal?host=<ip>&port=22&embed=1.
 function embedUrl(base, host, port) {
-  const q = new URLSearchParams({ host, port: String(port || 22), connect: "true" });
+  const q = new URLSearchParams({ host, port: String(port || 22), embed: "1" });
   return `${base}/terminal?${q.toString()}`;
 }
 

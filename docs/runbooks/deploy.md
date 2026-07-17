@@ -202,11 +202,21 @@ NetMon's own `sites`/`devices` rows (never a source) and is refused when
 **SSH to a device (SSHEASY):** set `[web] ssheasy_url` to the base URL of a
 deployed SSHEASY (`jerahl/ssheasy`) web SSH client. An "SSH" button then
 appears on switch/AP detail pages for operators/admins, opening
-`<ssheasy_url>/terminal?host=<mgmt_ip>&port=22&connect=true` in an embedded
-iframe. Credentials are entered in the terminal — NetMon never stores or
-forwards them. If SSHEASY runs on a different origin, allow NetMon's origin in
-its `frame-ancestors` (nginx CSP) so the iframe is permitted. Leave
-`ssheasy_url` empty to hide the affordance.
+`<ssheasy_url>/terminal?host=<mgmt_ip>&port=22&embed=1` in an embedded iframe
+(mirrors the ZCD/Zabbix embed exactly). Credentials are entered in the
+terminal — NetMon never stores or forwards them. Set `ssheasy_url` to the full
+scheme+host+port SSHEASY is reached at (its container publishes `:8080`, e.g.
+`ssheasy_url = http://ssheasy.example.internal:8080`). Two deploy gotchas make
+the iframe show "refused to connect":
+
+- **`frame-ancestors`** — SSHEASY's `nginx/nginx.conf` CSP must list NetMon's
+  exact origin (scheme + host + port, e.g. `https://netmon.example.internal`),
+  then `nginx -s reload`. A bare hostname does not match.
+- **Mixed content** — SSHEASY ships HTTP-only. A browser will not embed an
+  `http://` iframe inside an `https://` NetMon page; serve SSHEASY over TLS (or
+  use the modal's open-in-new-tab escape, which is not subject to framing).
+
+Leave `ssheasy_url` empty to hide the affordance.
 
 ## 5. Run the app
 

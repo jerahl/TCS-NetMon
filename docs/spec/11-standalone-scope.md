@@ -192,7 +192,7 @@ shadow-alert diff has run clean for the agreed window.
 - **SSHEASY integration landed 2026-07-16.** SSHEASY (`jerahl/ssheasy`) is a
   browser SSH client (xterm.js + WASM) embeddable in an iframe. NetMon adds an
   operator/admin-gated **"SSH" button** on device detail pages (switch + AP)
-  that opens `<[web] ssheasy_url>/terminal?host=<mgmt_ip>&port=22&connect=true`
+  that opens `<[web] ssheasy_url>/terminal?host=<mgmt_ip>&port=22&embed=1`
   in a modal iframe (with an open-in-new-tab escape hatch). **No credentials
   are ever handled by NetMon** — ssheasy prompts for the username/password in
   the terminal, so read-only-first (§4.1) holds: this is a launch link, not a
