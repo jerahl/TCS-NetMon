@@ -17,6 +17,9 @@ export function ApDetailPage({ id }) {
     Promise.all([getJSON(`/api/devices/${id}`), getJSON("/api/status")])
       .then(([dev, rows]) => {
         if (!live) return;
+        // A switch belongs on the Switches page (faceplate/ports/PoE), never
+        // "under AP" — bounce there if we were reached via an #/ap/ link.
+        if (dev.device_type === "switch") { location.replace(`#/switches/${id}`); return; }
         setDevice(dev);
         setStatus(rows.find((r) => String(r.id) === String(id)) || null);
         if (dev.device_type === "ap") {
