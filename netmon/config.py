@@ -72,6 +72,13 @@ class AuthConfig:
     # netmon role -> the claim values / group_ids that grant it.
     role_values: dict[str, set[str]] = field(default_factory=dict)
     group_values: dict[str, set[str]] = field(default_factory=dict)
+    # Diagnostic: when true, the ACS endpoint renders the received assertion's
+    # attributes (names/values) + the role-mapping verdict instead of logging
+    # the user in. Lets an admin discover what ClassLink actually releases so
+    # the saml_role_*/saml_group_* maps can be filled in. Default off; the app
+    # logs a loud warning at startup while it is enabled. No session is issued
+    # in this mode, so it cannot be a login backdoor.
+    saml_debug: bool = False
     # Break-glass local account (works with no IdP / network). Password is a
     # PBKDF2 hash (never plaintext). Distinct from the dev bypass.
     local_user: str = ""
@@ -278,6 +285,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         group_attr=parser.get("auth", "saml_group_attr", fallback="group_ids").strip(),
         role_values=role_values,
         group_values=group_values,
+        saml_debug=_as_bool(parser.get("auth", "saml_debug", fallback="false")),
         local_user=parser.get("auth", "local_user", fallback="").strip(),
         local_password_hash=parser.get("auth", "local_password_hash", fallback="").strip(),
         local_role=local_role,
