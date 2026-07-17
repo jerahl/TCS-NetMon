@@ -145,12 +145,26 @@ CREATE TABLE maintenance_windows (
 """
 
 
+SESSIONS_DDL_SQLITE = """
+CREATE TABLE sessions (
+    token_hash TEXT PRIMARY KEY,
+    username TEXT NOT NULL,
+    role TEXT NOT NULL,
+    groups_json TEXT NOT NULL,
+    created_at TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL
+)
+"""
+
+
 SITES_DDL_SQLITE = """
 CREATE TABLE sites (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
+    group_key TEXT,
     display_name TEXT,
     tier TEXT NOT NULL DEFAULT 'other',
+    label_pos TEXT,
     lat REAL NOT NULL,
     lon REAL NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1
@@ -164,6 +178,12 @@ CREATE TABLE fiber_links (
     site_b_id INTEGER NOT NULL,
     capacity_gbps REAL NOT NULL DEFAULT 1.0,
     path TEXT,
+    link_kind TEXT NOT NULL DEFAULT 'owned',
+    provider TEXT,
+    a_device_id INTEGER,
+    a_ifindex INTEGER,
+    b_device_id INTEGER,
+    b_ifindex INTEGER,
     enabled INTEGER NOT NULL DEFAULT 1,
     UNIQUE (site_a_id, site_b_id)
 )
@@ -220,14 +240,16 @@ CREATE TABLE fdb_entries (
 )
 """
 
-LLDP_NEIGHBORS_DDL_SQLITE = """
-CREATE TABLE lldp_neighbors (
+NEIGHBORS_DDL_SQLITE = """
+CREATE TABLE neighbors (
     device_id INTEGER NOT NULL,
     local_ifindex INTEGER NOT NULL,
     remote_sysname TEXT,
     remote_port TEXT,
     remote_sysdesc TEXT,
     remote_chassis TEXT,
+    protocol TEXT,
+    age_s INTEGER,
     updated_at TIMESTAMP,
     PRIMARY KEY (device_id, local_ifindex)
 )
@@ -253,6 +275,7 @@ CREATE TABLE stack_members (
     slot INTEGER NOT NULL,
     role TEXT,
     status TEXT,
+    model TEXT,
     serial TEXT,
     fw_version TEXT,
     uptime_s INTEGER,
@@ -262,8 +285,182 @@ CREATE TABLE stack_members (
     fans TEXT,
     psus TEXT,
     warn_msg TEXT,
+    poe_status TEXT,
+    poe_budget_w INTEGER,
+    poe_alloc_w INTEGER,
+    poe_avail_w INTEGER,
+    poe_capacity_w INTEGER,
+    poe_measured_w INTEGER,
     updated_at TIMESTAMP,
     PRIMARY KEY (device_id, slot)
+)
+"""
+
+
+APP_SETTINGS_DDL_SQLITE = """
+CREATE TABLE app_settings (
+    `key` TEXT PRIMARY KEY,
+    value TEXT,
+    is_secret INTEGER NOT NULL DEFAULT 0,
+    updated_by TEXT NOT NULL,
+    updated_at TIMESTAMP
+)
+"""
+
+SETTINGS_AUDIT_DDL_SQLITE = """
+CREATE TABLE settings_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    `key` TEXT NOT NULL,
+    action TEXT NOT NULL,
+    old_value TEXT,
+    new_value TEXT,
+    changed_by TEXT NOT NULL,
+    changed_at TIMESTAMP
+)
+"""
+
+
+AP_DETAILS_DDL_SQLITE = """
+CREATE TABLE ap_details (
+    device_id INTEGER PRIMARY KEY,
+    model TEXT,
+    serial TEXT,
+    mgmt_mac TEXT,
+    fw_version TEXT,
+    ip TEXT,
+    network_policy TEXT,
+    uptime_s INTEGER,
+    clients_total INTEGER,
+    cpu_pct REAL,
+    mem_pct REAL,
+    updated_at TIMESTAMP
+)
+"""
+
+AP_RADIOS_DDL_SQLITE = """
+CREATE TABLE ap_radios (
+    device_id INTEGER NOT NULL,
+    radio TEXT NOT NULL,
+    band TEXT,
+    channel INTEGER,
+    width_mhz INTEGER,
+    tx_power_dbm INTEGER,
+    util_pct REAL,
+    noise_dbm INTEGER,
+    clients INTEGER,
+    updated_at TIMESTAMP,
+    PRIMARY KEY (device_id, radio)
+)
+"""
+
+WIRELESS_CLIENTS_DDL_SQLITE = """
+CREATE TABLE wireless_clients (
+    mac TEXT PRIMARY KEY,
+    device_id INTEGER,
+    ssid TEXT,
+    band TEXT,
+    rssi_dbm INTEGER,
+    snr_db INTEGER,
+    os TEXT,
+    hostname TEXT,
+    username TEXT,
+    ip TEXT,
+    connected_since TIMESTAMP,
+    updated_at TIMESTAMP
+)
+"""
+
+PF_NODES_DDL_SQLITE = """
+CREATE TABLE pf_nodes (
+    mac TEXT PRIMARY KEY,
+    computername TEXT,
+    ip TEXT,
+    vendor TEXT,
+    os TEXT,
+    device_type TEXT,
+    owner TEXT,
+    role TEXT,
+    reg_status TEXT,
+    vlan TEXT,
+    last_switch TEXT,
+    last_switch_ip TEXT,
+    last_port TEXT,
+    last_ssid TEXT,
+    conn_method TEXT,
+    conn_sub TEXT,
+    dot1x_user TEXT,
+    dhcp_fp TEXT,
+    last_seen TIMESTAMP,
+    online INTEGER NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP
+)
+"""
+
+SSIDS_DDL_SQLITE = """
+CREATE TABLE ssids (
+    name TEXT PRIMARY KEY,
+    auth TEXT,
+    enabled INTEGER,
+    network_policy TEXT,
+    updated_at TIMESTAMP
+)
+"""
+
+
+RECORDING_SERVERS_DDL_SQLITE = """
+CREATE TABLE recording_servers (
+    device_id INTEGER PRIMARY KEY,
+    hostname TEXT,
+    role TEXT,
+    version TEXT,
+    chans_total INTEGER,
+    chans_recording INTEGER,
+    storage_used_gb REAL,
+    storage_total_gb REAL,
+    retention_days INTEGER,
+    updated_at TIMESTAMP
+)
+"""
+
+CAMERAS_DDL_SQLITE = """
+CREATE TABLE cameras (
+    device_id INTEGER PRIMARY KEY,
+    model TEXT,
+    resolution TEXT,
+    fps_target INTEGER,
+    codec TEXT,
+    bitrate_mode TEXT,
+    recording_mode TEXT,
+    state_msg TEXT,
+    ip TEXT,
+    mac TEXT,
+    recording_server_device_id INTEGER,
+    enabled INTEGER,
+    updated_at TIMESTAMP
+)
+"""
+
+TRUNKS_DDL_SQLITE = """
+CREATE TABLE trunks (
+    device_id INTEGER PRIMARY KEY,
+    name TEXT,
+    provider_host TEXT,
+    did TEXT,
+    reg_status TEXT,
+    ch_total INTEGER,
+    ch_in_use INTEGER,
+    updated_at TIMESTAMP
+)
+"""
+
+EXTENSIONS_DDL_SQLITE = """
+CREATE TABLE extensions (
+    ext TEXT PRIMARY KEY,
+    name TEXT,
+    site TEXT,
+    registered INTEGER,
+    dnd INTEGER,
+    updated_at TIMESTAMP
 )
 """
 
@@ -283,20 +480,33 @@ def create_core_tables(engine) -> None:
             MAINTENANCE_DDL_SQLITE,
             SNAPSHOT_CACHE_DDL_SQLITE,
             CONFIG_BACKUPS_DDL_SQLITE,
+            SESSIONS_DDL_SQLITE,
             SITES_DDL_SQLITE,
             FIBER_LINKS_DDL_SQLITE,
             FIBER_LINK_STATE_DDL_SQLITE,
             SWITCH_PORTS_DDL_SQLITE,
             FDB_ENTRIES_DDL_SQLITE,
-            LLDP_NEIGHBORS_DDL_SQLITE,
+            NEIGHBORS_DDL_SQLITE,
             SWITCH_VLANS_DDL_SQLITE,
             STACK_MEMBERS_DDL_SQLITE,
+            AP_DETAILS_DDL_SQLITE,
+            AP_RADIOS_DDL_SQLITE,
+            WIRELESS_CLIENTS_DDL_SQLITE,
+            SSIDS_DDL_SQLITE,
+            PF_NODES_DDL_SQLITE,
+            RECORDING_SERVERS_DDL_SQLITE,
+            CAMERAS_DDL_SQLITE,
+            TRUNKS_DDL_SQLITE,
+            EXTENSIONS_DDL_SQLITE,
+            APP_SETTINGS_DDL_SQLITE,
+            SETTINGS_AUDIT_DDL_SQLITE,
         ):
             conn.execute(text(ddl))
 
 
 def write_config(tmp_path: Path, *, dev_bypass: bool = True, secure_cookies: bool = False,
-                 db_url: str | None = None, extra_auth: str = "") -> Path:
+                 db_url: str | None = None, extra_auth: str = "",
+                 extra_sections: str = "") -> Path:
     """Write a minimal valid netmon.conf and return its path."""
     url = db_url or f"sqlite:///{tmp_path / 'netmon.db'}"
     auth_lines = []
@@ -316,6 +526,7 @@ def write_config(tmp_path: Path, *, dev_bypass: bool = True, secure_cookies: boo
         f"[db]\nurl = {url}\nauto_migrate = false\n\n"
         f"[web]\nsecure_cookies = {'true' if secure_cookies else 'false'}\n\n"
         f"[auth]\n" + "\n".join(l for l in auth_lines if l) + "\n"
+        + (f"\n{extra_sections}\n" if extra_sections else "")
     )
     return conf
 

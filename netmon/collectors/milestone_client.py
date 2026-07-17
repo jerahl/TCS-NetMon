@@ -96,3 +96,17 @@ class MilestoneClient:
         async with await self._mkclient() as client:
             data = await self._get(client, "/api/rest/v1/cameras")
         return _items(data)
+
+    async def storage(self) -> list[dict]:
+        """Storage volumes per recording server (Config API). 404/absent →
+        empty (older XProtect versions lack this endpoint)."""
+        async with await self._mkclient() as client:
+            data = await self._get(client, "/api/rest/v1/storages")
+        return _items(data)
+
+    async def hardware(self) -> list[dict]:
+        """Hardware (cameras' physical device) → model + network address that
+        the /cameras entities reference by hardwareId."""
+        async with await self._mkclient() as client:
+            data = await self._get(client, "/api/rest/v1/hardware")
+        return _items(data)

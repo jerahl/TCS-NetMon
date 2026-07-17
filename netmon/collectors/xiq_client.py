@@ -76,23 +76,23 @@ class XiqClient:
             raise XiqError("XIQ returned non-object JSON")
         return data
 
-    async def get_devices(self, view: str = "BASIC") -> list[dict]:
-        """Drain the paged fleet device list (`GET /devices`).
+    async def _get_paged(self, path: str, params: dict) -> list[dict]:
+        """Drain a paged list endpoint sequentially.
 
         Handles both the wrapped ``{data, total_pages}`` and bare-list shapes.
-        Pages are fetched sequentially — the fleet is a handful of pages and the
-        7,500/hr quota easily absorbs it.
+        Sequential is deliberate — the 7,500/hr quota absorbs it and we never
+        hammer the tenant with parallel pages.
         """
         rows: list[dict] = []
         async with httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout) as client:
-            first = await self._get(client, "/devices", {"views": view, "page": 1, "limit": PAGE_LIMIT})
+            first = await self._get(client, path, {**params, "page": 1, "limit": PAGE_LIMIT})
             page_rows = first.get("data") if isinstance(first.get("data"), list) else []
             rows.extend(page_rows)
             total_pages = int(first.get("total_pages") or 0)
 
             if total_pages > 1:
                 for page in range(2, min(total_pages, MAX_PAGES) + 1):
-                    resp = await self._get(client, "/devices", {"views": view, "page": page, "limit": PAGE_LIMIT})
+                    resp = await self._get(client, path, {**params, "page": page, "limit": PAGE_LIMIT})
                     more = resp.get("data") if isinstance(resp.get("data"), list) else []
                     if not more:
                         break
@@ -101,7 +101,7 @@ class XiqClient:
                 # No pagination metadata — sequential drain until a short page.
                 page = 2
                 while page <= MAX_PAGES:
-                    resp = await self._get(client, "/devices", {"views": view, "page": page, "limit": PAGE_LIMIT})
+                    resp = await self._get(client, path, {**params, "page": page, "limit": PAGE_LIMIT})
                     more = resp.get("data") if isinstance(resp.get("data"), list) else []
                     if not more:
                         break
@@ -110,3 +110,26 @@ class XiqClient:
                         break
                     page += 1
         return rows
+
+    async def get_devices(self, view: str = "BASIC") -> list[dict]:
+        """Paged fleet device list. ``view="FULL"`` adds the detail fields the
+        10.2 cycles persist (heavier pages — 5 min cadence, not 180 s)."""
+        return await self._get_paged("/devices", {"views": view})
+
+    async def get_active_clients(self) -> list[dict]:
+        """Paged fleet client list (`GET /clients/active?views=FULL`).
+
+        FULL is required for rssi/snr/connection_duration (spec 00 G5); the
+        filter param, when scoping, is ``deviceIds`` camelCase (G4) — we sweep
+        the whole fleet, so no filter here.
+        """
+        return await self._get_paged("/clients/active", {"views": "FULL"})
+
+    async def get_network_policies(self) -> list[dict]:
+        return await self._get_paged("/network-policies", {})
+
+    async def get_policy_ssids(self, policy_id: int) -> list[dict]:
+        """SSIDs of one network policy (`GET /network-policies/{id}/ssids`) —
+        the endpoint the reference live-validated (id, name, broadcast_name,
+        access_security, enabled)."""
+        return await self._get_paged(f"/network-policies/{policy_id}/ssids", {})

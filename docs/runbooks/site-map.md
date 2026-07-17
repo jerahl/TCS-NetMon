@@ -43,14 +43,70 @@ The NOC wall view at `/ui/#/map` (nav: **Site Map**). Spec: `docs/spec/09-site-m
        python -m netmon.topology /etc/netmon/district.kml
 
    The importer **warns** about curated site names that match no device —
-   fix the name rather than ignoring it (mismatched sites roll up as
-   NO DATA). The importer never deletes rows, so deleting a placemark from
+   fix the name, or **link the map site to the network group** instead (see
+   below), rather than ignoring it (mismatched sites roll up as NO DATA). The importer never deletes rows, so deleting a placemark from
    the KML only stops future updates — to retire a site/link, set
    `"enabled": false` via the JSON format (or `UPDATE sites/fiber_links SET
    enabled=0` directly) .
 
 4. Reload the page. No service restart is needed — the API reads the tables
    live.
+
+## Editing the map from the web (admin, edit-gated)
+
+The KML/JSON importer is the bulk path. For touch-ups an admin can edit the
+map directly in the browser when `[security] allow_web_edit = true` — the same
+gate as the settings engine. On the Site Map page an **EDIT MAP** button
+appears (admin only); it toggles an editor that writes to NetMon's own
+`sites`/`fiber_links` tables (never a source):
+
+- **Move a site** — drag its marker; the new lat/lon saves on drop
+  (`POST /api/registry/sites/{id}/location`). Straight (no-waypoint) links
+  attached to it follow the move live.
+- **Edit a fiber path** — click a fiber line (or its "Path" button) to edit
+  its polyline: drag a solid ○ to move a waypoint, drag a faint **+** midpoint
+  to add one, right-click a ○ to remove it. The endpoints stay pinned to their
+  sites. **Save path** stores the waypoints; a path with no waypoints is saved
+  as a straight, site-tracking line. Capacity is editable in the same panel.
+- **Add / delete a link** — "+ Add fiber link" then click the two endpoint
+  sites; "Delete link" removes one. Endpoints are stored in sorted-name order,
+  so A↔B can't be registered twice.
+
+**Linking a map location to a network site/group.** The roll-up joins a
+`sites` row to live devices by `devices.site`. When the map label differs from
+the network group string (a Zabbix `Site/<x>` value, a legacy group name, or a
+label you prefer), set the site's **Network group** field (Registry → Sites →
+Edit, a picklist of the live `devices.site` groups) — the roll-up then joins on
+that `group_key` instead of the name, without renaming the marker or moving any
+device. Leave it blank to keep the historical join-by-name behaviour. Device
+assignment writes the site's effective group key, and renaming a *linked*
+site's label no longer re-points devices (an unlinked site's rename still
+cascades, as before).
+
+**Label placement.** Each site's name label sits above its dot by default;
+set **Map label position** (Registry → Sites → Edit: top/bottom/left/right) to
+move it when labels collide.
+
+**Owned vs leased fiber.** A link's **Type** (owned | leased) is set in the
+map link editor. Leased circuits (a carrier path, e.g. C-Spire — named in the
+**Provider** field) render as a fine dotted line with a tinted casing so the
+NOC can tell district plant from a leased path at a glance; owned fiber keeps
+the flowing dashes.
+
+**Port attachments (real link state).** By default a link's colour comes from
+the coarse endpoint-site roll-up. Patch each end into a **switch port** (map
+link editor → Attached ports → pick a switch, then a port) and the link's
+up/down, **speed**, and **utilization** are then derived from those
+`switch_ports` rows — the actual circuit — instead. A port-backed link is DOWN
+if either attached port is down; its tooltip shows the negotiated speed and
+live utilization. Detach to fall back to the site-derived status. (Ports must
+be switches in the registry; the SNMP inventory sweep populates their state.)
+
+Editing pauses the 10 s poll so a refresh never fights a drag; leaving edit
+mode reloads and resumes. All of it is refused (403) when `allow_web_edit` is
+false. Bulk/authoritative topology still comes from the KML/JSON importer;
+these edits and the importer both live in the same tables (re-importing
+overwrites by site name / site pair).
 
 ## How status is computed (what the colors mean)
 

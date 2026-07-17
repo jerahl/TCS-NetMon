@@ -1,0 +1,21 @@
+-- 015_site_group_key.sql — link a map site to a network site/group by name.
+-- Target: MariaDB 10.x, InnoDB, utf8mb4.
+--
+-- Until now the site-map roll-up joined a curated `sites` row to live devices
+-- purely by `sites.name = devices.site`. That forces the map label to equal
+-- the network group string exactly; a site whose map name differs from its
+-- device group (a Zabbix `Site/<x>` value, a legacy group name, a rename)
+-- rolled up as NO DATA even though the devices exist.
+--
+-- `group_key` decouples the two: when set, the roll-up (and device-count,
+-- delete guard, device assignment) joins on `group_key` instead of `name`, so
+-- an admin can point a map location at any existing `devices.site` group
+-- without renaming the marker or moving devices. NULL keeps the historical
+-- behaviour (join by name), so this is backward-compatible with every existing
+-- row and the topology importer.
+--
+-- rollback:
+--   ALTER TABLE sites DROP COLUMN group_key;
+--   DELETE FROM schema_migrations WHERE version='015';
+
+ALTER TABLE sites ADD COLUMN group_key VARCHAR(128) NULL AFTER name;

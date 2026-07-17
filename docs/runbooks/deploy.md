@@ -49,8 +49,15 @@ TLS reverse proxy** (HTTP→HTTPS redirect, HSTS + security headers); and sets a
   `MemoryDenyWriteExecute`, writable paths limited to state + logs.
 - Config `0640 root:netmon`; TLS key `0600 root:root`; secrets stay in
   `/etc/netmon/`, never in the repo.
-- Firewall default-deny inbound except SSH (`SSH_PORT`, default 22) and 80/443.
-- Single uvicorn worker (the Phase 1 session store is in-process; see §5).
+- Firewall default-deny inbound except SSH (`SSH_PORT`, default 22) and 80/443,
+  plus **SNMP for the poller/sweeps** (`OPEN_SNMP=1`, default): UDP/161 out and
+  the switches' replies (UDP source-port 161) in. **Scope the reply rule** with
+  `SNMP_SOURCE_CIDR="10.20.0.0/16,10.21.0.0/16"` (comma-separated management
+  networks) — left empty it admits source-port-161 UDP from anywhere and the
+  script warns. Symptom when missing: every switch reads "no response/timeout"
+  in the sweep while `snmpbulkwalk` from another host works.
+- Single uvicorn worker is still the default; multi-worker is safe once
+  migration `007` (DB-backed sessions) is applied — see §5.
 - **Phase 2 note:** the poller shells out to `fping`, which needs raw sockets.
   The unit comments where to grant `CAP_NET_RAW` (or split the poller into its
   own unit) when that phase lands.
@@ -170,6 +177,54 @@ Rows with `site=Unassigned` are in no `Site/<name>` group in the export
 (or aren't monitored by Zabbix) — review them (spec-00 reconciliation rules).
 Omitting `--sites` seeds every device as `Unassigned`.
 
+**Re-seeding after cutover (no Zabbix — spec 11 D9):** once the registry is
+seeded, the DB itself is the durable site source of truth. Refresh the
+registry from fresh XIQ/PF exports without any Zabbix export:
+
+```bash
+sudo -u netmon NETMON_CONF=/etc/netmon/netmon.conf \
+  /opt/netmon/venv/bin/python -m netmon.seed \
+  --xiq xiq.json --pf pf.json --sites-from-db
+```
+
+Existing devices keep their site; new devices arrive `Unassigned` (assign
+them in the DB or pass `--sites` alongside, which overrides per host). The
+upsert never re-enables a device an operator disabled and never blanks a
+per-source key that a fresh export happens to lack.
+
+**Web registry management (admin, edit-gated):** with `[security]
+allow_web_edit = true`, an admin can add/edit/delete sites, **reassign
+devices between sites**, **import switches/APs from XIQ** (dry-run preview),
+and **edit SNMP status-label maps** (e.g. the Extreme stack member
+oper-status decode) from the `#/registry` page, and **edit the site map**
+(drag sites, add/edit/delete fiber links and their paths) from the `#/map`
+page's EDIT MAP button — no CLI needed. A map site can also be **linked to a
+network site/group** whose name differs (Registry → Sites → Network group), so
+its marker rolls up that group's devices without a rename. Site/device/link edits write only
+NetMon's own `sites`/`devices`/`fiber_links` rows (never a source); enum
+overrides live in `snapshot_cache` and are picked up by the next sweep. All of
+it is refused when `allow_web_edit` is false. (See
+`docs/runbooks/site-map.md` for the map editor.)
+
+**SSH to a device (SSHEASY):** set `[web] ssheasy_url` to the base URL of a
+deployed SSHEASY (`jerahl/ssheasy`) web SSH client. An "SSH" button then
+appears on switch/AP detail pages for operators/admins, opening
+`<ssheasy_url>/terminal?host=<mgmt_ip>&port=22&embed=1` in an embedded iframe
+(mirrors the ZCD/Zabbix embed exactly). Credentials are entered in the
+terminal — NetMon never stores or forwards them. Set `ssheasy_url` to the full
+scheme+host+port SSHEASY is reached at (its container publishes `:8080`, e.g.
+`ssheasy_url = http://ssheasy.example.internal:8080`). Two deploy gotchas make
+the iframe show "refused to connect":
+
+- **`frame-ancestors`** — SSHEASY's `nginx/nginx.conf` CSP must list NetMon's
+  exact origin (scheme + host + port, e.g. `https://netmon.example.internal`),
+  then `nginx -s reload`. A bare hostname does not match.
+- **Mixed content** — SSHEASY ships HTTP-only. A browser will not embed an
+  `http://` iframe inside an `https://` NetMon page; serve SSHEASY over TLS (or
+  use the modal's open-in-new-tab escape, which is not subject to framing).
+
+Leave `ssheasy_url` empty to hide the affordance.
+
 ## 5. Run the app
 
 Behind nginx (TLS) with a systemd unit; `secure_cookies=true` in production.
@@ -180,9 +235,11 @@ NETMON_CONF=/etc/netmon/netmon.conf \
   --host 127.0.0.1 --port 8080
 ```
 
-> Multi-worker note: the Phase 1 session store is in-process, so sessions are
-> not shared across `--workers > 1`. Run a single worker until the store is
-> promoted to a shared backend (tracked in spec-01 "Next session").
+> Multi-worker note: sessions are DB-backed as of migration `007` (Phase 10.0)
+> — they survive restarts and are shared across `--workers > 1`. If the
+> `sessions` table is missing (migrations not applied) the app logs a warning
+> and falls back to the Phase 1 in-process store: logins still work but do not
+> survive a restart, and multi-worker is unsafe until `007` is applied.
 
 ## 6. Verify
 

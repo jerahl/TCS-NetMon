@@ -43,6 +43,15 @@ class WebConfig:
     port: int = 8080
     secure_cookies: bool = False
     session_ttl: int = 43200
+    # Base URL of the retained Zabbix UI. Feeds the nav deep-links for the
+    # domains Zabbix keeps (Servers; FortiGate until 11.x) — spec 11 D1/D2.
+    # Empty → the nav renders those entries disabled.
+    zabbix_url: str = ""
+    # Base URL of the SSHEASY web SSH client (jerahl/ssheasy), embedded in an
+    # iframe from device detail pages. Empty → the "SSH" affordance is hidden.
+    # NetMon only builds a target URL (host/port); it never handles credentials
+    # (ssheasy prompts for them in-terminal) — read-only-first still holds.
+    ssheasy_url: str = ""
 
 
 @dataclass(frozen=True)
@@ -74,6 +83,19 @@ class AuthConfig:
 
 
 @dataclass(frozen=True)
+class SecurityConfig:
+    """Settings-engine controls (spec 12). File-only — never web-editable.
+
+    ``settings_key`` seals write-only secrets stored in ``app_settings``
+    (netmon/secretbox.py). ``allow_web_edit`` gates the entire settings write
+    path; reads (with secrets masked) work for admins regardless.
+    """
+
+    settings_key: str = ""
+    allow_web_edit: bool = False
+
+
+@dataclass(frozen=True)
 class PollerConfig:
     enabled: bool = False
     ping_interval_s: int = 60
@@ -101,17 +123,26 @@ class SnmpInventoryConfig:
     enabled: bool = False
     snmpbulkwalk_path: str = "snmpbulkwalk"
     concurrency: int = 8  # switches in flight
+    # Hard budget for ONE supervised run (all due sweeps across the fleet).
+    # Deliberately decoupled from the sweep intervals: a run that overruns the
+    # fastest interval just delays the next tick (cadence slips honestly); it
+    # is only cancelled when it exceeds this budget.
+    run_timeout_s: int = 900
     # per-sweep enable + interval (seconds)
     sweep_ports: bool = True
     ports_interval_s: int = 120
+    sweep_poe: bool = True
+    poe_interval_s: int = 300
     sweep_fdb: bool = True
     fdb_interval_s: int = 900
-    sweep_lldp: bool = True
-    lldp_interval_s: int = 1800
+    sweep_edp: bool = True       # EXTREME-EDP-MIB neighbors (was LLDP)
+    edp_interval_s: int = 1800
     sweep_vlans: bool = True
     vlans_interval_s: int = 3600
     sweep_stack: bool = True
     stack_interval_s: int = 300
+    sweep_entity: bool = True
+    entity_interval_s: int = 3600
 
 
 @dataclass(frozen=True)
@@ -143,6 +174,7 @@ class Config:
     db: DBConfig
     web: WebConfig
     auth: AuthConfig
+    security: SecurityConfig
     poller: PollerConfig
     snmp_inventory: SnmpInventoryConfig
     engine: EngineConfig
@@ -194,6 +226,8 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         port=parser.getint("web", "port", fallback=8080),
         secure_cookies=_as_bool(parser.get("web", "secure_cookies", fallback="false")),
         session_ttl=parser.getint("web", "session_ttl", fallback=43200),
+        zabbix_url=parser.get("web", "zabbix_url", fallback="").strip().rstrip("/"),
+        ssheasy_url=parser.get("web", "ssheasy_url", fallback="").strip().rstrip("/"),
     )
 
     # --- [auth] — SAML SP (ClassLink) + dev bypass ---
@@ -265,6 +299,18 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
             "local_password_hash, or dev_bypass_user for local development."
         )
 
+    # --- [security] — settings engine (spec 12); file-only by design ---
+    settings_key = parser.get("security", "settings_key", fallback="").strip()
+    if settings_key and len(settings_key) < 32:
+        raise ConfigError(
+            "[security] settings_key is too short (need >= 32 chars); generate "
+            "one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+        )
+    security = SecurityConfig(
+        settings_key=settings_key,
+        allow_web_edit=_as_bool(parser.get("security", "allow_web_edit", fallback="false")),
+    )
+
     # --- [poller] ---
     def _pint(key: str, default: int) -> int:
         return parser.getint("poller", key, fallback=default)
@@ -301,19 +347,26 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         enabled=_sbool("enabled", False),
         snmpbulkwalk_path=parser.get("snmp_inventory", "snmpbulkwalk_path", fallback="snmpbulkwalk").strip(),
         concurrency=_sint("concurrency", 8),
+        run_timeout_s=_sint("run_timeout_s", 900),
         sweep_ports=_sbool("sweep_ports", True),
         ports_interval_s=_sint("ports_interval_s", 120),
+        sweep_poe=_sbool("sweep_poe", True),
+        poe_interval_s=_sint("poe_interval_s", 300),
         sweep_fdb=_sbool("sweep_fdb", True),
         fdb_interval_s=_sint("fdb_interval_s", 900),
-        sweep_lldp=_sbool("sweep_lldp", True),
-        lldp_interval_s=_sint("lldp_interval_s", 1800),
+        sweep_edp=_sbool("sweep_edp", True),
+        edp_interval_s=_sint("edp_interval_s", 1800),
         sweep_vlans=_sbool("sweep_vlans", True),
         vlans_interval_s=_sint("vlans_interval_s", 3600),
         sweep_stack=_sbool("sweep_stack", True),
         stack_interval_s=_sint("stack_interval_s", 300),
+        sweep_entity=_sbool("sweep_entity", True),
+        entity_interval_s=_sint("entity_interval_s", 3600),
     )
     if snmp_inventory.enabled and snmp_inventory.concurrency < 1:
         raise ConfigError("[snmp_inventory] concurrency must be >= 1")
+    if snmp_inventory.enabled and snmp_inventory.run_timeout_s < 60:
+        raise ConfigError("[snmp_inventory] run_timeout_s must be >= 60")
 
     # --- [engine] ---
     engine = EngineConfig(
@@ -338,6 +391,6 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         else:
             sources[name] = SourceToggle(enabled=False)
 
-    return Config(db=db, web=web, auth=auth, poller=poller,
+    return Config(db=db, web=web, auth=auth, security=security, poller=poller,
                   snmp_inventory=snmp_inventory, engine=engine,
                   sources=sources, path=conf_path)

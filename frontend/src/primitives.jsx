@@ -46,6 +46,15 @@ export function SourceBadge({ source }) {
   return <span className="src-badge" title={source || "unknown source"}>{sourceBadge(source)}</span>;
 }
 
+// Detail route for a device by type: switches (and stacks) get the full
+// Switches page (faceplate/ports/PoE); everything else uses the generic detail
+// view. Keeps a switch from ever opening "under AP".
+export function deviceHref(d) {
+  const id = d?.id;
+  if (id === undefined || id === null) return "#/";
+  return d.device_type === "switch" ? `#/switches/${id}` : `#/ap/${id}`;
+}
+
 export function Card({ title, kicker, children }) {
   return (
     <section className="card">

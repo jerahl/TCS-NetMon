@@ -3,7 +3,7 @@
 **2026-07-15:** adopted into the standalone-scope revision — `docs/spec/11-standalone-scope.md` is the plan of
 record; it amends the phases below (adds NetMon Status page, seed `--sites-from-db`, 10.6 history buffer,
 11.x post-parity bucket) and records recommendations for this spec's §10 open questions as decisions D1–D9.
-**Status:** IN PROGRESS — Phase 10.0 complete (2026-07-14); Phase 10.1 collection foundation complete (SNMP sweeps + switch API + tests, 2026-07-15) with the Switches page UI remaining; Phases 10.2–10.5 pending. Originated as the design-analysis session deliverable (2026-07-14).
+**Status:** IN PROGRESS — Phase 10.0 complete incl. the spec-11 amendments (2026-07-16); Phase 10.1 **feature-complete** (SNMP sweeps + switch API + 8-tab UI + PoE/entity sweeps, 2026-07-15/16); Phase 10.2 **built** (wireless tables + XIQ cycles + wireless API + XIQ/AP-Detail pages, 2026-07-16 — live-fleet validation of the FULL/clients payload shapes pending); Phase 10.3 **built** (`pf_nodes` persistence + snapshot fetchers + NAC API/pages + the FDB⋈PF port-identity join, 2026-07-16 — PF snapshot endpoint paths pending validation on PF 12.3); Phase 10.4 **built** (camera/RS/trunk/extension persistence + milestone.overview/threecx.system snapshots + surveillance/voip API + pages + camera→FDB switch-port join, 2026-07-16 — ESS WebSocket D5 and camera JPEG proxy D7 deferred; Milestone/3CX payload shapes pending live validation); Phase 10.5 pending. Originated as the design-analysis session deliverable (2026-07-14).
 **Design source:** `Zabbix_Extreme.zip` (Claude Design handoff: 18 HTML pages + ~50 JSX/CSS modules). Keep the
 archive out of the repo (it contains real hostnames/IPs in mock data); extract locally when implementing.
 **Goal:** make NetMon's UI match this design, and build the data layer the pages need — **cache current
@@ -399,17 +399,200 @@ Source: owner's "Extreme EXOS by SNMP" Zabbix 7.4 template. Numeric roots the
 |---|---|
 | ports | ifOperStatus `1.3.6.1.2.1.2.2.1.8`, ifAdminStatus `…2.2.1.7`, ifType `…2.2.1.3`, ifInErrors `…2.2.1.14`, ifOutErrors `…2.2.1.20`, ifInDiscards `…2.2.1.13`, ifOutDiscards `…2.2.1.19`, ifName `1.3.6.1.2.1.31.1.1.1.1`, ifHighSpeed `…31.1.1.1.15`, ifHCInOctets `…31.1.1.1.6`, ifHCOutOctets `…31.1.1.1.10`, dot3Duplex `1.3.6.1.2.1.10.7.2.1.19` |
 | fdb | dot1dTpFdbPort `1.3.6.1.2.1.17.4.3.1.2` (MAC in suffix) ⋈ dot1dBasePortIfIndex `1.3.6.1.2.1.17.1.4.1.2` |
-| lldp | lldpRem sysName `1.0.8802.1.1.2.1.4.1.1.9`, portId `…7`, portDesc `…8`, sysDesc `…10`, chassisId `…5` (index `timemark.localPort.remIdx`) |
+| edp *(replaced LLDP 2026-07-16)* | EXTREME-EDP-MIB extremeEdpTable (index local `slot.port` → ifIndex slot*1000+port): neighbor name `1.3.6.1.4.1.1916.1.13.2.1.3`, EXOS version `…4`, neighbor slot `…5`, neighbor port `…6`, entry age `…7`. EDP is Extreme-native (on by default on EXOS) — the owner's authoritative topology source for the all-Extreme fleet; LLDP-MIB dropped. |
 | vlans | extremeVlan VID `1.3.6.1.4.1.1916.1.2.1.2.1.10`, name `…1.2.1.2.1.2`, admin `…1.2.1.2.1.12` |
 | stack | member status `1.3.6.1.4.1.1916.1.33.2.1.3`, temp `…33.2.1.21`, CPU-5m `…32.1.4.1.9`, memTotal `…32.2.2.1.2`, memAvail `…32.2.2.1.3` |
-| (not yet) | PoE `1.3.6.1.2.1.105.1.1.1.{6 detect,10 class}` + Extreme measured `1.3.6.1.4.1.1916.1.27.2.1.1.6`; ENTITY serial/model/fw `1.3.6.1.2.1.47.1.1.1.1.{11,2,9}`; fans `…1916.1.1.1.9.1.*`, PSUs `…1916.1.1.1.27.1.*` |
+| poe | pethPsePort admin `1.3.6.1.2.1.105.1.1.1.3`, detect `…6`, class `…10` (index slot.port → ifIndex slot*1000+port); Extreme per-port measured **mW** `1.3.6.1.4.1.1916.1.27.2.1.1.6`; extremePethPseSlotTable (index slot, **W**): budget `…1.27.1.2.1.2`, allocated `…3`, status `…8`, available `…10`, capacity `…11`, measured `…14` |
+| entity | ENTITY-MIB descr `1.3.6.1.2.1.47.1.1.1.1.2`, containedIn `…4`, class `…5`, softwareRev `…10` (EXOS version), serial `…11`. Tree (from the live walk): Stack(11) → `Slot-N` container(5) → module(9, descr = human model); PSUs class 6 in `Slot-N PowerSupply Slot M` containers; fans class 7 descr `Slot-N FanTray M`; VIM modules sit in `Option Slot` containers (excluded by exact `Slot-N` match) |
+| (not yet) | Extreme fan RPM `…1916.1.1.1.9.1.*` / PSU wattage `…1916.1.1.1.27.1.*` sensors (presence now comes from ENTITY); extremeStackMemberStatus enum mapping (raw value stored — confirm enum on a real stack) |
+
+**EXOS ifIndex semantics** (owner, 2026-07-16, from the live fleet): front-panel
+ports are `slot*1000 + port` with port 1–199 (e.g. `1001` = 1:1). Excluded from
+the port inventory (`is_physical_port` in `snmp_inventory.py`): `slot*1000`
+(the slot's mgmt port, e.g. `1000`), port part `2xx` (stacking ports, e.g.
+`1257`/`2258`), and `>= 1_000_000` (VLAN/routing interfaces — on a
+many-VLAN fleet these were roughly a third of the ifTable and the bulk of the
+ports-pass write load).
+
+**2026-07-16 — Phase 10.0 spec-11 amendments landed** (all ungated: read-only,
+DB-only, no new deps). Phase 10.0 is now complete *including* the spec-11
+additions; verified end-to-end (uvicorn + headless-Chromium on a seeded DB:
+login → pages render live data, session survives a server restart, no runtime
+console errors, no external fetches).
+
+- **NetMon Status (D2)** — `GET /api/netmon-status` (viewer role): collector
+  heartbeats reusing the `/api/collector-health` derivation, supervised-task
+  registrations + run stats (new `Supervisor.running_names()`; in-process view,
+  reset on restart — labeled as such in the UI), portable DB row counts
+  (devices/state/events±24h/open alerts/shadow notifications/live sessions),
+  engine+poller mode flags, uptime. New page `#/netmon-status`
+  (`pages/netmon_status.jsx`) in a new nav **System** section — the standalone
+  replacement for ZCD's Zabbix Status page.
+- **Nav disposition (D1/D2/D8)** — new `[web] zabbix_url` config +
+  `GET /api/meta` (version + deep-link base, fetched once by the shell).
+  Servers and FortiGate render as deep-links into the retained ZCD pages
+  (`zabbix.php?action=tcs.servers.view` / `tcs.fortigate.view`, new-tab) or
+  disabled-with-tooltip when `zabbix_url` is unset; XDR stays dropped. Nav
+  footer version now comes from `/api/meta`.
+- **Fall-through routes fixed** — `#/xiq` and `#/wireless` render an honest
+  "Planned — phase 10.2" page (`pages/planned.jsx`) instead of silently
+  showing Global.
+- **Seed rework (D9 + §8 debt)** — `netmon-seed --sites-from-db` re-seeds from
+  fresh XIQ/PF exports with the registry's own site assignments (no Zabbix;
+  combinable with `--sites`, file overrides). `upsert_devices()` is now
+  portable (SELECT-then-UPDATE/INSERT — PyMySQL "changed rows" semantics made
+  UPDATE-rowcount routing unsafe on idempotent re-seeds), keeps operator
+  `enabled` insert-only, and never regresses per-source keys to NULL.
+- **DB-backed sessions (§8 debt)** — migration `007_sessions.sql` +
+  `DbSessionStore` (same narrow interface): only a SHA-256 digest of the
+  cookie token at rest, expiry compared in Python (portable), opportunistic
+  purge on login, restart/multi-worker safe. App falls back to the in-process
+  store with a loud warning when `007` is unapplied. Deploy runbook §5
+  updated.
+- Housekeeping: unused `apscheduler` pin dropped (pyproject/README/CLAUDE.md).
+- Tests: +`test_netmon_status_api`, +DbSessionStore lifecycle/expiry/
+  token-never-at-rest, +portable-upsert + `--sites-from-db` seed tests,
+  +migration `007` assertions. Full suite green (162).
+
+**2026-07-16 — Phase 10.1 Switches page UI landed.** The 8-tab dashboard
+(`frontend/src/pages/switches.jsx`, route `#/switches[/{id}]` — deep-linkable):
+site-grouped navigator with port roll-ups, header pills, KPI strip, **port
+faceplate** (odd/even rows per stack member, state/speed/PoE/error/selected
+styling from the design), **port-detail pane** (state/speed/duplex/util, rate
+bars, error/discard deltas, PoE, and the FDB MAC list — the PF identity join
+slot is labeled for 10.3), top-talkers table, and FDB (filter, capped at 500
+rows) / Topology (LLDP) / VLANs / Stack / PoE / Triggers / Backups tabs.
+API additions: `GET /api/switches/{id}/backups` (config_backups list, §6) and
+`device_id` filter on `GET /api/alerts` (Triggers tab). Staleness badged from
+row `updated_at` everywhere ("cache Xm old"); a switch the sweep hasn't
+reached renders explicit "no sweep data yet" states — never fabricated rows.
+PoE tab and stack serial/fw/fans/PSUs columns render "—"/empty-state until the
+deferred sweeps land. Verified headlessly against a seeded 2-member/104-port
+stack: faceplate, port click → FDB MACs, all tabs, empty-state switch, no
+console errors. Full suite green.
+
+**2026-07-16 — sweep run-budget fix** (field report: first live run timed out
+at 120s). The supervised timeout was wired to the *fastest sweep interval*, so
+the first run — every sweep due at once, ~29 bulkwalks/switch fleet-wide —
+was cancelled, marked nothing done, re-queued everything, and (worse) the
+cancellation bypassed `run_guarded`'s `except Exception`, leaving
+`collector_health` stale-green while only supervisor stats showed the failure.
+Fixes: new `[snmp_inventory] run_timeout_s` (default 900, floor = fastest
+interval) decouples the budget from cadence — an over-interval run now just
+delays the next tick; `run_once` executes one fleet pass per due sweep in
+cheap-first order (ports, stack, fdb, lldp, vlans) and marks `_last_run` per
+pass, so a cancelled run keeps its completed sweeps and converges instead of
+looping; `run_guarded` catches `CancelledError`, records it into
+`collector_health`, and re-raises (§4.5). Web-editable via the settings
+registry. Regression tests cover all three.
+
+**2026-07-16 — PoE sweep landed** (owner captured the per-port walk from a
+live 8-slot stack + supplied the slot-table OIDs/units from the production
+Zabbix template). New `poe` sweep (5 min default, own enable flag):
+pethPsePortTable admin/detect/class + Extreme per-port measured power (mW →
+W) fill the `switch_ports` PoE columns; extremePethPseSlotTable budgets
+(watts) land in `stack_members` via migration `009`. The PoE pass does
+**partial UPDATEs only** — no inserts, no prune, and no `updated_at` bump, so
+freshness keeps reflecting the owning ports/stack sweeps (§4.5; tested).
+Ports with detection status 0 (not PoE-capable on EXOS) stay NULL. PoE tab
+now renders slot budget bars + per-port draw; the KPI strip shows real
+draw/budget. Fixture `snmp_exos_poe.txt` (per-port lines verbatim from the
+owner's walk; slot lines template-derived — swap in a real
+`snmpbulkwalk -On <switch> 1.3.6.1.4.1.1916.1.27.1.2.1` when captured).
+
+**2026-07-16 — entity sweep landed** (owner captured the ENTITY-MIB walk from
+the live 8-slot X465 stack). New `entity` sweep (1 h default, own flag):
+per-slot model (module descr), serial, EXOS version (softwareRev), and
+fan/PSU presence lists → `stack_members` (`model` via migration `010`;
+fans/psus fill the existing JSON columns). Same partial-update contract as
+the PoE pass (no insert/prune/updated_at). Stack tab shows
+Model/Serial/EXOS/fan+PSU counts (hover for detail). Fixture
+`snmp_exos_entity.txt` (shape verbatim, serials faked). **Phase 10.1 is now
+feature-complete**; remaining polish is sensor detail + the enum note below.
+
+**2026-07-16 — Phase 10.2 Wireless built.** Migration `011` (`ap_details`,
+`ap_radios` — PK (device_id, radio), band from the radio's own field per G10,
+`wireless_clients`, `ssids`); XIQ collector cycles inside the one supervised
+task, each independently intervalled + disableable: detail 5 min
+(`views=FULL`, and when due the same fetch serves the status cycle — no
+double sweep), clients 10 min (`/clients/active?views=FULL`; PII per Q8 —
+`clients_enabled=false` stops persisting), SSIDs 30 min (network-policies →
+per-policy list). Budget ≈1.3–1.6k calls/h at fleet scale. Generic batched
+`db.replace_rows` (portable, one txn per refresh) powers the writers.
+Wireless API (`/api/wireless/summary|aps|aps/{id}|ssids|clients?q=`); XIQ
+fleet page (`#/xiq`, also `#/wireless`) with KPI strip/site filter/search/
+firmware compliance/SSID roll-up; AP Detail gains detail-KV, radios, clients
+sections (PF join slot labeled for 10.3). Fixtures `xiq_devices_full.json`/
+`xiq_clients_active.json`/`xiq_ssids.json` are shaped from the reference
+client's documented fields — **replace with captured exports and confirm the
+FULL view's radio fields on the live tenant before trusting `ap_radios`.**
+Verified headlessly on seeded data end-to-end; suite green.
+
+**2026-07-16 — Phase 10.3 Identity built.** Migration `012` `pf_nodes` (mac
+PK; identity from `/nodes/search` + role *name* from `/node_categories` +
+switch/port/ssid/auth from open `/locationlogs/search`, merged into one row
+per MAC, replace-on-refresh). The Phase 5 in-memory `app.state.pf` snapshot is
+**deleted** — the collector now persists via `db.replace_rows` and all three
+inputs are required (partial data never overwrites good rows, §4.5). Page-
+level singletons → `snapshot_cache` keys (`pf.rejects` + cluster/services/
+queues/sources/profiles/violations), each **fail-soft** (a 404 on one endpoint
+flips its key to `ok=0`, never blocks the node cycle) via the new
+`netmon/snapshots.py` helper. NAC API reworked to DB-only:
+`/api/nac[/nodes|/sessions|/quarantine|/policies|/cluster]`. Five-tab NAC page
+replaces the thin one. **The marquee payoff landed**: `switch_ports` port
+detail enriches each FDB MAC with PF identity (`fdb_entries ⋈ pf_nodes ON
+mac`) — hostname/owner/role/reg shown, unknown MACs honestly "unknown to PF";
+AP Detail clients gain PF role/reg the same way. Verified headlessly (NAC five
+tabs incl. STALE-badge on a failed snapshot key; port pane with 8 MACs, 7
+resolved + 1 unknown). Reconciliation: `snapshot_cache` fetch paths follow
+PF's documented v1 REST surface — validate against production PF 12.3; a
+wrong path reads `ok=0` in the UI (the honest signal), never a crash.
+
+**2026-07-16 — Phase 10.4 Surveillance + VoIP built.** Migration `013`
+(`cameras`, `recording_servers`, `trunks`, `extensions`). Milestone collector
+persists camera/RS attributes + storage rollup (same Config-API responses,
+previously discarded) + a `milestone.overview` snapshot; storage/hardware
+endpoints are fail-soft (older XProtect lacks them). 3CX collector persists
+trunk rows, wires the previously-dead `system_status()` →
+`snapshot_cache['threecx.system']`, and adds extensions (`/xapi/v1/Users`,
+fail-soft). Surveillance API (`/api/surveillance/{summary,cameras,cameras/
+{id},servers,storage}`) with the **camera→switch-port FDB join** at query
+time (`cameras.mac ⋈ fdb_entries`); VoIP API (`/api/voip/{summary,trunks,
+extensions}`). Four-tab Surveillance page + VoIP page. **Deferred (gated):**
+ESS Events/State WebSocket for live alarms (⛔ D5 — alarms show via
+Events/Problems meanwhile) and the camera JPEG proxy (D7 — status tiles +
+Smart Client deep-link, no video). Verified headlessly end-to-end. Milestone
+Config-API + 3CX v20 field shapes are inferred from the reference client —
+validate against the live VMS/PBX (spec §10 Q4).
 
 ## Next session
 
-- **Finish Phase 10.1**: build the **Switches page UI** (navigator, port faceplate,
-  port-detail FDB pane, stack/VLAN/LLDP/topology tabs) on the switch API above;
-  add the deferred sweeps (PoE, ENTITY serial/fw, fans/PSUs) once a PoE fixture is
-  captured; add the Q-BRIDGE per-VLAN FDB walk if VLAN-scoped FDB is wanted.
+- **10.4 validation on live sources**: capture real Milestone `/cameras`,
+  `/recordingServers`, `/storages`, `/hardware` and 3CX `/Trunks`, `/Users`,
+  `/SystemStatus` payloads; confirm the field mappings in
+  `milestone.py`/`threecx.py` and the storage byte/GB scaling. Owner: **D5**
+  (websockets) + **D7** (JPEG proxy) sign-off gates the live-alarm and video
+  pieces.
+- **10.3 validation on live PF**: confirm the six snapshot endpoint paths
+  (`/api/v1/cluster/servers`, `/services/status_all`, `/queues/stats`,
+  `/config/sources`, `/config/connection_profiles`, `/config/security_events`)
+  against PF 12.3; any that 404 show `ok=0` on the NAC Policies/Cluster tabs —
+  fix the path in `SNAPSHOT_FETCHES`. Capture a sanitized locationlog +
+  node_categories sample into `tests/fixtures/`. Owner: **Q8** (wireless PII)
+  still open.
+- **10.2 validation on the live fleet**: capture real FULL/clients payloads
+  (extend `scripts/xiq_export.py` or curl), diff against the fixtures —
+  especially the `radios` field coverage — and measure the actual call rate
+  against the ≈1.6k/h budget. Owner: decide spec 10 **Q8** (wireless_clients
+  PII) — the cycle ships enabled but is one config flip to stop.
+- **10.1 leftovers (small)**: capture a real extremePethPseSlotTable walk
+  (`snmpbulkwalk -On <switch> 1.3.6.1.4.1.1916.1.27.1.2.1`) to replace the
+  template-derived PoE fixture lines; confirm the extremeStackMemberStatus
+  enum on a real stack (the Stack tab currently shows the raw value); Extreme
+  fan-RPM/PSU-wattage sensors + Q-BRIDGE per-VLAN FDB if wanted.
+- Owner: set `run_timeout_s` from a measured `--once` at fleet size.
+- Then **Phase 10.2 Wireless** (XIQ detail/clients/SSID cycles, wireless API,
+  XIQ page + AP Detail).
 - **Phase 10.3 unlocks the FDB⋈PF join**: once `pf_nodes` exists, extend
   `/api/switches/{id}/ports/{ifindex}` to enrich each MAC with PF identity
   (LEFT JOIN `pf_nodes` ON mac) — the design's marquee port-detail feature.

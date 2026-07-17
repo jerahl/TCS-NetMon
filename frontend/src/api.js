@@ -55,3 +55,35 @@ export async function postJSON(path, body) {
   if (!resp.ok) throw new Error(`API HTTP ${resp.status}`);
   return resp.status === 204 ? null : resp.json();
 }
+
+// PUT/DELETE JSON with postJSON's 401 handling. Non-2xx surfaces the API's
+// `detail` message (validation errors, gating messages) so pages can show it.
+async function sendJSON(method, path, body) {
+  let resp;
+  try {
+    resp = await fetch(path, {
+      method,
+      credentials: "same-origin",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (e) {
+    throw new Error("network error contacting NetMon API");
+  }
+  if (resp.status === 401) {
+    window.location.assign("/login");
+    throw new AuthError("redirecting to sign in");
+  }
+  if (!resp.ok) {
+    let detail = `API HTTP ${resp.status}`;
+    try {
+      const data = await resp.json();
+      if (data && data.detail) detail = String(data.detail);
+    } catch { /* keep the status text */ }
+    throw new Error(detail);
+  }
+  return resp.status === 204 ? null : resp.json();
+}
+
+export function putJSON(path, body) { return sendJSON("PUT", path, body); }
+export function deleteJSON(path) { return sendJSON("DELETE", path); }

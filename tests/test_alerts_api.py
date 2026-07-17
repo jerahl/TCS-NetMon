@@ -46,6 +46,15 @@ def test_alerts_list_and_ack(tmp_path):
         assert client.post("/api/alerts/999/ack").status_code == 404
 
 
+def test_alerts_device_filter(tmp_path):
+    """device_id scopes the list (the Switches page Triggers tab)."""
+    url = f"sqlite:///{tmp_path / 'a.db'}"
+    _seed(url)
+    with TestClient(_app(write_config(tmp_path, db_url=url))) as client:
+        assert len(client.get("/api/alerts?device_id=1").json()) == 1
+        assert client.get("/api/alerts?device_id=999").json() == []
+
+
 def test_alert_assign(tmp_path):
     url = f"sqlite:///{tmp_path / 'as.db'}"
     _seed(url)

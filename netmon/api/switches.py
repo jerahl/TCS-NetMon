@@ -64,8 +64,10 @@ def switch_detail(
     sw = _switch_or_404(engine, sid)
     sw["stack"] = [dict(r) for r in db.fetch_all(
         engine,
-        "SELECT slot, role, status, serial, fw_version, uptime_s, cpu_pct, mem_pct, "
-        "temp_c, fans, psus, warn_msg, updated_at FROM stack_members "
+        "SELECT slot, role, status, model, serial, fw_version, uptime_s, cpu_pct, mem_pct, "
+        "temp_c, fans, psus, warn_msg, "
+        "poe_status, poe_budget_w, poe_alloc_w, poe_avail_w, poe_capacity_w, "
+        "poe_measured_w, updated_at FROM stack_members "
         "WHERE device_id = :d ORDER BY slot",
         {"d": sid},
     )]
@@ -96,8 +98,9 @@ def port_detail(
     engine: Engine = Depends(get_engine),
     _user=Depends(require_role(Role.viewer)),
 ) -> dict:
-    """One port plus the MAC addresses learned on it (the FDB payoff). PF
-    identity enrichment is added when `pf_nodes` exists (Phase 10.3)."""
+    """One port plus the MAC addresses learned on it, each enriched with
+    PacketFence identity via ``fdb_entries ⋈ pf_nodes ON mac`` — the design's
+    marquee port-detail feature (spec 10 §3), pure SQL, zero source calls."""
     _switch_or_404(engine, sid)
     port = db.fetch_one(
         engine,
@@ -111,8 +114,11 @@ def port_detail(
         raise HTTPException(status_code=404, detail="port not found")
     macs = [dict(r) for r in db.fetch_all(
         engine,
-        "SELECT mac, vlan_id, updated_at FROM fdb_entries "
-        "WHERE device_id = :d AND ifindex = :i ORDER BY mac",
+        "SELECT f.mac, f.vlan_id, f.updated_at, "
+        " p.computername, p.owner, p.role, p.reg_status, p.os, p.vendor, "
+        " p.ip AS pf_ip, p.dot1x_user, p.updated_at AS pf_updated_at "
+        "FROM fdb_entries f LEFT JOIN pf_nodes p ON p.mac = f.mac "
+        "WHERE f.device_id = :d AND f.ifindex = :i ORDER BY f.mac",
         {"d": sid, "i": ifindex},
     )]
     return {"port": dict(port), "macs": macs}
@@ -133,18 +139,23 @@ def switch_fdb(
     )]
 
 
-@router.get("/{sid}/lldp")
-def switch_lldp(
+@router.get("/{sid}/neighbors")
+def switch_neighbors(
     sid: int,
     engine: Engine = Depends(get_engine),
     _user=Depends(require_role(Role.viewer)),
 ) -> list[dict]:
+    """Discovered neighbors (EDP on this Extreme fleet — spec 10 §4). The
+    local port name is joined from switch_ports so the UI shows "1:24", not a
+    bare ifIndex."""
     _switch_or_404(engine, sid)
     return [dict(r) for r in db.fetch_all(
         engine,
-        "SELECT local_ifindex, remote_sysname, remote_port, remote_sysdesc, "
-        "remote_chassis, updated_at FROM lldp_neighbors "
-        "WHERE device_id = :d ORDER BY local_ifindex",
+        "SELECT n.local_ifindex, sp.name AS local_port, n.remote_sysname, "
+        "n.remote_port, n.remote_sysdesc, n.remote_chassis, n.protocol, n.age_s, "
+        "n.updated_at FROM neighbors n "
+        "LEFT JOIN switch_ports sp ON sp.device_id = n.device_id AND sp.ifindex = n.local_ifindex "
+        "WHERE n.device_id = :d ORDER BY n.local_ifindex",
         {"d": sid},
     )]
 
@@ -160,5 +171,23 @@ def switch_vlans(
         engine,
         "SELECT vlan_id, name, admin_up, untagged_count, tagged_count, updated_at "
         "FROM switch_vlans WHERE device_id = :d ORDER BY vlan_id",
+        {"d": sid},
+    )]
+
+
+@router.get("/{sid}/backups")
+def switch_backups(
+    sid: int,
+    engine: Engine = Depends(get_engine),
+    _user=Depends(require_role(Role.viewer)),
+) -> list[dict]:
+    """rConfig backup metadata (spec 10 §6) — list only; the diff pane is a
+    user-initiated read-through or link-out (§10 Q5), never a render-loop
+    fetch. Rows are written by the rconfig collector into `config_backups`."""
+    _switch_or_404(engine, sid)
+    return [dict(r) for r in db.fetch_all(
+        engine,
+        "SELECT taken_at, size_bytes, hash, note, updated_at "
+        "FROM config_backups WHERE device_id = :d ORDER BY taken_at DESC",
         {"d": sid},
     )]

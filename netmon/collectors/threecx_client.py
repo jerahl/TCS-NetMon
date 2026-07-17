@@ -87,3 +87,12 @@ class ThreeCxClient:
     async def system_status(self) -> dict:
         async with await self._mkclient() as client:
             return await self._get(client, "/xapi/v1/SystemStatus")
+
+    async def extensions(self) -> list[dict]:
+        """3CX v20 users/extensions (`GET /xapi/v1/Users`). The OData surface
+        wraps rows in ``value``. Field coverage varies by v20 build — spec 10
+        §10 Q4 (verify on the live PBX); parsers are defensive."""
+        async with await self._mkclient() as client:
+            data = await self._get(client, "/xapi/v1/Users")
+        rows = data.get("value")
+        return rows if isinstance(rows, list) else []

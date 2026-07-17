@@ -89,6 +89,10 @@ def run_standalone(
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     cfg = load_config(args.config)
     engine = db.make_engine(cfg.db.url)
+    # Same settings overlay the supervisor applies (spec 12 S9) — a standalone
+    # run must see the effective config, not just the file. Fail-soft.
+    from netmon import settings as settings_engine
+    cfg = settings_engine.overlay_config(cfg, engine)
     collector = build(engine, cfg)
 
     async def _run() -> None:

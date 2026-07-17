@@ -1,0 +1,37 @@
+# Sanitized PoE walk of an EXOS stack (owner-captured 2026-07-16, normalized
+# to `snmpbulkwalk -On` numeric form; the capture used MIB names — "iso.").
+# Per-port lines are verbatim values from the real walk (slot.port index,
+# 2100/5300 mW measured on delivering ports). The extremePethPseSlotTable
+# lines are TEMPLATE-DERIVED (owner's Zabbix template gives the OIDs + units;
+# a real slot walk should replace them when captured — values are plausible
+# X465 numbers, all watts).
+#
+# pethPsePortAdminEnable (1=enabled)
+.1.3.6.1.2.1.105.1.1.1.3.1.1 = INTEGER: 1
+.1.3.6.1.2.1.105.1.1.1.3.1.2 = INTEGER: 1
+.1.3.6.1.2.1.105.1.1.1.3.2.2 = INTEGER: 2
+# pethPsePortDetectionStatus (2=searching, 3=deliveringPower, 0=not PoE-capable on EXOS)
+.1.3.6.1.2.1.105.1.1.1.6.1.1 = INTEGER: 3
+.1.3.6.1.2.1.105.1.1.1.6.1.2 = INTEGER: 2
+.1.3.6.1.2.1.105.1.1.1.6.2.2 = INTEGER: 0
+# pethPsePortPowerClassifications (value-1 = IEEE class; 0 on non-PoE ports)
+.1.3.6.1.2.1.105.1.1.1.10.1.1 = INTEGER: 4
+.1.3.6.1.2.1.105.1.1.1.10.1.2 = INTEGER: 1
+.1.3.6.1.2.1.105.1.1.1.10.2.2 = INTEGER: 0
+# extremePethPortMeasuredPower (milliwatts)
+.1.3.6.1.4.1.1916.1.27.2.1.1.6.1.1 = Gauge32: 5300
+.1.3.6.1.4.1.1916.1.27.2.1.1.6.1.2 = Gauge32: 0
+.1.3.6.1.4.1.1916.1.27.2.1.1.6.2.2 = Gauge32: 0
+# extremePethPseSlotTable (index = slot; watts) — TEMPLATE-DERIVED, see header
+.1.3.6.1.4.1.1916.1.27.1.2.1.2.1 = Gauge32: 380
+.1.3.6.1.4.1.1916.1.27.1.2.1.2.2 = Gauge32: 380
+.1.3.6.1.4.1.1916.1.27.1.2.1.3.1 = Gauge32: 45
+.1.3.6.1.4.1.1916.1.27.1.2.1.3.2 = Gauge32: 0
+.1.3.6.1.4.1.1916.1.27.1.2.1.8.1 = INTEGER: 2
+.1.3.6.1.4.1.1916.1.27.1.2.1.8.2 = INTEGER: 9
+.1.3.6.1.4.1.1916.1.27.1.2.1.10.1 = Gauge32: 380
+.1.3.6.1.4.1.1916.1.27.1.2.1.10.2 = Gauge32: 0
+.1.3.6.1.4.1.1916.1.27.1.2.1.11.1 = Gauge32: 720
+.1.3.6.1.4.1.1916.1.27.1.2.1.11.2 = Gauge32: 720
+.1.3.6.1.4.1.1916.1.27.1.2.1.14.1 = Gauge32: 39
+.1.3.6.1.4.1.1916.1.27.1.2.1.14.2 = Gauge32: 0

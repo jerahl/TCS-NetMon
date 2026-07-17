@@ -12,7 +12,9 @@ Shutdown reverses (4)–(5): the supervisor cancels every task cleanly.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -23,8 +25,12 @@ from fastapi.staticfiles import StaticFiles
 WEB_DIR = Path(__file__).resolve().parent / "web"
 
 from netmon import __version__, db, migrate
-from netmon.api import alerts, auth_routes, devices, events, health, nac, sites, status, switches
-from netmon.auth.sessions import SessionStore
+from netmon import settings as settings_engine
+from netmon.api import (
+    alerts, auth_routes, devices, events, health, nac, registry, settings, sites,
+    status, surveillance, switches, voip, wireless,
+)
+from netmon.auth.sessions import DbSessionStore, SessionStore
 from netmon.engine.engine import AlertEngine
 from netmon.collectors.milestone import MilestoneCollector, MilestoneError
 from netmon.collectors.packetfence import PfCollector
@@ -87,7 +93,8 @@ def register_tasks(app: FastAPI, cfg: Config, engine) -> None:
         except PfError as exc:
             log.error("PacketFence collector not started: %s", exc)
         else:
-            app.state.pf = pf  # NAC endpoint reads its cached snapshot
+            # 10.3: the NAC API reads pf_nodes/snapshot_cache from the DB —
+            # the old in-memory app.state.pf snapshot is gone.
             supervisor.register("packetfence", pf.run_guarded, interval_s=pf.interval_s, timeout_s=pf.timeout_s)
             log.info("PacketFence collector enabled: %ss", pf.interval_s)
 
@@ -128,6 +135,7 @@ def register_tasks(app: FastAPI, cfg: Config, engine) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cfg: Config = app.state.config  # set by create_app before the app runs
+    app.state.started_at = time.time()  # /api/netmon-status uptime
     app.state.engine = db.make_engine(cfg.db.url)
 
     if cfg.db.auto_migrate:
@@ -135,7 +143,27 @@ async def lifespan(app: FastAPI):
         if applied:
             log.info("auto-migrate applied: %s", ", ".join(applied))
 
-    app.state.sessions = SessionStore(ttl_seconds=cfg.web.session_ttl)
+    # Settings overlay (spec 12): DB overrides on top of the file config.
+    # base_config stays the pristine file view (the settings API needs it);
+    # everything downstream — routes via get_config, tasks below — sees the
+    # overlaid config. Fail-soft: no app_settings table => file config only.
+    app.state.base_config = cfg
+    cfg = settings_engine.overlay_config(cfg, app.state.engine)
+    app.state.config = cfg
+
+    # DB-backed sessions (migration 007): survive restarts, safe for
+    # multi-worker uvicorn. If the table is missing (migrations not applied),
+    # fall back to the in-process store and say so loudly — logins still work,
+    # they just don't survive a restart.
+    try:
+        db.fetch_one(app.state.engine, "SELECT COUNT(*) FROM sessions")
+        app.state.sessions = DbSessionStore(app.state.engine, ttl_seconds=cfg.web.session_ttl)
+    except Exception:
+        log.warning(
+            "sessions table missing (apply migration 007) — using the "
+            "in-process session store; sessions will not survive a restart"
+        )
+        app.state.sessions = SessionStore(ttl_seconds=cfg.web.session_ttl)
 
     supervisor: Supervisor = app.state.supervisor
     register_tasks(app, cfg, app.state.engine)
@@ -165,9 +193,14 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.config = cfg
+    # Pristine file config; the lifespan overlays DB settings onto
+    # app.state.config while the settings API reads/edits against this base.
+    app.state.base_config = cfg
     # Bare supervisor; tasks are registered in the lifespan once the engine
     # exists (register_tasks). Tests may inject their own.
     app.state.supervisor = supervisor or Supervisor()
+    # Serializes POST /api/settings/apply (config swap + supervisor restart).
+    app.state.apply_lock = asyncio.Lock()
 
     app.include_router(health.router)
     app.include_router(auth_routes.router)
@@ -177,8 +210,13 @@ def create_app(
     app.include_router(sites.router)
     app.include_router(events.router)
     app.include_router(switches.router)
+    app.include_router(wireless.router)
+    app.include_router(surveillance.router)
+    app.include_router(voip.router)
+    app.include_router(registry.router)
     app.include_router(nac.router)
     app.include_router(alerts.router)
+    app.include_router(settings.router)
 
     # Static React UI (Phase 4), if built. Guarded so the app still boots when
     # the bundle is absent (fresh clone / API-only dev). Build with

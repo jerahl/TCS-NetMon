@@ -35,6 +35,9 @@ def main(argv: list[str] | None = None) -> int:
 
     cfg = load_config(args.config)
     engine = db.make_engine(cfg.db.url)
+    # Web-managed overrides ride along in standalone runs too (spec 12 S9).
+    from netmon import settings as settings_engine
+    cfg = settings_engine.overlay_config(cfg, engine)
     poller = Poller(engine, cfg.poller)
 
     do_ping = args.ping or args.both or not (args.ping or args.snmp)

@@ -27,12 +27,15 @@ def _seed(url):
                    "speed_mbps": 1000, "updated_at": now})
     db.upsert(engine, "fdb_entries", {"device_id": 1, "mac": "00:0b:82:01:02:03"},
               {"ifindex": 1001, "updated_at": now})
-    db.upsert(engine, "lldp_neighbors", {"device_id": 1, "local_ifindex": 1001},
-              {"remote_sysname": "core-1", "updated_at": now})
+    db.upsert(engine, "neighbors", {"device_id": 1, "local_ifindex": 1001},
+              {"remote_sysname": "core-1", "remote_port": "1:52", "protocol": "edp",
+               "age_s": 12, "updated_at": now})
     db.upsert(engine, "switch_vlans", {"device_id": 1, "vlan_id": 100},
               {"name": "Data", "admin_up": 1, "updated_at": now})
     db.upsert(engine, "stack_members", {"device_id": 1, "slot": 1},
               {"cpu_pct": 12, "mem_pct": 40.0, "temp_c": 38, "updated_at": now})
+    db.upsert(engine, "config_backups", {"device_id": 1, "taken_at": now},
+              {"size_bytes": 24576, "hash": "abc123", "updated_at": now})
     engine.dispose()
 
 
@@ -66,8 +69,13 @@ def test_switch_detail_and_tabs(tmp_path):
         assert [m["mac"] for m in pd["macs"]] == ["00:0b:82:01:02:03"]
 
         assert client.get("/api/switches/1/fdb").json()[0]["ifindex"] == 1001
-        assert client.get("/api/switches/1/lldp").json()[0]["remote_sysname"] == "core-1"
+        nb = client.get("/api/switches/1/neighbors").json()[0]
+        assert nb["remote_sysname"] == "core-1" and nb["protocol"] == "edp"
+        assert nb["local_port"] == "1:1"  # joined from switch_ports
         assert client.get("/api/switches/1/vlans").json()[0]["vlan_id"] == 100
+
+        backups = client.get("/api/switches/1/backups").json()
+        assert backups[0]["size_bytes"] == 24576 and backups[0]["hash"] == "abc123"
 
 
 def test_switch_404s(tmp_path):

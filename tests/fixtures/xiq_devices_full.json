@@ -1,0 +1,46 @@
+{
+  "_note": "SANITIZED sample of GET /devices?views=FULL (2 pages collapsed). Field names per reference/lib/XIQClient.php normaliseDevice + XIQ docs; RFC 5737 IPs, fake MACs/serials. Replace with a captured export (scripts/xiq_export.py --view FULL) to confirm radio field coverage — spec 10 §3 note.",
+  "data": [
+    {
+      "id": 100001,
+      "hostname": "BHS-56-Hallway",
+      "device_function": "AP",
+      "product_type": "AP305C",
+      "serial_number": "00000000000001",
+      "mac_address": "F0AB0000AA01",
+      "ip_address": "192.0.2.11",
+      "software_version": "10.6.4.0",
+      "connected": true,
+      "system_up_time": 1721000000000,
+      "network_policy_id": 7001,
+      "network_policy_name": "TCS-Schools",
+      "active_clients": 23,
+      "locations": [{"name": "BHS"}],
+      "radios": [
+        {"name": "wifi0", "frequency": "2.4G", "channel": 6, "channel_width": "20MHz", "power": 14, "clients": 5},
+        {"name": "wifi1", "frequency": "5G", "channel": 149, "channel_width": "80MHz", "power": 17, "clients": 18}
+      ]
+    },
+    {
+      "id": 100003,
+      "hostname": "CHS-12-Room",
+      "device_function": "AP",
+      "product_type": "AP305C",
+      "serial_number": "00000000000003",
+      "mac_address": "F0AB0000AA03",
+      "ip_address": "192.0.2.30",
+      "software_version": "10.5.9.1",
+      "connected": false,
+      "system_up_time": 0,
+      "network_policy_id": 7001,
+      "network_policy_name": "TCS-Schools",
+      "active_clients": 0,
+      "locations": [{"name": "CHS"}],
+      "radios": [
+        {"name": "wifi0", "frequency": "5G", "channel": 40, "channel_width": "40MHz", "power": 16, "clients": 0},
+        {"name": "wifi1", "frequency": "5G", "channel": 149, "channel_width": "40MHz", "power": 16, "clients": 0}
+      ]
+    }
+  ],
+  "total_pages": 1
+}

@@ -150,21 +150,98 @@ shadow-alert diff has run clean for the agreed window.
 - [x] CLAUDE.md rewritten to v2.0 (mission, scope, phases) — this commit.
 - [x] README.md carries a plan-v0.3 pointer note — this commit.
 - [x] Spec 10 header cross-references this spec — this commit.
-- [ ] Drop the unused `apscheduler` pin from `pyproject.toml` (next code
-      session; trivial, but not a docs change).
-- [ ] Fold known debt into 10.0: portable `seed.upsert_devices()` (MariaDB-only
-      `ON DUPLICATE KEY UPDATE`), DB-backed session store before multi-worker
-      uvicorn, nav routes that fall through to Global (`#/xiq`, `#/wireless`,
-      `#/events`).
+- [x] Drop the unused `apscheduler` pin from `pyproject.toml` — done 2026-07-16.
+- [x] Fold known debt into 10.0 — done 2026-07-16: portable
+      `seed.upsert_devices()` (SELECT-then-UPDATE/INSERT; runs on SQLite and
+      MariaDB, idempotent re-seed, never re-enables or blanks source keys),
+      DB-backed session store (migration `007`; SHA-256 token digest at rest,
+      restart/multi-worker safe, loud in-process fallback when `007` is
+      unapplied), `#/xiq` and `#/wireless` now render an honest "Planned —
+      phase 10.2" page instead of falling through to Global (`#/events` was
+      fixed by the Events Console).
 - `reference/` stays — the authoritative record of request shapes and gotchas
   (spec 00) until each collector's detail cycles land; prune after 10.4.
 
 ## Next session
 
+- **Phase 10.0 is complete (2026-07-16)** including this spec's amendments:
+  NetMon Status page + `/api/netmon-status` (D2), `netmon-seed
+  --sites-from-db` (D9), nav disposition (Servers/FortiGate as Zabbix
+  deep-links via `[web] zabbix_url` + `/api/meta`, XDR dropped, NetMon Status
+  in a System section — D1/D2/D8), and the §8 housekeeping/debt items.
+  Details in spec 10's progress log (2026-07-16 entry).
 - Owner: sign off (or veto) the ⛔ gates — D3, D4, D5, D6 — they gate 10.1,
-  10.4, 10.6, and 11.x scope.
-- Start 10.0: fix `/api/status` dimensions, add `/api/events` filters +
-  `/api/collector-health`, port design shell/primitives, NetMon Status page,
-  `--sites-from-db`.
+  10.4, 10.6, and 11.x scope. (Note: spec 10 Q2/Q3 record owner approval of
+  the D6 sweeps and D3 ring buffer on 2026-07-15, and the 10.1 sweep code is
+  already on main under that amendment — reconcile this table's "open" marks
+  with those resolutions when signing.)
+- **Web registry management added 2026-07-16** (owner-requested, out of phase
+  order): admin `#/registry` page + `/api/registry/*` — add/edit/delete
+  `sites` (rename cascades to the `devices.site` join key; delete refuses to
+  orphan assigned devices) and **import switches/APs from XIQ** (read-only
+  fleet fetch reusing the seed's reconcile/upsert; dry-run preview; existing
+  site assignments preserved per D9). Admin-role + `[security] allow_web_edit`
+  gated, same as the settings engine. **Extended 2026-07-16**: the registry
+  page also **reassigns devices between sites** — `GET /api/registry/devices`
+  (filterable) + `POST /api/registry/devices/assign` (batch move/unassign,
+  target site must exist, writes only `devices.site`); UI is a filter-by-
+  site/type table with checkbox multi-select + a "Move to…" control. Same
+  admin + `allow_web_edit` gate. **Extended 2026-07-17**: the registry page
+  also **edits SNMP status-label maps** — `GET/PUT/DELETE
+  /api/registry/enums/<name>` over `netmon/enums.py` defaults; overrides live
+  in `snapshot_cache` (`enum.<name>`), merged over the default at sweep start
+  and picked up live on the next sweep (no restart). First map exposed:
+  `stack_status` (extremeStackMemberOperStatus 0=unknown/1=up/2=down/
+  3=mismatch), after the field-confirmed enum was corrected twice. **Extended
+  again 2026-07-17**: an in-browser **site-map editor** (Site Map → EDIT MAP,
+  admin + `allow_web_edit`) — drag site markers to reposition
+  (`POST /api/registry/sites/{id}/location`), and create/edit/delete fiber
+  links incl. their waypoint polyline (`GET/POST/PUT/DELETE
+  /api/registry/links`; endpoints sorted-name; path validated as [lat,lon]
+  points or null=straight). Writes only `sites`/`fiber_links`; the KML/JSON
+  importer remains the bulk path (same tables). `/api/meta` now carries
+  `can_edit` so the UI shows edit affordances only when the gate is on.
+  **Link a map location to a network group 2026-07-17**: migration 015 adds
+  `sites.group_key` — when set, the map roll-up, device-count, delete guard,
+  and device-assign all join on it instead of `sites.name`, so a marker can
+  represent a network site/group whose name differs, without renaming the
+  marker or moving devices (NULL = historical join-by-name; a linked site's
+  rename no longer cascades). `GET /api/registry/groups` lists the live
+  `devices.site` groups for the Registry site editor's picklist.
+  **Map link/label richness 2026-07-17**: migration 016 adds
+  `sites.label_pos` (label placement top/bottom/left/right),
+  `fiber_links.link_kind`+`provider` (owned vs leased carrier fiber, e.g.
+  C-Spire — rendered distinctly), and `fiber_links.{a,b}_device_id/ifindex`
+  (each link end patched into a switch port). When ports are attached the map
+  link's up/down + `speed_mbps` + utilization derive from those `switch_ports`
+  rows (authoritative, source `snmp_inventory`) instead of the endpoint-site
+  roll-up; `/api/links` gains `link_kind`/`provider`/`speed_mbps`/`port_backed`
+  and `/api/sites` gains `label_pos`. Registry link CRUD + the map link editor
+  set kind/provider and the per-end switch+port pickers. Also this session:
+  **topology switched LLDP→EDP** (EXTREME-EDP-MIB, migration 014, table
+  `lldp_neighbors`→`neighbors`).
+- **SSHEASY integration landed 2026-07-16.** SSHEASY (`jerahl/ssheasy`) is a
+  browser SSH client (xterm.js + WASM) embeddable in an iframe. NetMon adds an
+  operator/admin-gated **"SSH" button** on device detail pages (switch + AP)
+  that opens `<[web] ssheasy_url>/terminal?host=<mgmt_ip>&port=22&embed=1`
+  in a modal iframe (with an open-in-new-tab escape hatch). **No credentials
+  are ever handled by NetMon** — ssheasy prompts for the username/password in
+  the terminal, so read-only-first (§4.1) holds: this is a launch link, not a
+  proxy. Config is `[web] ssheasy_url` (empty → affordance hidden), surfaced
+  via `/api/meta`; role gating is client-side off `/auth/me` (no server
+  endpoint to guard). No new Python/JS dependency.
+- **Phase 10.1 Switches page UI landed 2026-07-16** (8 tabs, faceplate,
+  port-detail FDB pane — spec 10 progress log). Remaining 10.1 slices: the
+  deferred sweeps (PoE, ENTITY serial/fw, fans/PSUs) once a PoE fixture is
+  captured; validation against a real stack at fleet scale.
+- Next code session: **Phase 10.2 Wireless** — XIQ detail/clients/SSID cycles
+  (verify the ≈1.3–1.6k calls/h budget), 005 wireless tables, wireless API,
+  XIQ page + AP Detail.
 - Capture SNMP fixture walks from one lab EXOS stack (ports/FDB/LLDP/stack)
-  into `tests/fixtures/` ahead of the D6 gate.
+  into `tests/fixtures/`.
+- 2026-07-15 (owner-requested, out of phase order): settings engine shipped —
+  web-editable config overlay with write-only secrets, audit trail, and
+  in-place apply. See `docs/spec/12-settings-engine.md` +
+  `docs/runbooks/settings.md`; owner enables via `[security]` in netmon.conf.
+  (Merged into this branch 2026-07-16; its migration renumbered `007`→`008`
+  because `007_sessions.sql` landed first.)

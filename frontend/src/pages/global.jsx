@@ -1,6 +1,6 @@
 import React from "react";
 import { getJSON } from "../api.js";
-import { Card, Stat, Dot, Badge, Loading, ErrorMsg } from "../primitives.jsx";
+import { Card, Stat, Dot, Badge, Loading, ErrorMsg, deviceHref } from "../primitives.jsx";
 
 // Global overview: fleet counts rolled up from /api/status + a problem list.
 export function GlobalPage() {
@@ -47,7 +47,7 @@ export function GlobalPage() {
               {problems.map((d) => (
                 <tr key={d.id}>
                   <td><Dot severity={worst(d)} /></td>
-                  <td><a href={`#/ap/${d.id}`}>{d.name}</a></td>
+                  <td><a href={deviceHref(d)}>{d.name}</a></td>
                   <td>{d.site || "—"}</td>
                   <td>{d.device_type}</td>
                   <td><Badge state={d.ping} /></td>

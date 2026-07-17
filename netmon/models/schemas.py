@@ -166,6 +166,7 @@ class SiteRollup(BaseModel):
     name: str
     display_name: str | None = None
     tier: SiteTier = SiteTier.other
+    label_pos: str | None = None   # top|bottom|left|right; None → top
     lat: float
     lon: float
     status: SiteStatus = SiteStatus.unknown
@@ -182,10 +183,17 @@ class FiberLink(BaseModel):
     site_b: str
     capacity_gbps: float
     path: list[tuple[float, float]] | None = None
+    link_kind: str = "owned"        # owned | leased
+    provider: str | None = None     # carrier name when leased (e.g. C-Spire)
     status: SiteStatus = SiteStatus.unknown
     utilization_pct: float | None = None
     utilization_at: datetime | None = None
     utilization_source: str | None = None
+    # Derived from the attached switch ports when set (else the port-agnostic
+    # site-derived status stands): the negotiated link speed and whether the
+    # link is wired to physical ports at all.
+    speed_mbps: int | None = None
+    port_backed: bool = False
 
 
 class MapEvent(BaseModel):
@@ -243,6 +251,63 @@ class CollectorHealth(BaseModel):
     records_written: int | None = None
     consecutive_failures: int = 0
     updated_at: datetime | None = None
+
+
+class SupervisedTask(BaseModel):
+    """/api/netmon-status: one supervised asyncio task's registration + run
+    stats (the supervisor's in-process view — resets on restart)."""
+
+    name: str
+    enabled: bool = True
+    running: bool = False
+    interval_s: float
+    timeout_s: float
+    runs: int = 0
+    failures: int = 0
+    last_run_at: datetime | None = None
+    last_error: str | None = None
+
+
+class NetmonDbStats(BaseModel):
+    """/api/netmon-status: registry/state/event/alert row counts."""
+
+    devices_total: int = 0
+    devices_enabled: int = 0
+    state_rows: int = 0
+    events_total: int = 0
+    events_24h: int = 0
+    alerts_open: int = 0
+    notifications_shadow: int = 0
+    sessions_active: int = 0
+
+
+class NetmonStatus(BaseModel):
+    """The NetMon Status page (spec 11 D2) — replaces ZCD's Zabbix Status:
+    self-health over ``collector_health`` + supervisor stats + DB counts."""
+
+    version: str
+    started_at: datetime | None = None
+    uptime_s: float | None = None
+    db_ok: bool = False
+    engine_enabled: bool = False
+    engine_shadow: bool = True
+    poller_enabled: bool = False
+    snmp_inventory_enabled: bool = False
+    tasks: list[SupervisedTask] = Field(default_factory=list)
+    collectors: list[CollectorHealth] = Field(default_factory=list)
+    db: NetmonDbStats = Field(default_factory=NetmonDbStats)
+
+
+class UiMeta(BaseModel):
+    """/api/meta: static facts the UI shell needs once per load (nav
+    deep-links, footer version). No state, no secrets."""
+
+    version: str
+    zabbix_url: str = ""
+    ssheasy_url: str = ""
+    # Whether web edits are enabled at all ([security] allow_web_edit). Lets the
+    # UI show/hide edit affordances; the API still enforces it server-side.
+    can_edit: bool = False
 
 
 class UserSession(BaseModel):

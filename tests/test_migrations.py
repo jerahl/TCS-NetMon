@@ -72,6 +72,80 @@ def test_006_creates_switch_inventory_tables():
         assert f"CREATE TABLE IF NOT EXISTS {table}" in sql, f"missing table {table}"
 
 
+def test_007_creates_sessions_table():
+    migs = {m.version: m for m in discover_migrations()}
+    assert "007" in migs, "expected 007 sessions migration"
+    sql = migs["007"].path.read_text()
+    assert "CREATE TABLE IF NOT EXISTS sessions" in sql
+    # Only a digest of the cookie token may ever be at rest.
+    assert "token_hash" in sql
+
+
+def test_008_creates_settings_tables():
+    migs = {m.version: m for m in discover_migrations()}
+    assert "008" in migs, "expected 008 settings-engine migration"
+    sql = migs["008"].path.read_text()
+    for table in ("app_settings", "settings_audit"):
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in sql, f"missing table {table}"
+    # `key` is a MariaDB reserved word — must stay backtick-quoted.
+    assert "`key`" in sql
+
+
+def test_migration_versions_are_unique():
+    # Two parallel branches once both claimed version 007 — the runner tracks
+    # applied versions by this string, so a duplicate silently skips one file.
+    versions = [m.version for m in discover_migrations()]
+    assert len(versions) == len(set(versions)), f"duplicate migration version in {versions}"
+
+
+def test_009_adds_stack_poe_columns():
+    migs = {m.version: m for m in discover_migrations()}
+    assert "009" in migs, "expected 009 stack-PoE migration"
+    sql = migs["009"].path.read_text()
+    for col in ("poe_status", "poe_budget_w", "poe_avail_w", "poe_capacity_w",
+                "poe_alloc_w", "poe_measured_w"):
+        assert f"ADD COLUMN {col}" in sql, f"missing column {col}"
+
+
+def test_010_adds_stack_model_column():
+    migs = {m.version: m for m in discover_migrations()}
+    assert "010" in migs, "expected 010 stack-model migration"
+    assert "ADD COLUMN model" in migs["010"].path.read_text()
+
+
+def test_011_creates_wireless_tables():
+    migs = {m.version: m for m in discover_migrations()}
+    assert "011" in migs, "expected 011 wireless-inventory migration"
+    sql = migs["011"].path.read_text()
+    for table in ("ap_details", "ap_radios", "wireless_clients", "ssids"):
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in sql, f"missing table {table}"
+
+
+def test_012_creates_pf_nodes():
+    migs = {m.version: m for m in discover_migrations()}
+    assert "012" in migs, "expected 012 pf_nodes migration"
+    sql = migs["012"].path.read_text()
+    assert "CREATE TABLE IF NOT EXISTS pf_nodes" in sql
+    for col in ("last_switch", "conn_method", "online", "dot1x_user"):
+        assert col in sql, f"missing column {col}"
+
+
+def test_013_creates_surveillance_voip_tables():
+    migs = {m.version: m for m in discover_migrations()}
+    assert "013" in migs, "expected 013 surveillance/voip migration"
+    sql = migs["013"].path.read_text()
+    for table in ("cameras", "recording_servers", "trunks", "extensions"):
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in sql, f"missing table {table}"
+
+
+def test_014_renames_neighbors_and_adds_edp_columns():
+    migs = {m.version: m for m in discover_migrations()}
+    assert "014" in migs, "expected 014 EDP-neighbors migration"
+    sql = migs["014"].path.read_text()
+    assert "RENAME TO neighbors" in sql
+    assert "ADD COLUMN protocol" in sql and "ADD COLUMN age_s" in sql
+
+
 def test_every_migration_has_rollback_note():
     for mig in discover_migrations():
         text_ = mig.path.read_text().lower()

@@ -26,13 +26,27 @@ class FakeXiq:
 
     def __init__(self):
         self.rows: list[dict] = []
+        self.client_rows: list[dict] = []
+        self.policies: list[dict] = []
+        self.policy_ssids: dict[int, list[dict]] = {}
         self.exc: Exception | None = None
         self.rate_limit_remaining = None
+        self.device_views: list[str] = []
 
     async def get_devices(self, view: str = "BASIC") -> list[dict]:
         if self.exc is not None:
             raise self.exc
+        self.device_views.append(view)
         return self.rows
+
+    async def get_active_clients(self) -> list[dict]:
+        return self.client_rows
+
+    async def get_network_policies(self) -> list[dict]:
+        return self.policies
+
+    async def get_policy_ssids(self, policy_id: int) -> list[dict]:
+        return self.policy_ssids.get(policy_id, [])
 
 
 def _db(tmp_path):
@@ -122,3 +136,93 @@ def test_xiq_rate_limit_does_not_blind(tmp_path):
     assert st["100002"]["value"] == "up"
     h = db.fetch_one(engine, "SELECT * FROM collector_health WHERE name='xiq'")
     assert h["consecutive_failures"] == 1  # recorded as an error, but no blinding
+
+
+# ---- Phase 10.2 cycles (fixture-driven) -------------------------------------
+
+def _load_fixture(name):
+    import json
+    from pathlib import Path
+    return json.loads((Path(__file__).parent / "fixtures" / name).read_text())
+
+
+def _fake_with_fixtures():
+    fake = FakeXiq()
+    fake.rows = _load_fixture("xiq_devices_full.json")["data"]
+    fake.client_rows = _load_fixture("xiq_clients_active.json")["data"]
+    ssids = _load_fixture("xiq_ssids.json")
+    fake.policies = ssids["policies"]["data"]
+    fake.policy_ssids = {int(k): v["data"] for k, v in ssids["ssids"].items()}
+    return fake
+
+
+def _db_with_chs(tmp_path):
+    engine = _db(tmp_path)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO devices (name, site, device_type, enabled, xiq_device_id) "
+            "VALUES ('CHS-12-Room','CHS','ap',1,'100003')"))
+    return engine
+
+
+def test_xiq_detail_clients_ssid_cycles(tmp_path):
+    engine = _db_with_chs(tmp_path)
+    fake = _fake_with_fixtures()
+    collector = XiqCollector(engine, fake)
+    asyncio.run(collector.run_once())
+
+    # The detail cycle rode the status fetch: one FULL call, not BASIC+FULL.
+    assert fake.device_views == ["FULL"]
+
+    details = {r["device_id"]: r for r in db.fetch_all(engine, "SELECT * FROM ap_details")}
+    assert len(details) == 2
+    assert all(r["model"] == "AP305C" for r in details.values())
+    bhs = db.fetch_one(engine, "SELECT * FROM ap_details WHERE clients_total = 23")
+    assert bhs["fw_version"] == "10.6.4.0" and bhs["network_policy"] == "TCS-Schools"
+    assert bhs["mgmt_mac"] == "f0ab0000aa01"
+    assert bhs["uptime_s"] and bhs["uptime_s"] > 0
+
+    # Radios: band comes from the radio's own frequency field — the CHS AP
+    # runs dual-5G (both radios band 5), never inferred from the index.
+    radios = db.fetch_all(engine, "SELECT * FROM ap_radios ORDER BY device_id, radio")
+    assert len(radios) == 4
+    chs = [r for r in radios if r["band"] == "5" and r["width_mhz"] == 40]
+    assert len(chs) == 2
+    assert {r["radio"] for r in chs} == {"wifi0", "wifi1"}
+
+    clients = {r["mac"]: r for r in db.fetch_all(engine, "SELECT * FROM wireless_clients")}
+    assert len(clients) == 3
+    c = clients["aa:bb:cc:00:01:01"]
+    assert c["ssid"] == "TCS-Student" and c["band"] == "5" and c["rssi_dbm"] == -54
+    assert c["username"] == "student1@example.org"
+    assert c["device_id"] is not None
+    assert c["connected_since"] is not None
+    # Client on an AP outside the registry: kept, but unattributed.
+    assert clients["aa:bb:cc:00:01:03"]["device_id"] is None
+
+    ssids = {r["name"]: r for r in db.fetch_all(engine, "SELECT * FROM ssids")}
+    assert set(ssids) == {"TCS-Student", "TCS-Staff", "TCS-IoT"}
+    assert ssids["TCS-Staff"]["auth"] == "WPA2_ENTERPRISE"
+    assert ssids["TCS-Staff"]["network_policy"] == "TCS-Schools"
+
+
+def test_xiq_cycles_are_interval_gated_and_disableable(tmp_path):
+    engine = _db_with_chs(tmp_path)
+    fake = _fake_with_fixtures()
+    collector = XiqCollector(engine, fake)
+    asyncio.run(collector.run_once())
+    # Immediately again: no cycle is due — status-only BASIC fetch, and the
+    # clients/ssids fetchers aren't re-hit (rows unchanged is fine; views show
+    # the fetch shape).
+    asyncio.run(collector.run_once())
+    assert fake.device_views == ["FULL", "BASIC"]
+
+    # clients cycle disabled: a fresh collector persists no client rows.
+    from pathlib import Path
+    d2 = Path(str(tmp_path)) / "second"
+    d2.mkdir(exist_ok=True)
+    engine2 = _db(d2)
+    c2 = XiqCollector(engine2, _fake_with_fixtures(), clients_enabled=False)
+    asyncio.run(c2.run_once())
+    assert db.fetch_one(engine2, "SELECT COUNT(*) AS n FROM wireless_clients")["n"] == 0
+    assert db.fetch_one(engine2, "SELECT COUNT(*) AS n FROM ap_details")["n"] >= 1

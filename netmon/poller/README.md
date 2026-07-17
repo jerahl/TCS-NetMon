@@ -77,9 +77,9 @@ template). Writes the `006` inventory tables read by the Switches dashboard —
 |---|---|---|---|
 | ports | IF-MIB ifTable/ifXTable + EtherLike duplex | 120s | `switch_ports` (oper/admin/speed/duplex + rates) |
 | fdb | BRIDGE-MIB dot1dTpFdb ⋈ dot1dBasePortIfIndex | 900s | `fdb_entries` (MAC→ifIndex) |
-| lldp | LLDP-MIB lldpRemTable | 1800s | `lldp_neighbors` |
+| edp | EXTREME-EDP-MIB extremeEdpTable (Extreme-native; replaced LLDP) | 1800s | `neighbors` |
 | vlans | Extreme extremeVlanIfTable | 3600s | `switch_vlans` |
-| stack | Extreme stacking + CPU/mem/temp sensors | 300s | `stack_members` |
+| stack | Extreme stacking + CPU/mem/temp sensors | 300s | `stack_members` (member `status` decoded from extremeStackMemberOperStatus: 0=unknown, 1=up, 2=down, 3=mismatch — labels are owner-editable, see below) |
 
 One supervised task (registered at the fastest interval) gates each sweep
 internally by its own elapsed interval. Targets: enabled `device_type='switch'`
@@ -91,12 +91,30 @@ Replace-on-refresh: rows seen this sweep are upserted, rows not seen are pruned;
 a *failed* sweep raises before pruning, so its rows stay visibly stale (§4.5),
 never blanked.
 
+**Editable decode maps.** Some SNMP status columns are integer enums whose
+labels a vendor MIB may define differently than expected. Those maps live in
+`netmon/enums.py` (`DEFAULTS`) and are owner-editable from the web (Registry →
+Status labels, admin + `[security] allow_web_edit`). An override is stored in
+`snapshot_cache` under `enum.<name>` and merged over the default at run start
+(`effective = {**default, **override}`), so an unrecognised code always falls
+through to the baseline and then to the raw value — never blanked. Editing is
+live: the next sweep re-labels rows, no restart. Currently one map is exposed:
+`stack_status` (extremeStackMemberOperStatus).
+
 ## Running
 
 ```bash
 python -m netmon.poller.snmp_inventory --once     # every enabled sweep once
 python -m netmon.poller.snmp_inventory --loop      # forever on the base interval
+python -m netmon.poller.snmp_inventory --once -v  # + per-switch/per-walk trace
 ```
+
+Default CLI output is per-sweep pass progress (`run: sweep(s) due …`,
+`sweep ports done: N row(s), F/S switch(es) failed, Xs`) — use a timed `--once`
+to size `run_timeout_s` for your fleet. `-v/--verbose` adds per-switch row
+counts/durations and per-`snmpbulkwalk` lines/rc/stderr — the first thing to
+reach for when a switch sweeps empty (bad community and unreachable host look
+identical without the stderr line).
 
 In-process: enabled by `[snmp_inventory] enabled=true`; registered under the
 supervisor as `snmp_inventory` (`collector_health` name). Per-switch failure is
@@ -118,4 +136,4 @@ See spec §10.1 "Deferred".
 ## API
 
 `GET /api/switches`, `/{id}`, `/{id}/ports`, `/{id}/ports/{ifindex}` (port + FDB
-MACs), `/{id}/fdb`, `/{id}/lldp`, `/{id}/vlans` — read-only, viewer role, DB-only.
+MACs), `/{id}/fdb`, `/{id}/neighbors`, `/{id}/vlans` — read-only, viewer role, DB-only.
