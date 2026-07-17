@@ -96,10 +96,17 @@ function GenericSnapshot({ payload }) {
   return <pre className="mono dim" style={{ fontSize: 11, overflowX: "auto" }}>{JSON.stringify(payload, null, 2).slice(0, 4000)}</pre>;
 }
 
-export function NacPage() {
+export function NacPage({ query }) {
   const [tab, setTab] = React.useState("devices");
   const [summary, setSummary] = React.useState(null);
   const [error, setError] = React.useState(null);
+  const initialQ = query?.q || "";
+
+  // Arriving from the ⌘K palette with ?q=<mac> jumps to the Connected Devices
+  // tab pre-filtered to that endpoint (re-fires if the deep-link changes).
+  React.useEffect(() => {
+    if (initialQ) setTab("devices");
+  }, [initialQ]);
 
   React.useEffect(() => {
     let live = true;
@@ -151,7 +158,7 @@ export function NacPage() {
         ))}
       </div>
 
-      {tab === "devices" && <DevicesTab />}
+      {tab === "devices" && <DevicesTab initialQ={initialQ} />}
       {tab === "sessions" && <SessionsTab />}
       {tab === "quarantine" && <QuarantineTab />}
       {tab === "policies" && <PoliciesTab />}
@@ -160,10 +167,13 @@ export function NacPage() {
   );
 }
 
-function DevicesTab() {
+function DevicesTab({ initialQ = "" }) {
   const [rows, setRows] = React.useState(null);
-  const [q, setQ] = React.useState("");
+  const [q, setQ] = React.useState(initialQ);
   const [status, setStatus] = React.useState("");
+  // Follow the deep-link: a new ?q= from the palette updates the filter even if
+  // the tab is already mounted.
+  React.useEffect(() => { setQ(initialQ); }, [initialQ]);
   React.useEffect(() => {
     const id = setTimeout(() =>
       getJSON("/api/nac/nodes" + qs({ q, status, limit: 500 })).then(setRows).catch(() => setRows([])),

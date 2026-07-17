@@ -59,7 +59,8 @@ def test_search_endpoint_by_user_and_hostname(tmp_path):
         hit = by_user["endpoints"][0]
         assert hit["title"] == "LAPTOP-JDOE"
         assert "aa:bb:cc:11:22:33" in hit["subtitle"]
-        assert hit["href"] == "#/nac"
+        # Pre-filtered to the node's MAC (URL-encoded colons).
+        assert hit["href"] == "#/nac?q=aa%3Abb%3Acc%3A11%3A22%3A33"
 
 
 def test_search_mac_hits_endpoint_and_fdb(tmp_path):
@@ -71,7 +72,8 @@ def test_search_mac_hits_endpoint_and_fdb(tmp_path):
         assert len(data["endpoints"]) == 1
         assert len(data["macs"]) == 1
         mac = data["macs"][0]
-        assert mac["href"] == "#/switches/1"
+        # Pre-filtered to the MAC on that switch's FDB tab.
+        assert mac["href"] == "#/switches/1?mac=aa%3Abb%3Acc%3A11%3A22%3A33"
         assert "on BHS-Core-1" in mac["subtitle"]
         assert data["total"] == 2
 

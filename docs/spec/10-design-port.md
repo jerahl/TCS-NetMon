@@ -584,6 +584,12 @@ source calls at render).
   MAC/hostname/owner/dot1x_user/ip, `macs` (`fdb_entries`) by MAC — each capped
   at 12, ≥2-char query guard, every hit carrying an SPA `href`. (MAC matching is
   a raw substring `LIKE`; a colon-agnostic normaliser is a later nicety.)
+  **Hits land pre-filtered** (2026-07-17 follow-up): a device hit opens that
+  device's own page; an endpoint hit → `#/nac?q=<mac>` (Connected Devices tab
+  filtered to the node); a MAC hit → `#/switches/{id}?mac=<mac>` (that switch's
+  FDB tab filtered to the port the MAC is on). The hash router now parses an
+  optional `?key=val` query and threads it to pages as a `query` prop; the NAC
+  and Switches pages honor it and re-filter live if the deep-link changes.
 - **`/api/sites` extended**: `SiteRollup` gains `problems` (open-alert count
   scoped to the site, joined on the same effective `group_key`/name key) +
   `worst_severity` — the Global site-tile heatmap. Additive; the map ignores

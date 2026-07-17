@@ -232,9 +232,11 @@ function EmptySweep({ what }) {
   );
 }
 
-function FdbTab({ switchId, portName }) {
+function FdbTab({ switchId, portName, initialQ = "" }) {
   const [rows, setRows] = React.useState(null);
-  const [q, setQ] = React.useState("");
+  const [q, setQ] = React.useState(initialQ);
+  // Follow the deep-link: a new ?mac= from the palette updates the filter.
+  React.useEffect(() => { setQ(initialQ); }, [initialQ]);
   React.useEffect(() => { tabFetch(`/api/switches/${switchId}/fdb`, setRows); }, [switchId]);
   if (!rows) return <Loading what="FDB" />;
   const shown = rows.filter((r) => !q || r.mac.includes(q.toLowerCase()));
@@ -526,7 +528,7 @@ function tabFetch(url, set) {
 
 // ───────── page ─────────
 
-export function SwitchesPage({ id }) {
+export function SwitchesPage({ id, query }) {
   const [fleet, setFleet] = React.useState(null);
   const [error, setError] = React.useState(null);
   const [tab, setTab] = React.useState("ports");
@@ -535,6 +537,13 @@ export function SwitchesPage({ id }) {
   const [selectedPort, setSelectedPort] = React.useState(null);
 
   const activeId = id ? parseInt(id, 10) : null;
+  const macFilter = query?.mac || "";
+
+  // Arriving from the ⌘K palette with ?mac=<mac> jumps to the FDB tab
+  // pre-filtered to that MAC (re-fires if the deep-link changes).
+  React.useEffect(() => {
+    if (macFilter) setTab("fdb");
+  }, [macFilter]);
 
   // Fleet list for the navigator (and to pick a default switch).
   React.useEffect(() => {
@@ -719,7 +728,7 @@ export function SwitchesPage({ id }) {
                 )}
               </Card>
             </React.Fragment>
-          ) : tab === "fdb" ? <FdbTab switchId={activeId} portName={portName} />
+          ) : tab === "fdb" ? <FdbTab switchId={activeId} portName={portName} initialQ={macFilter} />
             : tab === "topology" ? <TopologyTab switchId={activeId} portName={portName} />
             : tab === "vlans" ? <VlansTab switchId={activeId} />
             : tab === "stack" ? <StackTab stack={stack} />

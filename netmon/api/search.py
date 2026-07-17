@@ -16,6 +16,8 @@ data (spec 10 §1).
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.engine import Engine
 
@@ -75,7 +77,10 @@ def _search_endpoints(engine: Engine, like: str) -> list[SearchHit]:
             kind="endpoint",
             title=str(title),
             subtitle=(" · ".join([r["mac"]] + bits)),
-            href="#/nac",
+            # Open the NAC Connected-Devices tab pre-filtered to this node's MAC
+            # (the unique identity key) so the palette lands on the endpoint, not
+            # an unfiltered list.
+            href=f"#/nac?q={quote(r['mac'])}",
             badge="PF",
         ))
     return out
@@ -101,7 +106,9 @@ def _search_macs(engine: Engine, like: str) -> list[SearchHit]:
             kind="mac",
             title=r["mac"],
             subtitle=" · ".join(bits),
-            href=f"#/switches/{r['device_id']}",
+            # Open that switch's FDB tab pre-filtered to this MAC so the palette
+            # lands on the port the MAC is learned on, not an unfiltered sweep.
+            href=f"#/switches/{r['device_id']}?mac={quote(r['mac'])}",
             badge="FDB",
         ))
     return out
