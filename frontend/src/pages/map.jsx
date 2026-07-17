@@ -436,10 +436,20 @@ export function MapPage() {
 
     if (editLink == null) {
       for (const s of sites || []) {
-        const h = L.marker([s.lat, s.lon], { draggable: true, icon: handleIcon("site"), zIndexOffset: 1200, keyboard: false }).addTo(map);
-        h.on("drag", (ev) => moveSiteLive(s.name, ev.latlng));
-        h.on("dragend", (ev) => saveSiteLocation(s.name, ev.target.getLatLng()));
-        er.siteHandles[s.name] = h;
+        if (linkAdd) {
+          // Add-link mode: the handle is a click target, NOT draggable — it
+          // overlays the site dot, so it must own the pick click (otherwise a
+          // click hits this handle and never reaches the site).
+          const kind = pendingA === s.name ? "pick-sel" : "pick";
+          const h = L.marker([s.lat, s.lon], { icon: handleIcon(kind), zIndexOffset: 1200, keyboard: false }).addTo(map);
+          h.on("click", (ev) => { L.DomEvent.stop(ev); pickRef.current(s.name); });
+          er.siteHandles[s.name] = h;
+        } else {
+          const h = L.marker([s.lat, s.lon], { draggable: true, icon: handleIcon("site"), zIndexOffset: 1200, keyboard: false }).addTo(map);
+          h.on("drag", (ev) => moveSiteLive(s.name, ev.latlng));
+          h.on("dragend", (ev) => saveSiteLocation(s.name, ev.target.getLatLng()));
+          er.siteHandles[s.name] = h;
+        }
       }
     } else {
       const l = (links || []).find((x) => x.id === editLink);
@@ -454,7 +464,7 @@ export function MapPage() {
       }
     }
     return clear;
-  }, [edit, editLink, data]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [edit, editLink, linkAdd, pendingA, data]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const exitEdit = () => { setEdit(false); setEditLink(null); setLinkAdd(false); setPendingA(null); setEditMsg(null); };
 

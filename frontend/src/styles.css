@@ -419,4 +419,8 @@ table.grid.kv td:first-child { color: var(--dim); width: 160px; }
 .edit-handle.eh-site { background: #9184d9; border: 2px solid #fff; width: 14px; height: 14px; }
 .edit-handle.eh-vtx { background: #e8a415; border: 2px solid #fff; width: 13px; height: 13px; }
 .edit-handle.eh-mid { background: rgba(233,164,21,.5); border: 1px dashed #fff; width: 11px; height: 11px; }
+/* Add-link mode: click targets over each site (not draggable). */
+.edit-handle.eh-pick { background: rgba(145,132,217,.35); border: 2px solid #9184d9; width: 20px; height: 20px; cursor: pointer; }
+.edit-handle.eh-pick:hover { background: rgba(145,132,217,.7); }
+.edit-handle.eh-pick-sel { background: #9184d9; border: 2px solid #fff; width: 20px; height: 20px; cursor: pointer; box-shadow: 0 0 0 3px rgba(145,132,217,.4); }
 .edit-linkbox .edit-row { display: flex; align-items: center; gap: 8px; }
