@@ -9,10 +9,23 @@ server-side session cookie — no passwords, no directory bind.
 
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
 from typing import Any
 
 from netmon.config import ROLES, AuthConfig
 from netmon.models.schemas import Role
+
+_NS = {
+    "samlp": "urn:oasis:names:tc:SAML:2.0:protocol",
+    "saml": "urn:oasis:names:tc:SAML:2.0:assertion",
+    "ds": "http://www.w3.org/2000/09/xmldsig#",
+}
+# xmldsig URIs flagged deprecated by python3-saml's rejectDeprecatedAlgorithm.
+DEPRECATED_SIG_ALGS = frozenset({
+    "http://www.w3.org/2000/09/xmldsig#rsa-sha1",
+    "http://www.w3.org/2000/09/xmldsig#dsa-sha1",
+    "http://www.w3.org/2000/09/xmldsig#sha1",
+})
 
 
 class SamlError(Exception):
@@ -95,6 +108,50 @@ def explain_role_mapping(attributes: dict[str, list], cfg: AuthConfig) -> dict[s
         "matches": matches,
         "mapped_role": mapped.value if mapped is not None else None,
     }
+
+
+def extract_response_facts(response_xml: str) -> dict[str, Any]:
+    """Pull the fields that drive validation out of a decoded SAML response.
+
+    Pure, stdlib-only (ElementTree — no new dependency). Powers the debug error
+    page: comparing these against the SP config turns "SAML authentication
+    failed" into a named mismatch (audience, destination, deprecated signature).
+    Returns empty/None fields for anything absent or unparseable — never raises.
+    """
+    facts: dict[str, Any] = {
+        "issuer": None,
+        "destination": None,
+        "in_response_to": None,
+        "audiences": [],
+        "signature_method": None,
+        "not_before": None,
+        "not_on_or_after": None,
+    }
+    if not response_xml:
+        return facts
+    try:
+        root = ET.fromstring(response_xml)
+    except ET.ParseError:
+        return facts
+
+    facts["destination"] = root.get("Destination")
+    facts["in_response_to"] = root.get("InResponseTo")
+    issuer = root.find("saml:Issuer", _NS)
+    if issuer is not None and issuer.text:
+        facts["issuer"] = issuer.text.strip()
+    facts["audiences"] = [
+        a.text.strip()
+        for a in root.findall(".//saml:AudienceRestriction/saml:Audience", _NS)
+        if a.text and a.text.strip()
+    ]
+    sig = root.find(".//ds:SignedInfo/ds:SignatureMethod", _NS)
+    if sig is not None:
+        facts["signature_method"] = sig.get("Algorithm")
+    cond = root.find(".//saml:Conditions", _NS)
+    if cond is not None:
+        facts["not_before"] = cond.get("NotBefore")
+        facts["not_on_or_after"] = cond.get("NotOnOrAfter")
+    return facts
 
 
 def build_auth(request_data: dict[str, Any], cfg: AuthConfig):

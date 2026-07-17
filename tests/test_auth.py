@@ -8,8 +8,24 @@ from netmon.auth.local import check_local, hash_password, verify_password
 from netmon.auth.saml import (
     SamlError,
     explain_role_mapping,
+    extract_response_facts,
     role_from_attributes,
     sp_metadata,
+)
+
+_SAMPLE_RESPONSE = (
+    '<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"'
+    ' xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion"'
+    ' xmlns:ds="http://www.w3.org/2000/09/xmldsig#"'
+    ' Destination="https://tcs-netmon.example/auth/saml/acs">'
+    '<saml:Issuer>https://idp.classlink.com/x</saml:Issuer>'
+    '<ds:Signature><ds:SignedInfo>'
+    '<ds:SignatureMethod Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1"/>'
+    '</ds:SignedInfo></ds:Signature>'
+    '<saml:Assertion><saml:Conditions NotBefore="2026-07-17T00:00:00Z"'
+    ' NotOnOrAfter="2026-07-18T00:00:00Z"><saml:AudienceRestriction>'
+    '<saml:Audience>https://tcs-netmon.example/auth/saml/metadata</saml:Audience>'
+    '</saml:AudienceRestriction></saml:Conditions></saml:Assertion></samlp:Response>'
 )
 from netmon.auth.sessions import SessionStore
 from netmon.config import AuthConfig, load_config
@@ -107,6 +123,49 @@ def test_saml_error_page_shows_reason_codes_and_hint(tmp_path):
     assert "must match exactly" in html        # the targeted hint
     assert "samlp:Response" in html            # decoded XML echoed back
     assert cfg.auth.sp_entity_id in html       # what NetMon expects, for comparison
+
+
+def test_extract_response_facts():
+    f = extract_response_facts(_SAMPLE_RESPONSE)
+    assert f["destination"] == "https://tcs-netmon.example/auth/saml/acs"
+    assert f["audiences"] == ["https://tcs-netmon.example/auth/saml/metadata"]
+    assert f["issuer"] == "https://idp.classlink.com/x"
+    assert f["signature_method"] == "http://www.w3.org/2000/09/xmldsig#rsa-sha1"
+    assert f["not_before"] == "2026-07-17T00:00:00Z"
+    # Junk never raises — returns the empty shape.
+    assert extract_response_facts("not xml")["audiences"] == []
+    assert extract_response_facts("")["destination"] is None
+
+
+def _saml_conf(tmp_path, sp_entity_id):
+    conf = tmp_path / "netmon.conf"
+    conf.write_text(
+        f"[db]\nurl = sqlite:///{tmp_path/'x.db'}\n[web]\nsecure_cookies = false\n"
+        "[auth]\n"
+        "saml_idp_entity_id = https://idp.example/entity\n"
+        "saml_idp_sso_url = https://idp.example/sso\n"
+        "saml_idp_x509cert = MIIBdummycert\n"
+        f"saml_sp_entity_id = {sp_entity_id}\n"
+        "saml_sp_acs_url = https://tcs-netmon.example/auth/saml/acs\n"
+    )
+    return conf
+
+
+def test_saml_error_page_flags_audience_mismatch(tmp_path):
+    # SP entityId does NOT match the response's Audience → page names it.
+    cfg = load_config(_saml_conf(tmp_path, "https://tcs-netmon.example/WRONG"))
+    html = saml_error_page(["invalid_response"], "bad audience", _SAMPLE_RESPONSE, cfg)
+    assert "MISMATCH" in html                                  # audience flagged
+    assert "https://tcs-netmon.example/auth/saml/metadata" in html  # what IdP sent
+    assert "rsa-sha1" in html                                  # deprecated-sig note
+
+
+def test_saml_error_page_audience_match(tmp_path):
+    # SP entityId matches the Audience → no mismatch flagged for it.
+    cfg = load_config(_saml_conf(tmp_path, "https://tcs-netmon.example/auth/saml/metadata"))
+    html = saml_error_page(["invalid_response"], "other", _SAMPLE_RESPONSE, cfg)
+    assert "MISMATCH" not in html
+    assert html.count(">match<") >= 2  # audience + destination both match
 
 
 def test_saml_error_page_escapes_xml(tmp_path):

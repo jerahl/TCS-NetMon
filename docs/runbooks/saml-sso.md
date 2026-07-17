@@ -75,8 +75,10 @@ SAML ACS rejected: [<codes>] / <reason>
 
 Set `saml_debug = true` and retry the login: the ACS then renders a **SAML
 error page** with the human-readable reason, the OneLogin error codes, a
-targeted hint for the common codes, and the **decoded SAML response XML** — no
-shell access to the logs needed. Common codes and fixes:
+targeted hint for the common codes, a **side-by-side comparison** of what the
+IdP sent (Audience, Destination, signature algorithm) against the `saml_sp_*`
+config — mismatches are flagged inline — and the **decoded SAML response XML**.
+No shell access to the logs needed. Common codes and fixes:
 
 | Error code | Fix |
 |---|---|
@@ -92,6 +94,26 @@ A validated ClassLink user who maps to no role gets a 403 ("maps to no NetMon
 role"). NetMon logs the attribute **names** that were present (values are
 withheld — they may be PII) with a pointer to enable `saml_debug`. Turn debug
 on briefly to see the values, fix the map, turn it back off.
+
+## ClassLink specifics (observed)
+
+- The `Audience` ClassLink asserts is the **SP metadata URL** (`.../auth/saml/
+  metadata`), so `saml_sp_entity_id` must be that exact URL — not the ACS URL,
+  not the bare hostname. An `invalid_response` "…is not a valid audience"
+  rejection is almost always this.
+- ClassLink releases these attributes (NameFormat `basic`): `role`,
+  `group_names` (comma-joined names, **not** `group_ids`), `email`, `name`,
+  `login_id`. The NameID is a numeric ClassLink user id. So:
+  - `saml_role_attr = role` (default) works; map the value with
+    `saml_role_admin = admin`, etc.
+  - For group-based mapping set `saml_group_attr = group_names` and map names,
+    e.g. `saml_group_admin = ClassLink Admins, IT Staff`.
+- ClassLink signs responses with **RSA-SHA1** (a response-level enveloped
+  signature; the assertion itself is not separately signed). python3-saml 1.16
+  accepts SHA-1 by default (`rejectDeprecatedAlgorithm` defaults off) and
+  accepts a response-level signature, so no extra settings are needed — but do
+  not enable `rejectDeprecatedAlgorithm`, or logins break until ClassLink moves
+  to SHA-256.
 
 ## Break-glass
 

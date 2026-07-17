@@ -239,6 +239,44 @@ def saml_error_page(errors: list[str], reason: str | None, response_xml: str,
     xml_html = (f"<pre>{e(response_xml)}</pre>" if response_xml
                 else '<p class="muted">No decoded response available.</p>')
 
+    # Compare what the IdP sent against the SP config — this names the mismatch
+    # (audience/destination/deprecated signature) instead of leaving it to the
+    # reader's eyes on the raw XML below.
+    facts = saml.extract_response_facts(response_xml)
+
+    def _cmp(label: str, got, want: str, matched: bool) -> str:
+        got_txt = ", ".join(str(g) for g in got) if isinstance(got, list) else (got or "—")
+        badge = ('<span class="ok">match</span>' if matched
+                 else '<span class="bad">MISMATCH</span>')
+        return (f'<tr><td>{e(label)}</td><td><code>{e(str(got_txt))}</code></td>'
+                f'<td><code>{e(want or "—")}</code></td><td>{badge}</td></tr>')
+
+    checks = ""
+    if facts["audiences"] or facts["destination"]:
+        aud_ok = cfg.auth.sp_entity_id in facts["audiences"]
+        dest_ok = (not facts["destination"]
+                   or facts["destination"] == cfg.auth.sp_acs_url)
+        checks = (
+            '<h2>What the IdP sent vs. your config</h2>'
+            '<table><tbody>'
+            '<tr><td class="muted">check</td><td class="muted">in response</td>'
+            '<td class="muted">saml_sp_* config</td><td></td></tr>'
+            + _cmp("Audience → saml_sp_entity_id", facts["audiences"],
+                   cfg.auth.sp_entity_id, aud_ok)
+            + _cmp("Destination → saml_sp_acs_url", facts["destination"],
+                   cfg.auth.sp_acs_url, dest_ok)
+            + '</tbody></table>'
+        )
+
+    sig = facts["signature_method"]
+    if sig in saml.DEPRECATED_SIG_ALGS:
+        checks += (
+            f'<p class="muted" style="margin-top:12px">Signature algorithm: '
+            f'<code>{e(sig)}</code> — deprecated (SHA-1). NetMon accepts it '
+            f'(python3-saml default), but a stricter <code>rejectDeprecatedAlgorithm</code> '
+            f'setting would reject it. ClassLink signs with RSA-SHA1.</p>'
+        )
+
     hints = {
         "invalid_response_signature": "The assertion/response signature did not "
             "verify — the IdP signing cert in saml_idp_x509cert is wrong, stale, "
@@ -286,6 +324,8 @@ def saml_error_page(errors: list[str], reason: str | None, response_xml: str,
     <tr><td>SP ACS URL</td><td><code>{e(cfg.auth.sp_acs_url) or "—"}</code></td></tr>
     <tr><td>IdP entityId</td><td><code>{e(cfg.auth.idp_entity_id) or "—"}</code></td></tr>
   </tbody></table>
+
+  {checks}
 
   {hint_html}
 
