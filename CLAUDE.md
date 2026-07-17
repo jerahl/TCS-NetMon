@@ -35,7 +35,7 @@ NetMon also owns **alerting** (rules → dedupe → maintenance windows → SMTP
 - Server monitoring (Nutanix, iDRAC, Linux/Windows agents, BIND) — Zabbix keeps this. The ZCD Servers page is **retired**, not ported (spec 11 D2); nav deep-links to Zabbix.
 - The ZCD Zabbix Status page (replaced by a **NetMon Status** page over `collector_health` + supervisor stats) and the Cortex XDR mock page (dropped — spec 11 D8).
 - FortiGate — **deferred** to post-parity phase 11.x (spec 11 D1); nav deep-links to Zabbix meanwhile.
-- Long-term metric time-series / graphs — source platforms retain their own history. NetMon's history is the `state_events` transition log, plus (⛔ D3, if signed off) one **bounded 24h ring-buffer** table (`state_samples`, auto-pruned) to power the ZCD-parity charts. Nothing beyond that window, ever.
+- Long-term metric time-series / graphs — source platforms retain their own history. NetMon's history is the `state_events` transition log, plus (D3 **approved 2026-07-15, built as Phase 10.6**) one **bounded 24h ring-buffer** table (`state_samples`, auto-pruned) to power the ZCD-parity charts. Nothing beyond that window, ever.
 - Write paths to any source platform. **Every integration is read-only.** Exception path: spec 11 D4 (⛔) proposes porting ZCD's four operator write actions (PoE cycle, AP reboot, PF reevaluate/restart-port) as a post-cutover phase — role-gated, audit-logged, per-action config flags, default off. Until D4 is signed off, render disabled buttons with "managed in <source>" tooltips. If any other task appears to require a write to a source, stop and flag it.
 - Notification channels beyond SMTP (no Teams/webhooks/SMS in v1).
 - Multi-tenant / multi-district features.
@@ -109,13 +109,13 @@ netmon/
 
 **Snapshot/inventory cache (spec 10 §3, planned):** `switch_ports`, `fdb_entries`, `lldp_neighbors`, `switch_vlans`, `stack_members`; `ap_details`, `ap_radios`, `wireless_clients`, `ssids`; `pf_nodes`; `cameras`, `recording_servers`, `trunks`, `extensions`; `config_backups`; generic `snapshot_cache` (key→JSON payload). Replace-on-refresh, `updated_at` on every row, no history. Counters store previous raw values in-row so rates are computed at write time — current rate is state, not history.
 
-**Bounded history (⛔ D3, if approved):** one `state_samples` ring-buffer table, hard 24h retention, auto-pruned — nothing else stores series.
+**Bounded history (D3 approved; built Phase 10.6):** one `state_samples` ring-buffer table (migration `019`; `(series, ts) → value`), hard 24h retention, auto-pruned by the `netmon.history` sampler — nothing else stores series.
 
 **Design invariants:** `device_state` answers "what is true now"; `state_events` answers "what changed when"; inventory tables are descriptive facts; dashboards read only NetMon's DB — **zero source-platform calls at page render**. A source being unreachable is itself a state (`source_status = blind`), and blind must never render as healthy.
 
 ## 7. Milestones and phases
 
-**Delivered:** Phases 0–4, 6, 9 (foundation, poller, XIQ status collector, first UI port, alert engine in shadow, site map); Phases 5/7 collectors at state-level (PF snapshot, Milestone Config-API poll, 3CX trunks, rConfig freshness); **Phase 10.0 complete** (2026-07-16, incl. the spec-11 amendments: NetMon Status page, seed `--sites-from-db`, nav disposition, DB-backed sessions); **Phase 10.1 feature-complete** (SNMP sweeps incl. PoE+entity, switch API, 8-tab Switches page — 2026-07-15/16); **Phase 10.2 built** (wireless tables, XIQ detail/clients/SSID cycles, wireless API, XIQ + AP Detail pages — 2026-07-16, live-fleet payload validation pending); **Phases 10.3 (Identity/PF), 10.4 (Surveillance+VoIP), and 10.5 (Global + Search + staleness polish) built** (2026-07-16/17 — `/api/summary`, `/api/search` + ⌘K palette, rebuilt Global page; live-source payload validation pending). All page-parity phases 10.0–10.5 are now built; **10.6 history ring buffer (⛔ D3)** is the next code phase. Phase 8 (cutover) remains owner-gated at the end.
+**Delivered:** Phases 0–4, 6, 9 (foundation, poller, XIQ status collector, first UI port, alert engine in shadow, site map); Phases 5/7 collectors at state-level (PF snapshot, Milestone Config-API poll, 3CX trunks, rConfig freshness); **Phase 10.0 complete** (2026-07-16, incl. the spec-11 amendments: NetMon Status page, seed `--sites-from-db`, nav disposition, DB-backed sessions); **Phase 10.1 feature-complete** (SNMP sweeps incl. PoE+entity, switch API, 8-tab Switches page — 2026-07-15/16); **Phase 10.2 built** (wireless tables, XIQ detail/clients/SSID cycles, wireless API, XIQ + AP Detail pages — 2026-07-16, live-fleet payload validation pending); **Phases 10.3 (Identity/PF), 10.4 (Surveillance+VoIP), and 10.5 (Global + Search + staleness polish) built** (2026-07-16/17 — `/api/summary`, `/api/search` + ⌘K palette, rebuilt Global page; live-source payload validation pending). All page-parity phases 10.0–10.5 are now built; **Phase 10.6 (24h `state_samples` history ring buffer + sampler + `/api/history` + sparklines) built 2026-07-17** (D3, approved 2026-07-15). Remaining before cutover: live-source payload validation (10.2/10.3/10.4) and the gated extras (D5 WebSocket alarms, D7 JPEG proxy). Phase 8 (cutover) remains owner-gated at the end.
 
 **Forward plan (spec 11 §7 — work phase-by-phase; do not start a phase until the prior phase's DoD is met and committed):**
 
@@ -127,7 +127,7 @@ netmon/
 | **10.3 Identity** | `pf_nodes` persistence (in-memory snapshot deleted); NAC API rework; five PF pages | — |
 | **10.4 Surveillance + VoIP** | camera/RS/storage persistence + `milestone.overview`; ESS WebSocket wiring; camera JPEG proxy; trunks/extensions + SystemStatus | ⛔ D5 |
 | **10.5 Global + Search** | `/api/summary`, `/api/sites` cards, `/api/search` + ⌘K palette; Global page; staleness badging pass | — |
-| **10.6 History buffer** | `state_samples` (24h ring, pruned) + writers + chart slots | ⛔ D3 |
+| **10.6 History buffer** | `state_samples` (24h ring, pruned) + sampler + `/api/history` + chart slots | ✅ D3 (built 2026-07-17) |
 | **11.x Post-parity** | FortiGate collector + page (D1); operator write actions with audit log (⛔ D4); EAPS/SFP-DOM extras | ⛔ D4 |
 | **8 — Parallel run & cutover** *(owner-gated)* | ≥4 weeks shadow comparison; owner flips `shadow=false`; Zabbix network/wireless/voice/camera hosts disabled (configs exported as rollback); Zabbix remains for servers | owner |
 
@@ -142,7 +142,7 @@ netmon/
 
 ## 9. Open questions (tracked; do not guess answers)
 
-**⛔ Gates awaiting owner sign-off (spec 11 §6, recommendations recorded):** D3 (bounded 24h ring buffer), D4 (operator write actions, post-cutover), D5 (`websockets` dependency), D6 (`snmpbulkwalk` sweeps — gates 10.1).
+**⛔ Gates awaiting owner sign-off (spec 11 §6, recommendations recorded):** D4 (operator write actions, post-cutover), D5 (`websockets` dependency), D7 (camera JPEG proxy). **Resolved:** D3 (24h ring buffer — approved 2026-07-15, built Phase 10.6) and D6 (`snmpbulkwalk` sweeps — approved, built Phase 10.1).
 
 **Carried over:** XIQ rate limits at production device counts (validate the ≈1.3–1.6k calls/h budget); 3CX v20 surface for extensions/active calls/queues (fixtures first); rConfig config-diff pane (on-click read-through vs. link-out — spec 10 Q5); `wireless_clients` scale/PII acceptance (~9–12k rows with usernames/MACs — spec 10 Q8); SMTP relay; SP cert rotation.
 

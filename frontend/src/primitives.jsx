@@ -95,6 +95,31 @@ export function Freshness({ at, staleAfter = 600, ok = true, prefix = "" }) {
   );
 }
 
+// Inline SVG sparkline over an array of {ts, value} points (spec 10.6 chart
+// slots, fed by /api/history). Dependency-free; degrades to an honest "—" when
+// there aren't enough points yet (history disabled or just started).
+export function Sparkline({ points, width = 140, height = 32, color, area = true }) {
+  const vals = (points || []).map((p) => (p == null ? null : p.value)).filter((v) => v != null);
+  if (vals.length < 2) return <span className="spark-empty dim">—</span>;
+  const c = color || SEV_COLOR.ok;
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const span = max - min || 1;
+  const n = vals.length;
+  const px = (i) => (i / (n - 1)) * (width - 2) + 1;
+  const py = (v) => height - 2 - ((v - min) / span) * (height - 4);
+  const line = vals.map((v, i) => `${i ? "L" : "M"}${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(" ");
+  const fillPath = `${line} L${px(n - 1).toFixed(1)},${height} L${px(0).toFixed(1)},${height} Z`;
+  return (
+    <svg className="spark" width={width} height={height} viewBox={`0 0 ${width} ${height}`}
+         preserveAspectRatio="none" aria-hidden="true">
+      {area && <path d={fillPath} fill={c} fillOpacity="0.14" stroke="none" />}
+      <path d={line} fill="none" stroke={c} strokeWidth="1.5"
+            strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export function Loading({ what }) {
   return <div className="msg">Loading {what}…</div>;
 }

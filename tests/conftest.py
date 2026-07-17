@@ -467,6 +467,16 @@ CREATE TABLE extensions (
 """
 
 
+STATE_SAMPLES_DDL_SQLITE = """
+CREATE TABLE state_samples (
+    series TEXT NOT NULL,
+    ts TIMESTAMP NOT NULL,
+    value REAL,
+    PRIMARY KEY (series, ts)
+)
+"""
+
+
 def create_core_tables(engine) -> None:
     """Create the tables the poller / collectors / engine / API touch (SQLite)."""
     from sqlalchemy import text
@@ -502,6 +512,7 @@ def create_core_tables(engine) -> None:
             EXTENSIONS_DDL_SQLITE,
             APP_SETTINGS_DDL_SQLITE,
             SETTINGS_AUDIT_DDL_SQLITE,
+            STATE_SAMPLES_DDL_SQLITE,
         ):
             conn.execute(text(ddl))
 

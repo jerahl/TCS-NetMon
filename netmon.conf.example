@@ -231,6 +231,19 @@ shadow = true
 # smtp_from = netmon@tuscaloosacityschools.com
 # default_target = noc@tuscaloosacityschools.com
 
+[history]
+# Bounded 24 h history ring buffer (Phase 10.6). The ONLY sanctioned
+# metric-series exception to the no-time-series charter (CLAUDE.md §2;
+# owner-approved 2026-07-15). A sampler snapshots a curated set of aggregate +
+# per-switch series into state_samples every interval_s and prunes anything
+# older than retention_hours — a fixed rolling window, never long-term storage.
+# Read-only over NetMon's own DB (no source calls). Disabled by default
+# (per-step reversibility); enable to power the sparklines.
+enabled = false
+interval_s = 300
+# Hard-capped at 24 in config — a larger value is refused, not clamped.
+retention_hours = 24
+
 [zabbix]
 # Read-only connection for scripts/zabbix_export.py — the Phase 0 recon helper
 # that pulls sites/groups/hosts from the retiring Zabbix 7.4 server to feed

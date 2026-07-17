@@ -30,7 +30,7 @@ log = logging.getLogger("netmon.settings")
 
 # Sections whose defs overlay typed config dataclass attributes (def.attr);
 # everything else in the registry is a raw source-section string setting.
-TYPED_SECTIONS = ("web", "auth", "poller", "snmp_inventory", "engine")
+TYPED_SECTIONS = ("web", "auth", "poller", "snmp_inventory", "engine", "history")
 
 SECTION_LABELS = {
     "web": "Web sessions",
@@ -38,6 +38,7 @@ SECTION_LABELS = {
     "poller": "Native poller",
     "snmp_inventory": "SNMP inventory sweeps",
     "engine": "Alert engine & email",
+    "history": "History ring buffer",
     "xiq": "ExtremeCloud IQ",
     "packetfence": "PacketFence",
     "milestone": "Milestone XProtect",
@@ -166,6 +167,16 @@ REGISTRY: list[SettingDef] = [
     _d("engine.smtp_port", "int", 25, "SMTP port", attr="smtp_port", min=1, max=65535),
     _d("engine.smtp_from", "str", "", "From address", attr="smtp_from"),
     _d("engine.default_target", "str", "", "Default notification target", attr="default_target"),
+
+    # --- history (bounded ≤24 h ring buffer; spec 10.6) ---
+    _d("history.enabled", "bool", False, "Enable history sampler",
+       "Snapshots aggregate + per-switch series into the 24 h ring buffer for "
+       "the sparklines. Read-only over NetMon's own DB.", attr="enabled", restart=True),
+    _d("history.interval_s", "int", 300, "Sample interval (s)", attr="interval_s",
+       restart=True, min=30),
+    _d("history.retention_hours", "int", 24, "Retention (hours, ≤24)",
+       "Hard-capped at 24 — the charter's only metric-series exception.",
+       attr="retention_hours", restart=True, min=1, max=24),
 
     # --- sources (raw section settings; collectors parse them) ---
     _d("xiq.enabled", "bool", False, "Enable XIQ collector"),
@@ -331,6 +342,8 @@ def apply_overrides(base: Config, values: dict[str, Any]) -> Config:
         cfg = replace(cfg, snmp_inventory=replace(cfg.snmp_inventory, **typed["snmp_inventory"]))
     if typed["engine"]:
         cfg = replace(cfg, engine=replace(cfg.engine, **typed["engine"]))
+    if typed["history"]:
+        cfg = replace(cfg, history=replace(cfg.history, **typed["history"]))
 
     if source_sets:
         sources = dict(cfg.sources)

@@ -3,7 +3,7 @@
 **2026-07-15:** adopted into the standalone-scope revision — `docs/spec/11-standalone-scope.md` is the plan of
 record; it amends the phases below (adds NetMon Status page, seed `--sites-from-db`, 10.6 history buffer,
 11.x post-parity bucket) and records recommendations for this spec's §10 open questions as decisions D1–D9.
-**Status:** IN PROGRESS — Phase 10.0 complete incl. the spec-11 amendments (2026-07-16); Phase 10.1 **feature-complete** (SNMP sweeps + switch API + 8-tab UI + PoE/entity sweeps, 2026-07-15/16); Phase 10.2 **built** (wireless tables + XIQ cycles + wireless API + XIQ/AP-Detail pages, 2026-07-16 — live-fleet validation of the FULL/clients payload shapes pending); Phase 10.3 **built** (`pf_nodes` persistence + snapshot fetchers + NAC API/pages + the FDB⋈PF port-identity join, 2026-07-16 — PF snapshot endpoint paths pending validation on PF 12.3); Phase 10.4 **built** (camera/RS/trunk/extension persistence + milestone.overview/threecx.system snapshots + surveillance/voip API + pages + camera→FDB switch-port join, 2026-07-16 — ESS WebSocket D5 and camera JPEG proxy D7 deferred; Milestone/3CX payload shapes pending live validation); Phase 10.5 **built** (`/api/summary` + `/api/search`, site-tile problem roll-up, rebuilt Global page, ⌘K command palette, shared `format.js` staleness pass — 2026-07-17). Originated as the design-analysis session deliverable (2026-07-14).
+**Status:** IN PROGRESS — Phase 10.0 complete incl. the spec-11 amendments (2026-07-16); Phase 10.1 **feature-complete** (SNMP sweeps + switch API + 8-tab UI + PoE/entity sweeps, 2026-07-15/16); Phase 10.2 **built** (wireless tables + XIQ cycles + wireless API + XIQ/AP-Detail pages, 2026-07-16 — live-fleet validation of the FULL/clients payload shapes pending); Phase 10.3 **built** (`pf_nodes` persistence + snapshot fetchers + NAC API/pages + the FDB⋈PF port-identity join, 2026-07-16 — PF snapshot endpoint paths pending validation on PF 12.3); Phase 10.4 **built** (camera/RS/trunk/extension persistence + milestone.overview/threecx.system snapshots + surveillance/voip API + pages + camera→FDB switch-port join, 2026-07-16 — ESS WebSocket D5 and camera JPEG proxy D7 deferred; Milestone/3CX payload shapes pending live validation); Phase 10.5 **built** (`/api/summary` + `/api/search`, site-tile problem roll-up, rebuilt Global page, ⌘K command palette, shared `format.js` staleness pass — 2026-07-17); Phase 10.6 **built** (migration `019` `state_samples` 24 h ring buffer + `netmon.history` sampler + `/api/history` + `Sparkline`/`HistoryChart` slots on Global/Switches/VoIP — 2026-07-17). Originated as the design-analysis session deliverable (2026-07-14).
 **Design source:** `Zabbix_Extreme.zip` (Claude Design handoff: 18 HTML pages + ~50 JSX/CSS modules). Keep the
 archive out of the repo (it contains real hostnames/IPs in mock data); extract locally when implementing.
 **Goal:** make NetMon's UI match this design, and build the data layer the pages need — **cache current
@@ -264,6 +264,7 @@ Per-page fidelity notes (what degrades and why):
 | **10.3 Identity** | 006 `pf_nodes` persistence (+snapshot fetchers); NAC API rework; five PF pages | `/api/nac` served from DB; in-memory snapshot deleted; PF pages live |
 | **10.4 Surveillance + VoIP** | 007 tables; milestone/threecx collector extensions (SystemStatus wired); pages | camera detail shows FDB-linked switch port; trunk/extension state live |
 | **10.5 Global + polish** | `/api/summary`, `/api/sites`, `/api/search` + ⌘K palette; Global page; staleness badging pass; density/badge prefs | Global renders all in-scope cards from DB only; zero runtime external fetches; shadow-mode alerting unaffected |
+| **10.6 History ring buffer** (§10 Q3 approved) | migration `019` `state_samples`; `netmon.history` sampler task (aggregate + per-switch series) + prune ≤24 h; `/api/history`; `Sparkline`/`HistoryChart` + chart slots on Global/Switches/VoIP | sampler writes on interval + prunes to window; charts render from the buffer, degrade to "no history yet" when disabled; retention hard-capped at 24 h in config; pytest green |
 
 Ordering rationale: 10.0 is pure debt + shared chrome; 10.1 is the highest-value/highest-risk (owner
 gate) and unblocks the FDB joins that 10.2/10.4 pages reuse.
@@ -612,17 +613,40 @@ source calls at render).
 - **DoD met**: Global renders every in-scope card from NetMon's DB only, zero
   runtime external fetches, shadow-mode alerting untouched.
 
+**2026-07-17 — Phase 10.6 History ring buffer built.** The bounded 24 h series
+store, owner-approved (§10 Q3 / spec 11 D3, 2026-07-15) as the *only* charter
+metric-series exception. Migration `019 state_samples` — generic `(series, ts)
+→ value` point store, `PRIMARY KEY (series, ts)` + `ts` index, rollback note.
+`netmon/history.py`: a supervised sampler task (poller sibling, same
+`collector_health` boundary + standalone `--once|--loop`) that on `[history]
+interval_s` snapshots a **curated low-cardinality** set — `fleet.*`, `alerts.*`,
+`voip.*`, `wireless.clients`, `poe.watts`, and per-switch `sw.<id>.{tput_kbps,
+ports_up}` — then prunes anything older than `retention_hours`. Deliberately
+NOT per-port/per-client (spec §9 resource intent); that's a documented
+follow-up. Config `[history]` (default off, per-step reversible) with
+`retention_hours` **hard-capped at 24** in `load_config` (a >24 h typo is
+refused, not clamped) and mirrored into the web settings engine. `/api/history?
+series=a,b&hours=24` reads the window (viewer, DB-only). Frontend: a `Sparkline`
+primitive + `HistoryChart` (fetch + honest "no history yet" empty-state) wired
+into Global (fleet/alerts/clients), Switches (per-switch throughput/ports-up),
+and VoIP (channels/trunks). NetMon Status gains `history_enabled` + the task
+row. Verified end-to-end against a live uvicorn + seeded SQLite (sampler wrote
+14 series, pruning drops >24 h, API + status served); suite green
+(`test_history`, migration `019`, config-cap guards).
+
 ## Next session
 
-- **Phase 10.5 is built (2026-07-17)** — `/api/summary`, `/api/search` + ⌘K
-  palette, site-tile problem roll-up, rebuilt Global page, shared-`format.js`
-  staleness pass. All page-parity phases (10.0–10.5) are now built; what remains
+- **Phases 10.0–10.6 are all built (2026-07-16/17).** The ZCD page-parity set
+  plus the bounded history buffer now render from NetMon's DB. What remains
   before cutover (Phase 8) is **live-source validation** of the inferred payload
-  shapes (10.2/10.3/10.4 below) and the two gated extras.
-- **Next code phase: 10.6 history ring buffer (⛔ D3)** — `state_samples`
-  (24 h, auto-pruned) + writers (port rates, fleet counts, VoIP calls) to fill
-  the empty sparkline/chart slots the 10.x pages leave. Gated on owner D3
-  sign-off (recorded approved in spec §10 Q3 — reconcile the spec-11 D3 mark).
+  shapes (10.2/10.3/10.4 below), the two gated extras (**D5** WebSocket alarms,
+  **D7** JPEG proxy), and the **11.x** post-parity bucket (FortiGate, D4 write
+  actions).
+- **10.6 follow-ups (optional):** per-port / per-client sparklines if the
+  aggregate buffer volume proves comfortable at fleet scale (currently omitted
+  to honor §9); backfill chart slots on XIQ / Surveillance if the owner wants
+  them. The D3 gate is **resolved** — reconcile the spec-11 §6 D3 "⛔ open" mark
+  (it predates the 2026-07-15 §10 Q3 approval this phase implements).
 - **10.4 validation on live sources**: capture real Milestone `/cameras`,
   `/recordingServers`, `/storages`, `/hardware` and 3CX `/Trunks`, `/Users`,
   `/SystemStatus` payloads; confirm the field mappings in

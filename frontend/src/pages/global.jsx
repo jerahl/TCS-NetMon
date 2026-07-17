@@ -1,6 +1,7 @@
 import React from "react";
 import { getJSON } from "../api.js";
 import { Card, Dot, Loading, ErrorMsg, Freshness, sevColor } from "../primitives.jsx";
+import { HistoryChart } from "../history.jsx";
 import { ageOf } from "../format.js";
 import { sevLabel, SEV_RANK } from "../severity.js";
 
@@ -68,6 +69,16 @@ export function GlobalPage() {
       <div className="sys-grid">
         {summary.domains.map((d) => <SystemCard key={d.key} d={d} />)}
       </div>
+
+      {/* 24h trends from the bounded ring buffer (empty until [history] runs). */}
+      <Card title="24-hour trends" kicker="history ring buffer">
+        <div className="hchart-row">
+          <HistoryChart series="fleet.up" label="Devices up" color={sevColor("ok")} />
+          <HistoryChart series="fleet.down" label="Devices down" color={sevColor("crit")} />
+          <HistoryChart series="alerts.open" label="Open alerts" color={sevColor("warn")} />
+          <HistoryChart series="wireless.clients" label="Wireless clients" color={sevColor("unknown")} />
+        </div>
+      </Card>
 
       <div className="global-cols">
         <div className="global-col">

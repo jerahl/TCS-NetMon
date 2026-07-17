@@ -300,6 +300,7 @@ class NetmonStatus(BaseModel):
     engine_shadow: bool = True
     poller_enabled: bool = False
     snmp_inventory_enabled: bool = False
+    history_enabled: bool = False
     tasks: list[SupervisedTask] = Field(default_factory=list)
     collectors: list[CollectorHealth] = Field(default_factory=list)
     db: NetmonDbStats = Field(default_factory=NetmonDbStats)

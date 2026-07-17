@@ -4,6 +4,7 @@ import { Card, Loading, ErrorMsg, SourceBadge, sevColor } from "../primitives.js
 import { SshButton } from "../ssh.jsx";
 import { ageOf } from "../format.js";
 import { macMatches } from "../macmatch.js";
+import { HistoryChart } from "../history.jsx";
 
 // Switches dashboard (spec 10 §7 / phase 10.1) — the ZCD port of the "big
 // build": site navigator, KPI strip, port faceplate, port-detail pane (with
@@ -684,6 +685,15 @@ export function SwitchesPage({ id, query }) {
                 <div className="stat"><div className="stat-value">{maxCpu ? `${maxCpu}%` : "—"}</div><div className="stat-label">CPU (max slot)</div></div>
                 <div className="stat"><div className="stat-value">{maxTemp ? `${maxTemp}°C` : "—"}</div><div className="stat-label">Temp (max slot)</div></div>
               </div>
+
+              <Card title="24-hour trends" kicker="history ring buffer">
+                <div className="hchart-row">
+                  <HistoryChart series={`sw.${activeId}.tput_kbps`} label="Throughput"
+                                color={sevColor("ok")} format={fmtRate} />
+                  <HistoryChart series={`sw.${activeId}.ports_up`} label="Ports up"
+                                color={sevColor("unknown")} />
+                </div>
+              </Card>
 
               <Card kicker={ports && ports.length ? `Port faceplate · ${staleKicker(ports, "ports")}` : "Port faceplate"}>
                 {!ports ? <Loading what="ports" /> : ports.length === 0 ? <EmptySweep what="port" /> : (

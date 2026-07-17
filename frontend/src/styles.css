@@ -498,3 +498,12 @@ table.grid.kv td:first-child { color: var(--dim); width: 160px; }
 }
 .nav-search:hover { border-color: var(--accent); color: var(--text); }
 .nav-kbd { margin-left: auto; font: 600 10px ui-monospace, monospace; color: var(--dim); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+
+/* ---- History sparklines (phase 10.6) -------------------------------- */
+.hchart-row { display: flex; flex-wrap: wrap; gap: 20px; }
+.hchart { min-width: 140px; }
+.hchart-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 4px; }
+.hchart-label { font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--dim); }
+.hchart-last { font-size: 14px; font-weight: 700; }
+.spark { display: block; width: 100%; height: 32px; }
+.spark-empty { font-size: 12px; height: 32px; display: flex; align-items: center; }
