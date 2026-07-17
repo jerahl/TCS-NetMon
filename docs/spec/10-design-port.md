@@ -582,8 +582,13 @@ source calls at render).
 - **`GET /api/search?q=`** (`netmon/api/search.py`): the ⌘K palette's three
   indexed lookups — `devices` by name/mgmt_ip, `endpoints` (`pf_nodes`) by
   MAC/hostname/owner/dot1x_user/ip, `macs` (`fdb_entries`) by MAC — each capped
-  at 12, ≥2-char query guard, every hit carrying an SPA `href`. (MAC matching is
-  a raw substring `LIKE`; a colon-agnostic normaliser is a later nicety.)
+  at 12, ≥2-char query guard, every hit carrying an SPA `href`. **MAC matching
+  is separator-agnostic** (2026-07-17 follow-up, `netmon/macmatch.py`):
+  `bcf310be9980`, `bc:f3:10:be:99:80`, and `BC-F3-10-BE-99-80` all match the
+  stored colon-lowercase form (query + stored side normalised to bare hex); a
+  non-hex query (hostname/IP-with-dots) is never misread as a MAC. The same
+  helper backs the NAC Connected-Devices filter (`/api/nac/nodes?q=`) and a JS
+  twin (`frontend/src/macmatch.js`) backs the Switches FDB filter box.
   **Hits land pre-filtered** (2026-07-17 follow-up): a device hit opens that
   device's own page; an endpoint hit → `#/nac?q=<mac>` (Connected Devices tab
   filtered to the node); a MAC hit → `#/switches/{id}?mac=<mac>` (that switch's

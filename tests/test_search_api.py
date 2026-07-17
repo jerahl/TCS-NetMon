@@ -78,6 +78,34 @@ def test_search_mac_hits_endpoint_and_fdb(tmp_path):
         assert data["total"] == 2
 
 
+def test_search_mac_any_separator_format(tmp_path):
+    """MAC search matches regardless of separator style (spec 10.5 follow-up):
+    stored 'aa:bb:cc:11:22:33' is found by colon, dash, or no-separator input."""
+    url = f"sqlite:///{tmp_path / 'netmon.db'}"
+    _seed(url)
+    with TestClient(_app(write_config(tmp_path, db_url=url))) as client:
+        for form in ("aabbcc112233",        # no separators, full
+                     "AABBCC112233",         # uppercase
+                     "aa-bb-cc-11-22-33",    # dashes
+                     "aabbcc",               # no-separator fragment
+                     "AA:BB:CC"):            # colon fragment, uppercase
+            data = client.get(f"/api/search?q={form}").json()
+            assert len(data["endpoints"]) == 1, form
+            assert data["endpoints"][0]["subtitle"].startswith("aa:bb:cc:11:22:33"), form
+            assert len(data["macs"]) == 1, form
+
+
+def test_search_text_query_not_misread_as_mac(tmp_path):
+    """A hostname/IP query must not spuriously match the FDB by MAC."""
+    url = f"sqlite:///{tmp_path / 'netmon.db'}"
+    _seed(url)
+    with TestClient(_app(write_config(tmp_path, db_url=url))) as client:
+        # 'Core' has non-hex letters → not a MAC fragment → no FDB hits.
+        assert client.get("/api/search?q=Core").json()["macs"] == []
+        # An IP keeps its dots → not all-hex → searched as text, not MAC.
+        assert client.get("/api/search?q=192.0.2.11").json()["macs"] == []
+
+
 def test_search_short_query_is_empty(tmp_path):
     url = f"sqlite:///{tmp_path / 'netmon.db'}"
     _seed(url)

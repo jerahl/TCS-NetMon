@@ -23,6 +23,7 @@ from sqlalchemy.engine import Engine
 
 from netmon import db
 from netmon.api.deps import get_engine, require_role
+from netmon.macmatch import mac_expr, mac_norm
 from netmon.models.schemas import Role, SearchHit, SearchResults
 
 router = APIRouter(tags=["search"])
@@ -56,15 +57,22 @@ def _search_devices(engine: Engine, like: str) -> list[SearchHit]:
     return out
 
 
-def _search_endpoints(engine: Engine, like: str) -> list[SearchHit]:
+def _search_endpoints(engine: Engine, like: str, mac_norm: str | None) -> list[SearchHit]:
+    conds = ["computername LIKE :q", "ip LIKE :q", "owner LIKE :q", "dot1x_user LIKE :q"]
+    params: dict = {"q": like, "lim": _LIMIT}
+    if mac_norm:
+        # Separator-agnostic MAC match (bcf310be9980 == bc:f3:10:be:99:80).
+        conds.append(f"{mac_expr('mac')} LIKE :macq")
+        params["macq"] = f"%{mac_norm}%"
+    else:
+        conds.append("mac LIKE :q")
     rows = db.fetch_all(
         engine,
         "SELECT mac, computername, ip, owner, dot1x_user, role, reg_status, "
         "last_switch, last_port FROM pf_nodes "
-        "WHERE mac LIKE :q OR computername LIKE :q OR ip LIKE :q "
-        "OR owner LIKE :q OR dot1x_user LIKE :q "
+        f"WHERE {' OR '.join(conds)} "
         "ORDER BY updated_at DESC LIMIT :lim",
-        {"q": like, "lim": _LIMIT},
+        params,
     )
     out: list[SearchHit] = []
     for r in rows:
@@ -86,14 +94,23 @@ def _search_endpoints(engine: Engine, like: str) -> list[SearchHit]:
     return out
 
 
-def _search_macs(engine: Engine, like: str) -> list[SearchHit]:
+def _search_macs(engine: Engine, like: str, mac_norm: str | None) -> list[SearchHit]:
+    # The FDB is keyed only by MAC, so match the normalised form when the query
+    # looks like a MAC (any separator style) and fall back to a raw substring
+    # otherwise.
+    if mac_norm:
+        where = f"{mac_expr('f.mac')} LIKE :macq"
+        params: dict = {"macq": f"%{mac_norm}%", "lim": _LIMIT}
+    else:
+        where = "f.mac LIKE :q"
+        params = {"q": like, "lim": _LIMIT}
     rows = db.fetch_all(
         engine,
         "SELECT f.device_id, f.mac, f.vlan_id, f.ifindex, d.name AS switch "
         "FROM fdb_entries f JOIN devices d ON d.id = f.device_id "
-        "WHERE f.mac LIKE :q "
+        f"WHERE {where} "
         "ORDER BY f.updated_at DESC LIMIT :lim",
-        {"q": like, "lim": _LIMIT},
+        params,
     )
     out: list[SearchHit] = []
     for r in rows:
@@ -127,9 +144,10 @@ def search(
         return SearchResults(query=query)
 
     like = f"%{query}%"
+    norm = mac_norm(query)
     devices = _search_devices(engine, like)
-    endpoints = _search_endpoints(engine, like)
-    macs = _search_macs(engine, like)
+    endpoints = _search_endpoints(engine, like, norm)
+    macs = _search_macs(engine, like, norm)
     return SearchResults(
         query=query,
         devices=devices,

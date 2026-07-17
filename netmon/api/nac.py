@@ -12,6 +12,7 @@ from sqlalchemy.engine import Engine
 
 from netmon import db
 from netmon.api.deps import get_engine, require_role
+from netmon.macmatch import mac_expr, mac_norm
 from netmon.models.schemas import Role
 from netmon.snapshots import read_snapshot
 
@@ -75,8 +76,15 @@ def nac_nodes(
     limit = max(1, min(limit, 1000))
     conds, params = [], {"limit": limit}
     if q:
-        conds.append("(mac LIKE :q OR computername LIKE :q OR owner LIKE :q "
-                     "OR ip LIKE :q OR dot1x_user LIKE :q)")
+        # MAC matched separator-agnostically (bcf310be9980 == bc:f3:10:…); the
+        # text columns keep the plain substring match.
+        text_cols = "computername LIKE :q OR owner LIKE :q OR ip LIKE :q OR dot1x_user LIKE :q"
+        norm = mac_norm(q)
+        if norm:
+            conds.append(f"({text_cols} OR {mac_expr('mac')} LIKE :macq)")
+            params["macq"] = f"%{norm}%"
+        else:
+            conds.append(f"(mac LIKE :q OR {text_cols})")
         params["q"] = f"%{q}%"
     if role:
         conds.append("role = :role")

@@ -3,6 +3,7 @@ import { getJSON } from "../api.js";
 import { Card, Loading, ErrorMsg, SourceBadge, sevColor } from "../primitives.jsx";
 import { SshButton } from "../ssh.jsx";
 import { ageOf } from "../format.js";
+import { macMatches } from "../macmatch.js";
 
 // Switches dashboard (spec 10 §7 / phase 10.1) — the ZCD port of the "big
 // build": site navigator, KPI strip, port faceplate, port-detail pane (with
@@ -239,14 +240,14 @@ function FdbTab({ switchId, portName, initialQ = "" }) {
   React.useEffect(() => { setQ(initialQ); }, [initialQ]);
   React.useEffect(() => { tabFetch(`/api/switches/${switchId}/fdb`, setRows); }, [switchId]);
   if (!rows) return <Loading what="FDB" />;
-  const shown = rows.filter((r) => !q || r.mac.includes(q.toLowerCase()));
+  const shown = rows.filter((r) => macMatches(r.mac, q));
   return (
     <Card kicker={rows.length ? staleKicker(rows, "FDB entries") : "FDB"}>
       {rows.length === 0 ? <EmptySweep what="FDB" /> : (
         <React.Fragment>
           <label className="evt-filter" style={{ maxWidth: 280, marginBottom: 8 }}>
             <span>Filter MAC</span>
-            <input type="text" value={q} placeholder="aa:bb:cc…" onChange={(e) => setQ(e.target.value)} />
+            <input type="text" value={q} placeholder="aa:bb:cc… or aabbcc" onChange={(e) => setQ(e.target.value)} />
           </label>
           <table className="grid">
             <thead><tr><th>MAC</th><th>VLAN</th><th>Port</th><th>First seen</th><th>Age</th></tr></thead>
