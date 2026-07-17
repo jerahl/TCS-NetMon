@@ -156,6 +156,29 @@ def test_upsert_devices_portable_and_idempotent(tmp_path):
     assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM devices")["n"] == 1
 
 
+def test_upsert_preserves_operator_type_override(tmp_path):
+    """device_type/snmp_capable are insert-only: once a device exists, an
+    operator's web correction (e.g. a mis-imported AP re-typed to switch)
+    survives a re-seed/re-import instead of being clobbered by the source's
+    device_function guess."""
+    from netmon import db
+    from netmon.seed import upsert_devices
+
+    engine = _registry_engine(tmp_path)
+    # First import: XIQ mislabels this switch as an AP.
+    upsert_devices(engine, [Device(name="sw-2", device_type=DeviceType.ap,
+                                   snmp_capable=False, xiq_device_id="7")])
+    # Operator corrects it in the web registry.
+    db.execute(engine, "UPDATE devices SET device_type='switch', snmp_capable=1 WHERE name='sw-2'")
+    # Re-import still sees it as an AP — must NOT revert the correction.
+    upsert_devices(engine, [Device(name="sw-2", device_type=DeviceType.ap,
+                                   snmp_capable=False, xiq_device_id="7")])
+
+    row = db.fetch_one(engine, "SELECT device_type, snmp_capable FROM devices WHERE name='sw-2'")
+    assert row["device_type"] == "switch"
+    assert row["snmp_capable"] == 1
+
+
 def test_site_index_from_db(tmp_path):
     """--sites-from-db (spec 11 D9): the registry's own assignments are the
     site source of truth; Unassigned rows don't pin devices to Unassigned."""

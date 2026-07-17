@@ -231,17 +231,21 @@ def upsert_devices(engine, devices: list[Device]) -> int:
     """Insert-or-update by unique ``name``. Returns rows written.
 
     Portable (runs on MariaDB and the SQLite test DB — spec 11 §8 debt item;
-    was MariaDB-only ``ON DUPLICATE KEY UPDATE``). Update semantics preserved:
-    ``site``/``device_type``/``mgmt_ip``/``snmp_capable`` follow the fresh
-    export; the per-source keys never regress to NULL when a source drops a
-    device from one export; an operator's ``enabled`` flag is insert-only.
+    was MariaDB-only ``ON DUPLICATE KEY UPDATE``). Update semantics: ``site``
+    and ``mgmt_ip`` follow the fresh export; the per-source keys never regress
+    to NULL when a source drops a device from one export; ``enabled``,
+    ``device_type`` and ``snmp_capable`` are insert-only so an operator's
+    web edits (a mis-classified switch corrected by hand — see
+    ``api/registry.update_device``) survive a re-seed/re-import instead of
+    being clobbered back to the source's guess. A genuinely new device still
+    gets its type from the export on first insert.
     """
     # Existence is probed with a SELECT rather than trusting UPDATE's rowcount:
     # under PyMySQL's default "changed rows" semantics an idempotent re-seed
     # would report 0 and mis-route to INSERT. Single-writer CLI — no race.
     update_sql = (
-        "UPDATE devices SET site=:site, device_type=:device_type, "
-        " mgmt_ip=:mgmt_ip, snmp_capable=:snmp_capable, "
+        "UPDATE devices SET site=:site, "
+        " mgmt_ip=:mgmt_ip, "
         " xiq_device_id=COALESCE(:xiq_device_id, xiq_device_id), "
         " pf_node_mac=COALESCE(:pf_node_mac, pf_node_mac) "
         "WHERE name=:name"
