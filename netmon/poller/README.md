@@ -83,14 +83,19 @@ template). Writes the `006` inventory tables read by the Switches dashboard —
 | entity | ENTITY-MIB physical inventory + entAliasMappingTable | 3600s | `stack_members` (model/serial/fw/fans/PSUs) **and** `switch_ports.is_sfp` |
 
 **SFP/fiber detection (`is_sfp`).** EXOS reports no media type on the IF-MIB
-(every front-panel port is `ethernetCsmacd`), so the entity sweep derives it:
-a port is SFP/fiber when its ENTITY-MIB port entity's descr matches an optic
-pattern (`_OPTIC_RE`) or it contains an inserted-transceiver child entity, then
-mapped back to the port's ifIndex via `entAliasMappingTable`. Written as a
-partial UPDATE onto `switch_ports.is_sfp` (`1` fiber / `0` copper / `NULL` not
-yet classified), never inserting or pruning — the ports sweep owns those rows.
-The `_OPTIC_RE` descr pattern is best-effort and may need tuning once verified
-against a live switch's ENTITY-MIB output.
+(every front-panel port is `ethernetCsmacd`; MAU-MIB `ifMauType` is absent),
+so the entity sweep derives it from the ENTITY-MIB — verified against a live
+X465-48P walk (2026-07-17). Ports map to their ifIndex via
+`entAliasMappingTable`; a port is SFP when **either** its descr is a multi-gig
+port (`"10 Gbps"/"40 Gbps Ethernet Port"` — the SFP+/QSFP cages; the primary,
+verified signal, since the 48 base ports read `"1 Gbps Ethernet Port"` copper)
+**or** an optic/DOM entity (`"SFP … Sensor"`, a `10GBASE-SR` transceiver) is
+contained in it, walking up `entPhysicalContainedIn` to the port (catches a
+1 Gbps SFP the speed check would miss). Written as a partial UPDATE onto
+`switch_ports.is_sfp` (`1` fiber / `0` copper / `NULL` not yet classified),
+never inserting or pruning — the ports sweep owns those rows. Note the primary
+signal assumes >1 Gbps ports are SFP cages (true on this all-X465 fleet); a
+10GBASE-T copper model would need the DOM path or a descr tweak.
 
 One supervised task (registered at the fastest interval) gates each sweep
 internally by its own elapsed interval. Targets: enabled `device_type='switch'`

@@ -142,30 +142,52 @@ def test_build_entity_slots():
     assert all(r["model"] == "X465-48P" for r in rows.values())
 
 
-_SFP_WALK = """
-.1.3.6.1.2.1.47.1.1.1.1.2.100 = STRING: "1 Gbps Ethernet Port"
-.1.3.6.1.2.1.47.1.1.1.1.5.100 = INTEGER: 10
-.1.3.6.1.2.1.47.1.3.2.1.2.100.0 = OID: .1.3.6.1.2.1.2.2.1.1.1001
-.1.3.6.1.2.1.47.1.1.1.1.2.200 = STRING: "1 Gbps Ethernet Port"
-.1.3.6.1.2.1.47.1.1.1.1.5.200 = INTEGER: 10
-.1.3.6.1.2.1.47.1.3.2.1.2.200.0 = OID: .1.3.6.1.2.1.2.2.1.1.1049
-.1.3.6.1.2.1.47.1.1.1.1.2.201 = STRING: "SFP+ 10GBASE-SR"
-.1.3.6.1.2.1.47.1.1.1.1.5.201 = INTEGER: 9
-.1.3.6.1.2.1.47.1.1.1.1.4.201 = INTEGER: 200
-.1.3.6.1.2.1.47.1.1.1.1.2.300 = STRING: "10GBASE-LR SFP+ Port"
-.1.3.6.1.2.1.47.1.1.1.1.5.300 = INTEGER: 10
-.1.3.6.1.2.1.47.1.3.2.1.2.300.0 = OID: .1.3.6.1.2.1.2.2.1.1.1050
+SFP_FIXTURE = (Path(__file__).parent / "fixtures" / "snmp_exos_sfp.txt").read_text()
+
+
+def test_build_sfp_ports_real_x465_walk():
+    """Verified against the owner's live X465-48P ENTITY-MIB walk: the 1 Gbps
+    base ports are copper (0); the 10/40 Gbps uplinks are SFP+/QSFP cages (1),
+    flagged from the port speed descr + entAliasMappingTable."""
+    keys = ["ent_descr", "ent_contained", "ent_class", "ent_alias"]
+    walks = {k: si.parse_walk(SFP_FIXTURE, si.OID[k]) for k in keys}
+    rows = {r["ifindex"]: r["is_sfp"] for r in si.build_sfp_ports(walks)}
+    assert rows == {1001: 0, 1002: 0, 1048: 0, 1049: 1, 1050: 1, 1053: 1}
+
+
+# Synthetic walk exercising the secondary DOM/containment path: a 1 Gbps port
+# with an "SFP … Sensor" child, and a sensor nested under a transceiver under a
+# port — both must resolve up to the port even though the port descr is 1 Gbps.
+_SFP_DOM_WALK = """
+.1.3.6.1.2.1.47.1.1.1.1.2.10 = STRING: "1 Gbps Ethernet Port"
+.1.3.6.1.2.1.47.1.1.1.1.5.10 = INTEGER: 10
+.1.3.6.1.2.1.47.1.3.2.1.2.10.0 = OID: .1.3.6.1.2.1.2.2.1.1.1010
+.1.3.6.1.2.1.47.1.1.1.1.2.11 = STRING: "SFP RX Power Sensor"
+.1.3.6.1.2.1.47.1.1.1.1.5.11 = INTEGER: 8
+.1.3.6.1.2.1.47.1.1.1.1.4.11 = INTEGER: 10
+.1.3.6.1.2.1.47.1.1.1.1.2.20 = STRING: "1 Gbps Ethernet Port"
+.1.3.6.1.2.1.47.1.1.1.1.5.20 = INTEGER: 10
+.1.3.6.1.2.1.47.1.3.2.1.2.20.0 = OID: .1.3.6.1.2.1.2.2.1.1.1020
+.1.3.6.1.2.1.47.1.1.1.1.2.21 = STRING: "10GBASE-SR Transceiver"
+.1.3.6.1.2.1.47.1.1.1.1.5.21 = INTEGER: 9
+.1.3.6.1.2.1.47.1.1.1.1.4.21 = INTEGER: 20
+.1.3.6.1.2.1.47.1.1.1.1.2.22 = STRING: "SFP TX Power Sensor"
+.1.3.6.1.2.1.47.1.1.1.1.5.22 = INTEGER: 8
+.1.3.6.1.2.1.47.1.1.1.1.4.22 = INTEGER: 21
+.1.3.6.1.2.1.47.1.1.1.1.2.30 = STRING: "1 Gbps Ethernet Port"
+.1.3.6.1.2.1.47.1.1.1.1.5.30 = INTEGER: 10
+.1.3.6.1.2.1.47.1.3.2.1.2.30.0 = OID: .1.3.6.1.2.1.2.2.1.1.1030
 """
 
 
-def test_build_sfp_ports():
+def test_build_sfp_ports_dom_containment():
     keys = ["ent_descr", "ent_contained", "ent_class", "ent_alias"]
-    walks = {k: si.parse_walk(_SFP_WALK, si.OID[k]) for k in keys}
+    walks = {k: si.parse_walk(_SFP_DOM_WALK, si.OID[k]) for k in keys}
     rows = {r["ifindex"]: r["is_sfp"] for r in si.build_sfp_ports(walks)}
-    # 1001: plain copper port → 0
-    # 1049: has an inserted-optic child entity → 1
-    # 1050: port whose own descr names the optic → 1
-    assert rows == {1001: 0, 1049: 1, 1050: 1}
+    # 1010: 1 Gbps port with a direct SFP DOM-sensor child → 1
+    # 1020: 1 Gbps port with sensor→transceiver→port nesting → 1 (walk-up)
+    # 1030: plain 1 Gbps copper port → 0
+    assert rows == {1010: 1, 1020: 1, 1030: 0}
 
 
 def test_build_sfp_ports_empty_without_entity_alias():

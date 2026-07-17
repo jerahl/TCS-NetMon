@@ -305,14 +305,16 @@ def build_edp(walks: dict[str, dict[str, str]]) -> list[dict]:
     return list(by_local.values())
 
 
-# ENTITY-MIB entPhysicalClass values we care about (RFC 4133).
+# ENTITY-MIB entPhysicalClass values we care about (RFC 4133): 10 = port.
 _ENT_CLASS_PORT = "10"
-# Descr/name patterns that identify a fiber optic or an SFP/QSFP cage. EXOS
-# names an inserted optic in the ENTITY-MIB (e.g. "SFP+", "10G BASE-SR",
-# "1000BASE-LX"); an empty copper port reads generically ("... Ethernet Port").
+# Descr/name patterns that name a fiber optic, an SFP/QSFP cage, or an EXOS SFP
+# DOM sensor ("SFP TX Power Sensor", …). On the live X465 fleet the *port*
+# entity reads generically ("1 Gbps Ethernet Port"), so the optic itself is
+# recognised here and mapped back to its port via containment; the port's own
+# speed (below) is the primary signal.
 _OPTIC_RE = re.compile(
     r"\b("
-    r"sfp\+?|sfp28|qsfp\d*|xfp|cfp\d*|gbic|"                 # cage / optic families
+    r"sfp\+?|sfp28|qsfp\d*|xfp|cfp\d*|gbic|"                 # cage / optic families + EXOS "SFP … Sensor"
     r"1000\s*base-?(?:x|sx|lx|bx|zx|ex)|"                    # 1G fiber
     r"10\s*g?\s*base-?(?:sr|lr|er|zr|lrm|cx|bx)|"            # 10G fiber
     r"(?:25|40|100)\s*g\s*base-?(?:sr|lr|er|cr|dr|fr)|"      # 25/40/100G
@@ -320,6 +322,10 @@ _OPTIC_RE = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+# EXOS port entity descr is "<N> Gbps Ethernet Port". On this fleet the 48 base
+# ports are 1 Gbps copper (RJ45) and every >1 Gbps port is an SFP+/QSFP cage —
+# so a multi-gig port descr is the primary, verified SFP signal.
+_PORT_GBPS_RE = re.compile(r"(\d+)\s*Gbps", re.IGNORECASE)
 
 
 def _ifindex_from_alias(value: str | None):
@@ -331,18 +337,28 @@ def _ifindex_from_alias(value: str | None):
     return int(m.group(1)) if m else None
 
 
+def _port_is_multigig(descr: str | None) -> bool:
+    m = _PORT_GBPS_RE.search(descr or "")
+    return bool(m and int(m.group(1)) > 1)
+
+
 def build_sfp_ports(walks: dict[str, dict[str, str]]) -> list[dict]:
-    """ENTITY-MIB → per-ifIndex ``is_sfp`` rows.
+    """ENTITY-MIB → per-ifIndex ``is_sfp`` rows (owner decision 2026-07-17;
+    verified against a live X465 walk).
 
-    A port is SFP/fiber when the ENTITY-MIB port entity's own descr matches an
-    optic pattern OR it contains a child entity (an inserted transceiver) whose
-    descr does. Ports are mapped to their ifIndex via entAliasMappingTable;
-    only ports we can map are emitted, so copper ports get an explicit
-    ``is_sfp=0`` (honest) and unmappable ones are simply left untouched.
+    EXOS exposes no media type on the IF-MIB, so SFP/fiber is derived from the
+    ENTITY-MIB. Ports are mapped to their ifIndex via entAliasMappingTable; a
+    port is flagged SFP when **either**:
 
-    Chosen source: ENTITY-MIB (owner decision 2026-07-17) — EXOS exposes no
-    media/optic on the IF-MIB. Depends on the fleet populating optic entities;
-    the ``_OPTIC_RE`` pattern may need tuning once verified on a live switch.
+      * its descr is a multi-gig port ("10/40 Gbps Ethernet Port") — the SFP+/
+        QSFP cages, the primary and verified signal on this fleet; **or**
+      * an optic/DOM entity ("SFP … Sensor", a "10GBASE-SR" transceiver) is
+        contained in it — walking up entPhysicalContainedIn to the port. This
+        catches a 1 Gbps SFP a speed check would miss (best-effort: depends on
+        the fleet populating optic/DOM entities under the port).
+
+    Only alias-mapped ports are emitted, so copper ports get an explicit
+    ``is_sfp=0`` and anything unmappable is left untouched (NULL).
     """
     descr = walks.get("ent_descr", {})
     contained = walks.get("ent_contained", {})
@@ -357,26 +373,32 @@ def build_sfp_ports(walks: dict[str, dict[str, str]]) -> list[dict]:
         if ent_idx and ifx is not None:
             ent_to_if.setdefault(ent_idx, ifx)
 
-    # Optic children grouped by the port entity they're contained in.
-    optic_children: set[str] = set()
+    # Ports = alias-mapped entities that are class port (or unknown class, if
+    # the device omits entPhysicalClass).
+    port_ents = {e for e in ent_to_if
+                 if _enum_int(classes.get(e)) in (None, _ENT_CLASS_PORT)}
+
+    # Optic/DOM entities → the port they belong to, walking up the containment
+    # chain (sensor → [transceiver] → port) to the nearest mapped port.
+    sfp_by_optic: set[str] = set()
     for ent_idx, d in descr.items():
-        if _enum_int(classes.get(ent_idx)) == _ENT_CLASS_PORT:
-            continue  # a port itself is handled below, not as its own child
-        if d and _OPTIC_RE.search(d):
-            parent = contained.get(ent_idx)
-            if parent:
-                optic_children.add(str(parent))
+        if ent_idx in port_ents or not (d and _OPTIC_RE.search(d)):
+            continue
+        cur = ent_idx
+        for _ in range(16):  # bounded — never loop on a self/cyclic containment
+            parent = contained.get(cur)
+            if not parent or parent == cur:
+                break
+            if parent in port_ents:
+                sfp_by_optic.add(parent)
+                break
+            cur = parent
 
     rows: list[dict] = []
-    for ent_idx, ifx in ent_to_if.items():
-        cls = _enum_int(classes.get(ent_idx))
-        # Restrict to port entities when the class is known; if the device omits
-        # entPhysicalClass, fall back to alias-mapped entities (still ifIndexed).
-        if cls is not None and cls != _ENT_CLASS_PORT:
-            continue
+    for ent_idx in port_ents:
         d = descr.get(ent_idx) or ""
-        is_sfp = bool(_OPTIC_RE.search(d)) or ent_idx in optic_children
-        rows.append({"ifindex": ifx, "is_sfp": 1 if is_sfp else 0})
+        is_sfp = _port_is_multigig(d) or bool(_OPTIC_RE.search(d)) or ent_idx in sfp_by_optic
+        rows.append({"ifindex": ent_to_if[ent_idx], "is_sfp": 1 if is_sfp else 0})
     return rows
 
 
