@@ -414,3 +414,9 @@ table.grid.kv td:first-child { color: var(--dim); width: 160px; }
 .enum-block:first-of-type { border-top: none; }
 .enum-head { display: flex; align-items: center; }
 .enum-in { width: 100%; padding: 4px 6px; background: var(--panel2); border: 1px solid var(--border); border-radius: 5px; color: var(--text); font: inherit; }
+/* Map editor drag handles (divIcons — CSS only). */
+.edit-handle { border-radius: 50%; box-sizing: border-box; box-shadow: 0 0 0 1px rgba(0,0,0,.5); cursor: grab; }
+.edit-handle.eh-site { background: #9184d9; border: 2px solid #fff; width: 14px; height: 14px; }
+.edit-handle.eh-vtx { background: #e8a415; border: 2px solid #fff; width: 13px; height: 13px; }
+.edit-handle.eh-mid { background: rgba(233,164,21,.5); border: 1px dashed #fff; width: 11px; height: 11px; }
+.edit-linkbox .edit-row { display: flex; align-items: center; gap: 8px; }

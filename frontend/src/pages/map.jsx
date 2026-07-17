@@ -14,6 +14,22 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { getJSON } from "../api.js";
 
+// Detail-aware write (surfaces the API's gating/validation message, e.g.
+// "web editing is disabled") used only by the admin map editor.
+async function editReq(method, path, body) {
+  const resp = await fetch(path, {
+    method, credentials: "same-origin",
+    headers: { Accept: "application/json", ...(body ? { "Content-Type": "application/json" } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (resp.status === 401) { window.location.assign("/login"); throw new Error("redirecting to sign in"); }
+  if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || `HTTP ${resp.status}`);
+  return resp.status === 204 ? null : resp.json();
+}
+
+// Small round drag-handle icons (divIcon = CSS only, no marker image assets).
+const handleIcon = (kind) => L.divIcon({ className: `edit-handle eh-${kind}`, iconSize: [14, 14] });
+
 const C = { up: "#1fb75a", degraded: "#e8a415", down: "#e5484d", hot: "#f07c1d", unknown: "#8a8f98" };
 const STATUS_LABEL = { up: "UP", degraded: "DEGRADED", down: "DOWN", unknown: "NO DATA" };
 const STATUS_ORDER = { down: 0, degraded: 1, unknown: 2, up: 3 };
@@ -65,17 +81,42 @@ export function MapPage() {
   const [tilesDown, setTilesDown] = React.useState(false);
   const [clock, setClock] = React.useState(() => new Date().toLocaleTimeString("en-US", { hour12: false }));
 
+  // ---- admin map editor (drag sites, edit fiber paths) ----
+  const [canEdit, setCanEdit] = React.useState(false);   // admin && [security] allow_web_edit
+  const [edit, setEdit] = React.useState(false);         // edit mode on
+  const [editLink, setEditLink] = React.useState(null);  // link id whose path is being edited
+  const [linkAdd, setLinkAdd] = React.useState(false);   // picking two sites for a new link
+  const [pendingA, setPendingA] = React.useState(null);  // first site picked for a new link
+  const [editMsg, setEditMsg] = React.useState(null);
+
   const rootRef = React.useRef(null);
   const mapEl = React.useRef(null);
   const mapRef = React.useRef(null);
   const tileRef = React.useRef(null);
   const tileThemeRef = React.useRef(null);
   const layersRef = React.useRef({ sites: {}, links: {} });
+  const editRef = React.useRef({ siteHandles: {}, vertexHandles: [], midHandles: [], workPath: null, workPathLinkId: null });
   const dataRef = React.useRef(data);
   dataRef.current = data;
+  // Refs so Leaflet click/drag callbacks (bound once) see current edit state.
+  const editModeRef = React.useRef(false); editModeRef.current = edit;
+  const editLinkRef = React.useRef(null); editLinkRef.current = editLink;
+  const linkAddRef = React.useRef(false); linkAddRef.current = linkAdd;
+  const pendingARef = React.useRef(null); pendingARef.current = pendingA;
+  const pickRef = React.useRef(() => {});   // latest pickSiteForLink for bound-once handlers
+  const capInputRef = React.useRef(null);
+
+  // Static fact: is web editing enabled AND am I an admin? Gates the EDIT button.
+  React.useEffect(() => {
+    Promise.all([getJSON("/api/meta").catch(() => ({})), getJSON("/auth/me").catch(() => ({}))])
+      .then(([meta, me]) => setCanEdit(!!meta?.can_edit && me?.role === "admin"));
+  }, []);
 
   // ---- live data: poll the three endpoints; keep last good data on failure.
+  // Paused while editing so a poll never fights a drag or reverts an in-flight
+  // path edit; on exit it reloads once (picking up saved edits) and resumes.
   React.useEffect(() => {
+    if (edit) return;
     let live = true;
     const load = () =>
       Promise.all([getJSON("/api/sites"), getJSON("/api/links"), getJSON("/api/events?limit=40")])
@@ -88,7 +129,7 @@ export function MapPage() {
     load();
     const t = setInterval(load, POLL_MS);
     return () => { live = false; clearInterval(t); };
-  }, []);
+  }, [edit]);
 
   React.useEffect(() => {
     const t = setInterval(() => setClock(new Date().toLocaleTimeString("en-US", { hour12: false })), 1000);
@@ -161,7 +202,11 @@ export function MapPage() {
       if (!entry) {
         const casing = L.polyline(path, { color: "#000", opacity: 0.35, weight: 8, interactive: false }).addTo(map);
         const line = L.polyline(path, { weight: 4, opacity: 0.95, dashArray: "8 7", className: "flowline" }).addTo(map);
-        line.on("click", (e) => { L.DomEvent.stop(e); setSelected(l.site_a); });
+        line.on("click", (e) => {
+          L.DomEvent.stop(e);
+          if (editModeRef.current && !linkAddRef.current) { setSelected(null); setEditLink(l.id); }
+          else setSelected(l.site_a);
+        });
         line.bindTooltip(
           () => {
             const cur = (dataRef.current.links || []).find((x) => x.id === l.id) || l;
@@ -173,7 +218,9 @@ export function MapPage() {
           { sticky: true, className: "link-tip" }
         );
         entry = lay.links[l.id] = { casing, line };
-      } else {
+      } else if (!(editModeRef.current && editLinkRef.current === l.id)) {
+        // While a link's path is being edited the edit effect owns its
+        // geometry — don't let a re-render snap it back to the saved path.
         entry.casing.setLatLngs(path);
         entry.line.setLatLngs(path);
       }
@@ -212,7 +259,11 @@ export function MapPage() {
       let m = lay.sites[s.name];
       if (!m) {
         m = L.circleMarker([s.lat, s.lon], { radius: TIER_RADIUS[s.tier] || 6.5, weight: 2.5, fillOpacity: 1 }).addTo(map);
-        m.on("click", (e) => { L.DomEvent.stop(e); setSelected(s.name); });
+        m.on("click", (e) => {
+          L.DomEvent.stop(e);
+          if (linkAddRef.current) { pickRef.current(s.name); return; }
+          setSelected(s.name);
+        });
         m.bindTooltip(s.name, { permanent: true, direction: "top", offset: [0, -8], className: "site-tip", interactive: false });
         lay.sites[s.name] = m;
       } else {
@@ -251,6 +302,162 @@ export function MapPage() {
     []
   );
 
+  // ---- editor helpers (stable enough: only setState setters + refs) ----
+  const refetch = React.useCallback(async () => {
+    try {
+      const [sites, links, events] = await Promise.all([
+        getJSON("/api/sites"), getJSON("/api/links"), getJSON("/api/events?limit=40")]);
+      setData({ sites, links, events, at: Date.now(), error: null });
+    } catch { /* keep last good data */ }
+  }, []);
+
+  // Registry site ids (name→id) for the location endpoint — /api/sites omits id.
+  React.useEffect(() => {
+    if (!edit) return;
+    getJSON("/api/registry/sites")
+      .then((rows) => { editRef.current.siteIds = Object.fromEntries(rows.map((r) => [r.name, r.id])); })
+      .catch(() => { /* saves will error with a clear message */ });
+  }, [edit]);
+
+  const moveSiteLive = (name, latlng) => {
+    const lay = layersRef.current;
+    lay.sites[name]?.setLatLng(latlng);
+    const { sites, links } = dataRef.current;
+    const bySite = Object.fromEntries((sites || []).map((s) => [s.name, s]));
+    for (const l of links || []) {
+      if (l.site_a !== name && l.site_b !== name) continue;
+      if (l.path && l.path.length >= 2) continue;   // curated path doesn't track a move
+      const other = l.site_a === name ? l.site_b : l.site_a;
+      const os = bySite[other];
+      const entry = lay.links[l.id];
+      if (!os || !entry) continue;
+      const here = [latlng.lat, latlng.lng], there = [os.lat, os.lon];
+      const pth = l.site_a === name ? [here, there] : [there, here];
+      entry.line.setLatLngs(pth); entry.casing.setLatLngs(pth);
+    }
+  };
+
+  const saveSiteLocation = async (name, latlng) => {
+    const id = editRef.current.siteIds?.[name];
+    const lat = +latlng.lat.toFixed(6), lon = +latlng.lng.toFixed(6);
+    if (!id) { setEditMsg({ ok: false, text: `No registry id for ${name} — reopen edit mode.` }); return; }
+    try {
+      await editReq("POST", `/api/registry/sites/${id}/location`, { lat, lon });
+      setData((d) => ({ ...d, sites: (d.sites || []).map((s) => (s.name === name ? { ...s, lat, lon } : s)) }));
+      setEditMsg({ ok: true, text: `Moved ${name}.` });
+    } catch (e) { setEditMsg({ ok: false, text: String(e.message || e) }); refetch(); }
+  };
+
+  const createLink = async (a, b) => {
+    try {
+      await editReq("POST", "/api/registry/links", { site_a: a, site_b: b });
+      setEditMsg({ ok: true, text: `Linked ${a} ⟷ ${b}.` });
+    } catch (e) { setEditMsg({ ok: false, text: String(e.message || e) }); }
+    setLinkAdd(false); setPendingA(null); refetch();
+  };
+
+  const pickSiteForLink = (name) => {
+    const a = pendingARef.current;
+    if (!a) { setPendingA(name); setEditMsg({ ok: true, text: `Now click the other endpoint for a link from ${name}.` }); }
+    else if (a === name) { setEditMsg({ ok: false, text: "Pick a different second site." }); }
+    else createLink(a, name);
+  };
+  pickRef.current = pickSiteForLink;
+
+  const renderPathHandles = (l, a, b) => {
+    const map = mapRef.current, lay = layersRef.current, er = editRef.current;
+    if (!map || !er.workPath) return;
+    const wp = er.workPath;
+    wp[0] = [a.lat, a.lon]; wp[wp.length - 1] = [b.lat, b.lon];   // ends pinned to sites
+    const entry = lay.links[l.id];
+    if (entry) { entry.line.setLatLngs(wp); entry.casing.setLatLngs(wp); }
+    er.vertexHandles.forEach((h) => h.remove()); er.vertexHandles = [];
+    er.midHandles.forEach((h) => h.remove()); er.midHandles = [];
+    // draggable middle vertices (right-click removes)
+    for (let i = 1; i < wp.length - 1; i++) {
+      const idx = i;
+      const h = L.marker(wp[idx], { draggable: true, icon: handleIcon("vtx"), zIndexOffset: 1300, keyboard: false }).addTo(map);
+      h.on("drag", (ev) => { wp[idx] = [ev.latlng.lat, ev.latlng.lng]; if (entry) { entry.line.setLatLngs(wp); entry.casing.setLatLngs(wp); } });
+      h.on("dragend", () => renderPathHandles(l, a, b));
+      h.on("contextmenu", (ev) => { L.DomEvent.stop(ev); if (wp.length > 2) { wp.splice(idx, 1); renderPathHandles(l, a, b); } });
+      er.vertexHandles.push(h);
+    }
+    // faded midpoint handles: drag one to insert a new waypoint there
+    for (let i = 0; i < wp.length - 1; i++) {
+      const insertAt = i + 1;
+      const mid = [(wp[i][0] + wp[i + 1][0]) / 2, (wp[i][1] + wp[i + 1][1]) / 2];
+      const h = L.marker(mid, { draggable: true, icon: handleIcon("mid"), zIndexOffset: 1250, opacity: 0.85, keyboard: false }).addTo(map);
+      h.on("dragstart", (ev) => { const ll = ev.target.getLatLng(); wp.splice(insertAt, 0, [ll.lat, ll.lng]); });
+      h.on("drag", (ev) => { wp[insertAt] = [ev.latlng.lat, ev.latlng.lng]; if (entry) { entry.line.setLatLngs(wp); entry.casing.setLatLngs(wp); } });
+      h.on("dragend", () => renderPathHandles(l, a, b));
+      er.midHandles.push(h);
+    }
+  };
+
+  const saveLinkPath = async () => {
+    const er = editRef.current, id = editLinkRef.current, wp = er.workPath;
+    if (id == null || !wp) return;
+    try {
+      await editReq("PUT", `/api/registry/links/${id}`,
+        wp.length <= 2 ? { clear_path: true } : { path: wp });
+      setEditMsg({ ok: true, text: "Saved fiber path." });
+      setEditLink(null); refetch();
+    } catch (e) { setEditMsg({ ok: false, text: String(e.message || e) }); }
+  };
+
+  const setLinkCapacity = async (id, cap) => {
+    try {
+      await editReq("PUT", `/api/registry/links/${id}`, { capacity_gbps: cap });
+      setEditMsg({ ok: true, text: `Capacity set to ${cap}G.` });
+      refetch();
+    } catch (e) { setEditMsg({ ok: false, text: String(e.message || e) }); }
+  };
+
+  const removeLink = async (id) => {
+    try {
+      await editReq("DELETE", `/api/registry/links/${id}`);
+      setEditMsg({ ok: true, text: "Fiber link deleted." });
+      setEditLink(null); refetch();
+    } catch (e) { setEditMsg({ ok: false, text: String(e.message || e) }); }
+  };
+
+  // ---- edit-handle layer: site drag handles, or a link's path vertices ----
+  React.useEffect(() => {
+    const map = mapRef.current, er = editRef.current;
+    const clear = () => {
+      Object.values(er.siteHandles).forEach((h) => h.remove()); er.siteHandles = {};
+      er.vertexHandles.forEach((h) => h.remove()); er.vertexHandles = [];
+      er.midHandles.forEach((h) => h.remove()); er.midHandles = [];
+    };
+    clear();
+    if (!map || !edit) { er.workPath = null; er.workPathLinkId = null; return; }
+    const { sites, links } = dataRef.current;
+    const bySite = Object.fromEntries((sites || []).map((s) => [s.name, s]));
+
+    if (editLink == null) {
+      for (const s of sites || []) {
+        const h = L.marker([s.lat, s.lon], { draggable: true, icon: handleIcon("site"), zIndexOffset: 1200, keyboard: false }).addTo(map);
+        h.on("drag", (ev) => moveSiteLive(s.name, ev.latlng));
+        h.on("dragend", (ev) => saveSiteLocation(s.name, ev.target.getLatLng()));
+        er.siteHandles[s.name] = h;
+      }
+    } else {
+      const l = (links || []).find((x) => x.id === editLink);
+      const a = l && bySite[l.site_a], b = l && bySite[l.site_b];
+      if (l && a && b) {
+        if (er.workPathLinkId !== editLink) {
+          er.workPath = (l.path && l.path.length >= 2)
+            ? l.path.map((p) => [+p[0], +p[1]]) : [[a.lat, a.lon], [b.lat, b.lon]];
+          er.workPathLinkId = editLink;
+        }
+        renderPathHandles(l, a, b);
+      }
+    }
+    return clear;
+  }, [edit, editLink, data]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const exitEdit = () => { setEdit(false); setEditLink(null); setLinkAdd(false); setPendingA(null); setEditMsg(null); };
+
   const { sites, links, events, at, error } = data;
   const counts = { up: 0, degraded: 0, down: 0, unknown: 0 };
   for (const s of sites || []) counts[s.status] = (counts[s.status] || 0) + 1;
@@ -281,6 +488,13 @@ export function MapPage() {
         <button type="button" className="btn" onClick={toggleNoc}>
           {noc ? "EXIT NOC" : "NOC MODE"}
         </button>
+        {canEdit && (
+          <button type="button" className="btn"
+                  style={edit ? { borderColor: "#e8a415", color: "#e8a415" } : undefined}
+                  onClick={() => (edit ? exitEdit() : setEdit(true))}>
+            {edit ? "DONE EDITING" : "EDIT MAP"}
+          </button>
+        )}
       </div>
 
       <div className="map-body">
@@ -342,7 +556,75 @@ export function MapPage() {
           </div>
         </div>
 
-        {!noc && (
+        {!noc && edit && (
+          <div className="map-panel">
+            <div className="map-panel-head">
+              <div className="map-panel-title">
+                <div className="map-panel-name">Edit map</div>
+                <div className="dim">Drag a site to move it · click a fiber line to edit its path</div>
+              </div>
+              <span className="map-panel-badge mono" style={{ background: "#e8a41526", color: "#e8a415" }}>EDITING</span>
+            </div>
+            <div className="map-panel-body">
+              {editMsg && <div className={"msg" + (editMsg.ok ? "" : " error")}>{editMsg.text}</div>}
+              {(() => {
+                const elink = (links || []).find((l) => l.id === editLink);
+                if (elink) {
+                  return (
+                    <div className="edit-linkbox">
+                      <div className="map-panel-kicker mono">FIBER PATH · {elink.site_a} ⟷ {elink.site_b}</div>
+                      <div className="dim" style={{ fontSize: 11, margin: "4px 0 8px" }}>
+                        Drag ○ to move a waypoint · drag a faint + to add one · right-click ○ to remove.
+                        Endpoints follow their sites.
+                      </div>
+                      <div className="edit-row">
+                        <label className="dim">Capacity (G)</label>
+                        <input key={editLink} ref={capInputRef} className="enum-in" style={{ width: 70 }}
+                               type="number" min="0.1" step="0.5" defaultValue={elink.capacity_gbps} />
+                        <button type="button" className="btn"
+                                onClick={() => setLinkCapacity(elink.id, parseFloat(capInputRef.current.value))}>Set</button>
+                      </div>
+                      <div className="edit-row" style={{ marginTop: 10 }}>
+                        <button type="button" className="btn" onClick={saveLinkPath}>Save path</button>
+                        <button type="button" className="btn" onClick={() => { setEditLink(null); refetch(); }}>Cancel</button>
+                      </div>
+                      <div className="edit-row" style={{ marginTop: 6 }}>
+                        <button type="button" className="btn" onClick={() => removeLink(elink.id)}
+                                style={{ borderColor: "#e5484d", color: "#e5484d" }}>Delete link</button>
+                      </div>
+                    </div>
+                  );
+                }
+                return (
+                  <div className="edit-linkbox">
+                    <div className="edit-row">
+                      <button type="button" className="btn"
+                              style={linkAdd ? { borderColor: "#e8a415", color: "#e8a415" } : undefined}
+                              onClick={() => { setLinkAdd((v) => !v); setPendingA(null); setEditMsg(linkAdd ? null : { ok: true, text: "Click the first site, then the second." }); }}>
+                        {linkAdd ? "Cancel add-link" : "+ Add fiber link"}
+                      </button>
+                      {linkAdd && pendingA && <span className="dim mono">from {pendingA}…</span>}
+                    </div>
+                    <div className="map-panel-kicker mono" style={{ marginTop: 12 }}>FIBER LINKS ({(links || []).length})</div>
+                    {(links || []).map((l) => (
+                      <div className="map-site-row" key={l.id}>
+                        <span className="map-legend-dot" style={{ background: linkColor(l) }} />
+                        <div className="map-site-row-text">
+                          <div className="map-site-row-name">{l.site_a} ⟷ {l.site_b}</div>
+                          <div className="dim mono">{l.capacity_gbps}G · {l.path ? `${l.path.length}-pt path` : "straight"}</div>
+                        </div>
+                        <button type="button" className="btn" onClick={() => { setSelected(null); setEditLink(l.id); }}>Path</button>
+                      </div>
+                    ))}
+                    {(links || []).length === 0 && <div className="msg">No fiber links yet — add one.</div>}
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        )}
+
+        {!noc && !edit && (
           <div className="map-panel">
             {sel ? (
               <>

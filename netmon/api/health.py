@@ -93,6 +93,7 @@ def ui_meta(
         version=__version__,
         zabbix_url=cfg.web.zabbix_url,
         ssheasy_url=cfg.web.ssheasy_url,
+        can_edit=cfg.security.allow_web_edit,
     )
 
 

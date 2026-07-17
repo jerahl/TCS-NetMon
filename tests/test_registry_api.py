@@ -134,6 +134,80 @@ def test_assign_unassign_and_edit_gate(tmp_path):
                            json={"device_ids": [d["id"]], "site": "BHS"}).status_code == 403
 
 
+def test_move_site(tmp_path):
+    url = f"sqlite:///{tmp_path/'r.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    sid = db.fetch_one(engine, "SELECT id FROM sites WHERE name='BHS'")["id"]
+    with _client(_conf(tmp_path, url)) as client:
+        r = client.post(f"/api/registry/sites/{sid}/location", json={"lat": 33.25, "lon": -87.55})
+        assert r.status_code == 200 and r.json()["lat"] == 33.25
+        assert client.post("/api/registry/sites/9999/location",
+                           json={"lat": 1, "lon": 1}).status_code == 404
+        assert client.post(f"/api/registry/sites/{sid}/location",
+                           json={"lat": 999, "lon": 0}).status_code == 422
+    got = db.fetch_one(engine, "SELECT lat, lon FROM sites WHERE id=:id", {"id": sid})
+    assert float(got["lat"]) == 33.25 and float(got["lon"]) == -87.55
+
+
+def _two_sites(engine):
+    db.execute(engine, "INSERT INTO sites (name, display_name, tier, lat, lon, enabled) "
+                       "VALUES ('CHS','C High','high',33.3,-87.6,1)")
+
+
+def test_fiber_link_crud(tmp_path):
+    url = f"sqlite:///{tmp_path/'r.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    _two_sites(engine)
+    with _client(_conf(tmp_path, url)) as client:
+        # create (endpoints normalised to sorted-name order)
+        r = client.post("/api/registry/links", json={"site_a": "CHS", "site_b": "BHS", "capacity_gbps": 10})
+        assert r.status_code == 200 and r.json()["site_a"] == "BHS" and r.json()["site_b"] == "CHS"
+        # duplicate (reversed) → 409
+        assert client.post("/api/registry/links",
+                           json={"site_a": "BHS", "site_b": "CHS"}).status_code == 409
+        # unknown site → 404; same-site → 422
+        assert client.post("/api/registry/links",
+                           json={"site_a": "BHS", "site_b": "NOPE"}).status_code == 404
+        assert client.post("/api/registry/links",
+                           json={"site_a": "BHS", "site_b": "BHS"}).status_code == 422
+
+        links = client.get("/api/registry/links").json()
+        assert len(links) == 1 and links[0]["capacity_gbps"] == 10.0 and links[0]["path"] is None
+        lid = links[0]["id"]
+
+        # edit the waypoint path + capacity
+        r = client.put(f"/api/registry/links/{lid}",
+                       json={"path": [[33.2, -87.5], [33.25, -87.55], [33.3, -87.6]], "capacity_gbps": 40})
+        assert r.status_code == 200
+        # bad path shape → 422
+        assert client.put(f"/api/registry/links/{lid}",
+                          json={"path": [[33.2]]}).status_code == 422
+        # clear_path reverts to straight (site-tracking) line
+        assert client.put(f"/api/registry/links/{lid}", json={"clear_path": True}).status_code == 200
+        row = client.get("/api/registry/links").json()[0]
+        assert row["path"] is None and row["capacity_gbps"] == 40.0
+
+        # delete
+        assert client.delete(f"/api/registry/links/{lid}").status_code == 200
+        assert client.get("/api/registry/links").json() == []
+        assert client.delete(f"/api/registry/links/{lid}").status_code == 404
+
+
+def test_map_edits_require_gate(tmp_path):
+    url = f"sqlite:///{tmp_path/'r.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    sid = db.fetch_one(engine, "SELECT id FROM sites WHERE name='BHS'")["id"]
+    with _client(_conf(tmp_path, url, allow_edit=False)) as client:
+        assert client.get("/api/registry/links").status_code == 200       # read ok
+        assert client.post(f"/api/registry/sites/{sid}/location",
+                           json={"lat": 1, "lon": 1}).status_code == 403
+        assert client.post("/api/registry/links",
+                           json={"site_a": "BHS", "site_b": "CHS"}).status_code == 403
+
+
 def test_enum_map_edit_and_reset(tmp_path):
     url = f"sqlite:///{tmp_path/'r.db'}"
     _seed(url)

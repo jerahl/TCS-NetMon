@@ -297,6 +297,9 @@ class UiMeta(BaseModel):
     version: str
     zabbix_url: str = ""
     ssheasy_url: str = ""
+    # Whether web edits are enabled at all ([security] allow_web_edit). Lets the
+    # UI show/hide edit affordances; the API still enforces it server-side.
+    can_edit: bool = False
 
 
 class UserSession(BaseModel):

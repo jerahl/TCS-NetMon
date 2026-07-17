@@ -10,6 +10,7 @@ one switch disables every web write path.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 
@@ -204,6 +205,177 @@ def assign_devices(
     log.info("assign %d device(s) to site %r by %s", len(ids), target, user.username)
     return {"status": "assigned", "count": n if n is not None and n >= 0 else len(ids),
             "site": target}
+
+
+# ── site map: move sites, edit fiber links ──────────────────────────────────
+
+class SiteLocation(BaseModel):
+    lat: float
+    lon: float
+
+
+def _check_latlon(lat: float, lon: float) -> None:
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        raise HTTPException(status_code=422, detail="lat/lon out of range")
+
+
+@router.post("/sites/{site_id}/location")
+def move_site(
+    site_id: int,
+    body: SiteLocation,
+    engine: Engine = Depends(get_engine),
+    cfg: Config = Depends(get_config),
+    user: UserSession = Depends(require_role(Role.admin)),
+) -> dict:
+    """Reposition a site marker on the map (writes sites.lat/lon only)."""
+    _require_edit(cfg)
+    _check_latlon(body.lat, body.lon)
+    row = db.fetch_one(engine, "SELECT name FROM sites WHERE id = :id", {"id": site_id})
+    if row is None:
+        raise HTTPException(status_code=404, detail="site not found")
+    db.execute(engine, "UPDATE sites SET lat = :lat, lon = :lon WHERE id = :id",
+               {"lat": body.lat, "lon": body.lon, "id": site_id})
+    log.info("site %r moved to (%.6f, %.6f) by %s", row["name"], body.lat, body.lon, user.username)
+    return {"status": "moved", "name": row["name"], "lat": body.lat, "lon": body.lon}
+
+
+def _validate_path(path) -> list[list[float]] | None:
+    """A fiber path is a JSON list of >=2 [lat, lon] points, or null (straight
+    line between the endpoint sites, which then tracks site moves)."""
+    if path is None:
+        return None
+    if not isinstance(path, list) or len(path) < 2:
+        raise HTTPException(status_code=422,
+                            detail="path must be a list of at least two [lat, lon] points, or null")
+    out: list[list[float]] = []
+    for pt in path:
+        if not isinstance(pt, (list, tuple)) or len(pt) != 2:
+            raise HTTPException(status_code=422, detail="each path point must be [lat, lon]")
+        try:
+            lat, lon = float(pt[0]), float(pt[1])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="path coordinates must be numbers") from None
+        _check_latlon(lat, lon)
+        out.append([lat, lon])
+    return out
+
+
+def _site_id(engine: Engine, name: str) -> int:
+    row = db.fetch_one(engine, "SELECT id FROM sites WHERE name = :n", {"n": name})
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"site {name!r} does not exist")
+    return int(row["id"])
+
+
+@router.get("/links")
+def list_links(
+    engine: Engine = Depends(get_engine),
+    _user: UserSession = Depends(require_role(Role.admin)),
+) -> list[dict]:
+    """Fiber links for the map editor (raw rows incl. id + parsed path)."""
+    rows = db.fetch_all(engine,
+        "SELECT l.id, l.capacity_gbps, l.path, l.enabled, "
+        " sa.name AS site_a, sb.name AS site_b "
+        "FROM fiber_links l JOIN sites sa ON sa.id = l.site_a_id "
+        "JOIN sites sb ON sb.id = l.site_b_id ORDER BY l.id")
+    out = []
+    for r in rows:
+        try:
+            path = json.loads(r["path"]) if r.get("path") else None
+        except (TypeError, ValueError):
+            path = None
+        out.append({"id": r["id"], "site_a": r["site_a"], "site_b": r["site_b"],
+                    "capacity_gbps": float(r["capacity_gbps"]), "path": path,
+                    "enabled": bool(r["enabled"])})
+    return out
+
+
+class LinkIn(BaseModel):
+    site_a: str
+    site_b: str
+    capacity_gbps: float = 1.0
+    path: list | None = None
+
+
+@router.post("/links")
+def create_link(
+    body: LinkIn,
+    engine: Engine = Depends(get_engine),
+    cfg: Config = Depends(get_config),
+    user: UserSession = Depends(require_role(Role.admin)),
+) -> dict:
+    """Register a fiber link between two sites. Endpoints stored in sorted-name
+    order so A↔B can't be registered twice reversed (matches the importer)."""
+    _require_edit(cfg)
+    a, b = body.site_a.strip(), body.site_b.strip()
+    if a == b:
+        raise HTTPException(status_code=422, detail="a link needs two distinct sites")
+    a, b = (a, b) if a <= b else (b, a)   # _norm_pair, mirroring topology.py
+    aid, bid = _site_id(engine, a), _site_id(engine, b)
+    if db.fetch_one(engine, "SELECT 1 FROM fiber_links WHERE site_a_id = :a AND site_b_id = :b",
+                    {"a": aid, "b": bid}):
+        raise HTTPException(status_code=409, detail=f"a link between {a} and {b} already exists")
+    path = _validate_path(body.path)
+    db.execute(engine,
+        "INSERT INTO fiber_links (site_a_id, site_b_id, capacity_gbps, path, enabled) "
+        "VALUES (:a, :b, :cap, :path, 1)",
+        {"a": aid, "b": bid, "cap": body.capacity_gbps,
+         "path": json.dumps(path) if path is not None else None})
+    log.info("fiber link %s—%s created by %s", a, b, user.username)
+    return {"status": "created", "site_a": a, "site_b": b}
+
+
+class LinkUpdate(BaseModel):
+    capacity_gbps: float | None = None
+    path: list | None = None
+    clear_path: bool = False   # explicit: revert to a straight, site-tracking line
+    enabled: bool | None = None
+
+
+@router.put("/links/{link_id}")
+def update_link(
+    link_id: int,
+    body: LinkUpdate,
+    engine: Engine = Depends(get_engine),
+    cfg: Config = Depends(get_config),
+    user: UserSession = Depends(require_role(Role.admin)),
+) -> dict:
+    """Edit a link's capacity, path (waypoints), or enabled flag."""
+    _require_edit(cfg)
+    if db.fetch_one(engine, "SELECT 1 FROM fiber_links WHERE id = :id", {"id": link_id}) is None:
+        raise HTTPException(status_code=404, detail="link not found")
+    sets, params = [], {"id": link_id}
+    if body.capacity_gbps is not None:
+        if body.capacity_gbps <= 0:
+            raise HTTPException(status_code=422, detail="capacity_gbps must be > 0")
+        sets.append("capacity_gbps = :cap"); params["cap"] = body.capacity_gbps
+    if body.clear_path:
+        sets.append("path = NULL")
+    elif body.path is not None:
+        path = _validate_path(body.path)
+        sets.append("path = :path"); params["path"] = json.dumps(path)
+    if body.enabled is not None:
+        sets.append("enabled = :en"); params["en"] = 1 if body.enabled else 0
+    if not sets:
+        raise HTTPException(status_code=422, detail="nothing to update")
+    db.execute(engine, f"UPDATE fiber_links SET {', '.join(sets)} WHERE id = :id", params)
+    log.info("fiber link %d updated by %s (%s)", link_id, user.username, ", ".join(sets))
+    return {"status": "updated", "id": link_id}
+
+
+@router.delete("/links/{link_id}")
+def delete_link(
+    link_id: int,
+    engine: Engine = Depends(get_engine),
+    cfg: Config = Depends(get_config),
+    user: UserSession = Depends(require_role(Role.admin)),
+) -> dict:
+    _require_edit(cfg)
+    if db.fetch_one(engine, "SELECT 1 FROM fiber_links WHERE id = :id", {"id": link_id}) is None:
+        raise HTTPException(status_code=404, detail="link not found")
+    db.execute(engine, "DELETE FROM fiber_links WHERE id = :id", {"id": link_id})
+    log.info("fiber link %d deleted by %s", link_id, user.username)
+    return {"status": "deleted", "id": link_id}
 
 
 # ── editable SNMP enum-decode maps ──────────────────────────────────────────

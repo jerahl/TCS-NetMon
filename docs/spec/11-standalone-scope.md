@@ -192,9 +192,17 @@ shadow-alert diff has run clean for the agreed window.
   in `snapshot_cache` (`enum.<name>`), merged over the default at sweep start
   and picked up live on the next sweep (no restart). First map exposed:
   `stack_status` (extremeStackMemberOperStatus 0=unknown/1=up/2=down/
-  3=mismatch), after the field-confirmed enum was corrected twice. Also this
-  session: **topology switched LLDP→EDP** (EXTREME-EDP-MIB, migration 014,
-  table `lldp_neighbors`→`neighbors`).
+  3=mismatch), after the field-confirmed enum was corrected twice. **Extended
+  again 2026-07-17**: an in-browser **site-map editor** (Site Map → EDIT MAP,
+  admin + `allow_web_edit`) — drag site markers to reposition
+  (`POST /api/registry/sites/{id}/location`), and create/edit/delete fiber
+  links incl. their waypoint polyline (`GET/POST/PUT/DELETE
+  /api/registry/links`; endpoints sorted-name; path validated as [lat,lon]
+  points or null=straight). Writes only `sites`/`fiber_links`; the KML/JSON
+  importer remains the bulk path (same tables). `/api/meta` now carries
+  `can_edit` so the UI shows edit affordances only when the gate is on. Also
+  this session: **topology switched LLDP→EDP** (EXTREME-EDP-MIB, migration
+  014, table `lldp_neighbors`→`neighbors`).
 - **SSHEASY integration landed 2026-07-16.** SSHEASY (`jerahl/ssheasy`) is a
   browser SSH client (xterm.js + WASM) embeddable in an iframe. NetMon adds an
   operator/admin-gated **"SSH" button** on device detail pages (switch + AP)

@@ -52,6 +52,32 @@ The NOC wall view at `/ui/#/map` (nav: **Site Map**). Spec: `docs/spec/09-site-m
 4. Reload the page. No service restart is needed — the API reads the tables
    live.
 
+## Editing the map from the web (admin, edit-gated)
+
+The KML/JSON importer is the bulk path. For touch-ups an admin can edit the
+map directly in the browser when `[security] allow_web_edit = true` — the same
+gate as the settings engine. On the Site Map page an **EDIT MAP** button
+appears (admin only); it toggles an editor that writes to NetMon's own
+`sites`/`fiber_links` tables (never a source):
+
+- **Move a site** — drag its marker; the new lat/lon saves on drop
+  (`POST /api/registry/sites/{id}/location`). Straight (no-waypoint) links
+  attached to it follow the move live.
+- **Edit a fiber path** — click a fiber line (or its "Path" button) to edit
+  its polyline: drag a solid ○ to move a waypoint, drag a faint **+** midpoint
+  to add one, right-click a ○ to remove it. The endpoints stay pinned to their
+  sites. **Save path** stores the waypoints; a path with no waypoints is saved
+  as a straight, site-tracking line. Capacity is editable in the same panel.
+- **Add / delete a link** — "+ Add fiber link" then click the two endpoint
+  sites; "Delete link" removes one. Endpoints are stored in sorted-name order,
+  so A↔B can't be registered twice.
+
+Editing pauses the 10 s poll so a refresh never fights a drag; leaving edit
+mode reloads and resumes. All of it is refused (403) when `allow_web_edit` is
+false. Bulk/authoritative topology still comes from the KML/JSON importer;
+these edits and the importer both live in the same tables (re-importing
+overwrites by site name / site pair).
+
 ## How status is computed (what the colors mean)
 
 - **Site** — rolled up from `device_state` over the site's enabled devices:
