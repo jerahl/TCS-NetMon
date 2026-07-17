@@ -120,8 +120,8 @@ _POE_SLOT_STATUS = {
 }
 
 # extremeStackMemberOperStatus (1.3.6.1.4.1.1916.1.33.2.1.3): the raw integer
-# is not human-readable and "1"/"2" are easy to misread — decode it here.
-_STACK_STATUS = {"0": "offline", "1": "online", "2": "not present"}
+# is not human-readable — decode it here (owner-confirmed 2026-07-17).
+_STACK_STATUS = {"0": "unknown", "1": "up", "2": "down", "3": "mismatch"}
 
 
 def _clean_value(raw: str) -> str:

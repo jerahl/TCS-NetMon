@@ -79,7 +79,7 @@ template). Writes the `006` inventory tables read by the Switches dashboard —
 | fdb | BRIDGE-MIB dot1dTpFdb ⋈ dot1dBasePortIfIndex | 900s | `fdb_entries` (MAC→ifIndex) |
 | edp | EXTREME-EDP-MIB extremeEdpTable (Extreme-native; replaced LLDP) | 1800s | `neighbors` |
 | vlans | Extreme extremeVlanIfTable | 3600s | `switch_vlans` |
-| stack | Extreme stacking + CPU/mem/temp sensors | 300s | `stack_members` (member `status` decoded from extremeStackMemberOperStatus: 0=offline, 1=online, 2=not present) |
+| stack | Extreme stacking + CPU/mem/temp sensors | 300s | `stack_members` (member `status` decoded from extremeStackMemberOperStatus: 0=unknown, 1=up, 2=down, 3=mismatch) |
 
 One supervised task (registered at the fastest interval) gates each sweep
 internally by its own elapsed interval. Targets: enabled `device_type='switch'`

@@ -61,9 +61,9 @@ function portNum(p) {
 }
 
 // Healthy stack member states (decoded from extremeStackMemberOperStatus):
-// "online" is good; "offline"/"not present" warn. Legacy "active"/"up" kept
-// so older cached rows don't suddenly read as faulted.
-const STACK_OK = new Set(["online", "active", "up"]);
+// "up" is good; "down"/"mismatch"/"unknown" warn. Legacy "active"/"online"
+// kept so older cached rows don't suddenly read as faulted.
+const STACK_OK = new Set(["up", "active", "online"]);
 
 const SPEED_CLASS = (mbps) =>
   mbps >= 10000 ? "spd-10g" : mbps >= 1000 ? "spd-1g" : mbps >= 100 ? "spd-100m" : "spd-10m";
