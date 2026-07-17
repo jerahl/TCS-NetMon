@@ -60,6 +60,11 @@ function portNum(p) {
   return m ? parseInt(m[1], 10) : p.ifindex;
 }
 
+// Healthy stack member states (decoded from extremeStackMemberOperStatus):
+// "online" is good; "offline"/"not present" warn. Legacy "active"/"up" kept
+// so older cached rows don't suddenly read as faulted.
+const STACK_OK = new Set(["online", "active", "up"]);
+
 const SPEED_CLASS = (mbps) =>
   mbps >= 10000 ? "spd-10g" : mbps >= 1000 ? "spd-1g" : mbps >= 100 ? "spd-100m" : "spd-10m";
 
@@ -353,7 +358,7 @@ function StackTab({ stack }) {
               <tr key={m.slot}>
                 <td className="mono">{m.slot}</td>
                 <td>{m.role || "—"}</td>
-                <td style={m.status && m.status !== "active" && m.status !== "up" ? { color: sevColor("warn") } : undefined}>
+                <td style={m.status && !STACK_OK.has(m.status) ? { color: sevColor("warn") } : undefined}>
                   {m.status || "—"}</td>
                 <td>{m.model || "—"}</td>
                 <td className="mono dim">{m.serial || "—"}</td>

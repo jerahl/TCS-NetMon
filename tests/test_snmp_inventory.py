@@ -148,6 +148,19 @@ def test_build_stack():
     s = rows[0]
     assert s["slot"] == 1 and s["cpu_pct"] == 12 and s["temp_c"] == 38
     assert s["mem_pct"] == 40.0  # (1_000_000 - 600_000) / 1_000_000 * 100
+    assert s["status"] == "online"  # extremeStackMemberOperStatus 1 → online
+
+
+def test_build_stack_status_decode():
+    """The Extreme oper-status enum is decoded to a readable label; an
+    unknown code falls through to its raw value rather than blanking."""
+    def one(raw):
+        return si.build_stack({"stack_status": {"1": raw}})[0]["status"]
+    assert one("0") == "offline"
+    assert one("1") == "online"
+    assert one("2") == "not present"
+    assert one("online(1)") == "online"   # MIB-translated form
+    assert one("7") == "7"                 # unknown code preserved
 
 
 # ---- rate computation ------------------------------------------------------

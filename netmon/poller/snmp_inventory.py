@@ -119,6 +119,10 @@ _POE_SLOT_STATUS = {
     "7": "updating", "8": "invalidDevice", "9": "notOperational", "10": "other",
 }
 
+# extremeStackMemberOperStatus (1.3.6.1.4.1.1916.1.33.2.1.3): the raw integer
+# is not human-readable and "1"/"2" are easy to misread — decode it here.
+_STACK_STATUS = {"0": "offline", "1": "online", "2": "not present"}
+
 
 def _clean_value(raw: str) -> str:
     v = _TYPE_PREFIX.sub("", raw.strip())
@@ -436,9 +440,12 @@ def build_stack(walks: dict[str, dict[str, str]]) -> list[dict]:
         avail = _to_int(walks.get("mem_avail", {}).get(idx))
         mem_pct = round((total - avail) / total * 100, 2) if total and avail is not None and total > 0 else None
         temp_raw = _to_int(walks.get("stack_temp", {}).get(idx))
+        status_raw = _enum_int(walks.get("stack_status", {}).get(idx))
         rows.append({
             "slot": slot,
-            "status": walks.get("stack_status", {}).get(idx),
+            # Decode the Extreme oper-status enum; fall back to the raw value if
+            # a firmware reports a code we don't have a label for (never blank).
+            "status": _STACK_STATUS.get(status_raw or "", status_raw),
             "cpu_pct": _to_int(walks.get("cpu_5m", {}).get(idx)),
             "mem_pct": mem_pct,
             "temp_c": temp_raw,
