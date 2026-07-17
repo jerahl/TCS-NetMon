@@ -20,10 +20,11 @@ The data strategy is unchanged from v1.0 where a source platform already has the
 | Voice | 3CX (v20 REST) | Trunk registration, extensions, system status |
 | Surveillance | Milestone XProtect (Config API + Events/State WebSocket) | Camera/recording state, RS health, storage, alarms |
 
-Two things the sources can *not* provide are NetMon's own collection:
+Three things the sources can *not* provide are NetMon's own collection:
 
 1. **The native poller** — ground truth against registered management IPs: ICMP up/down (`fping` sweep, 60s) and SNMP-responding (`snmpget` sysUpTime, 5 min). Tiebreaker when a source disagrees with reality; canary when a source platform is unreachable.
 2. **SNMP inventory sweeps** *(⛔ D6-gated; spec 10 §4, spec 11 §5)* — read-only `snmpbulkwalk` subprocess sweeps of the switch fleet (ports/PoE, FDB, LLDP, VLANs, stack/env). The ZCD switch experience (port faceplates, FDB⋈PF identity pane) came from Zabbix's direct SNMP polling, which no federated source replaces — this is **core scope**, not an enhancement.
+3. **Direct camera health** *(⛔ D10-gated, post-parity 11.x; spec 13)* — read-only SNMP (`snmpget`/`snmpbulkwalk`, same net-snmp path as D6, no new dependency) against the cameras Milestone already registers, for host health Milestone can't federate: CPU, **kernel-uptime reboot detection**, filesystem fill, wired-interface up/down + bandwidth, per-imager encoder bitrate, and VCA motion. Bosch profile first (owner's Zabbix template in `reference/zabbix/milestone/`), vendor-extensible; `[camera_snmp]` default-off, alerts shadow-first. Beyond ZCD parity — an enhancement, not v1 parity scope.
 
 NetMon also owns **alerting** (rules → dedupe → maintenance windows → SMTP email) because Zabbix's alerting is being retired for these domains.
 
@@ -128,7 +129,7 @@ netmon/
 | **10.4 Surveillance + VoIP** | camera/RS/storage persistence + `milestone.overview`; ESS WebSocket wiring; camera JPEG proxy; trunks/extensions + SystemStatus | ⛔ D5 |
 | **10.5 Global + Search** | `/api/summary`, `/api/sites` cards, `/api/search` + ⌘K palette; Global page; staleness badging pass | — |
 | **10.6 History buffer** | `state_samples` (24h ring, pruned) + sampler + `/api/history` + chart slots | ✅ D3 (built 2026-07-17) |
-| **11.x Post-parity** | FortiGate collector + page (D1); operator write actions with audit log (⛔ D4); EAPS/SFP-DOM extras | ⛔ D4 |
+| **11.x Post-parity** | FortiGate collector + page (D1); operator write actions with audit log (⛔ D4); direct camera SNMP monitoring (⛔ D10 — spec 13); EAPS/SFP-DOM extras | ⛔ D4/D10 |
 | **8 — Parallel run & cutover** *(owner-gated)* | ≥4 weeks shadow comparison; owner flips `shadow=false`; Zabbix network/wireless/voice/camera hosts disabled (configs exported as rollback); Zabbix remains for servers | owner |
 
 **Cutover criterion:** an operator can do everything they did in ZabbixCustomDashboard *for the in-scope domains* without opening Zabbix — same pages, same drill-downs, honest staleness — and the shadow-alert diff has run clean for the agreed window.
@@ -142,7 +143,7 @@ netmon/
 
 ## 9. Open questions (tracked; do not guess answers)
 
-**⛔ Gates awaiting owner sign-off (spec 11 §6, recommendations recorded):** D4 (operator write actions, post-cutover), D5 (`websockets` dependency), D7 (camera JPEG proxy). **Resolved:** D3 (24h ring buffer — approved 2026-07-15, built Phase 10.6) and D6 (`snmpbulkwalk` sweeps — approved, built Phase 10.1).
+**⛔ Gates awaiting owner sign-off (spec 11 §6, recommendations recorded):** D4 (operator write actions, post-cutover), D5 (`websockets` dependency), D7 (camera JPEG proxy), D10 (direct camera SNMP monitoring, post-parity 11.x — spec 13). **Resolved:** D3 (24h ring buffer — approved 2026-07-15, built Phase 10.6) and D6 (`snmpbulkwalk` sweeps — approved, built Phase 10.1).
 
 **Carried over:** XIQ rate limits at production device counts (validate the ≈1.3–1.6k calls/h budget); 3CX v20 surface for extensions/active calls/queues (fixtures first); rConfig config-diff pane (on-click read-through vs. link-out — spec 10 Q5); `wireless_clients` scale/PII acceptance (~9–12k rows with usernames/MACs — spec 10 Q8); SMTP relay; SP cert rotation.
 

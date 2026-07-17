@@ -1,0 +1,659 @@
+zabbix_export:
+  version: '7.4'
+  template_groups:
+    - uuid: ae594436d5584d85b34ddfa0b0e53a51
+      name: Templates/Video
+  templates:
+    - uuid: 4f919a38df614ac0b28bd8d04129bdf1
+      template: 'Milestone Camera vendor - Bosch'
+      name: 'Milestone Camera vendor - Bosch'
+      description: |
+        Bosch FLEXIDOME / DINION / AUTODOME monitoring via direct SNMP
+        polling of the camera's Bosch private MIB (.1.3.6.1.4.1.3967) plus
+        the standard MIBs (MIB-II + HOST-RESOURCES) that the camera's
+        net-snmpd exposes.
+        
+        Linked conditionally by the Site-template's Camera LLD override
+        when the discovered camera matches the Bosch vendor regex
+        (case-insensitive '^(?:bosch\s+)?(?:flexidome|dinion)').
+        
+        DESIGN NOTES (per M0_Bosch_Findings.md and
+        M0_Bosch_Fleet_Compatibility.md):
+        
+        - G28: 'sysUpTime.0' on Bosch reflects snmpd restart, not camera
+          boot. This template uses 'hrSystemUptime.0' for reboot detection.
+        - G29: Bosch net-snmpd appends trailing binary garbage to OCTET
+          STRING values. Every string item / LLD has a regex preprocessing
+          step '^([\x20-\x7E]+).*' that strips to first non-printable byte.
+        - G30: ifXTable HC counters are zero/absent on Bosch firmware.
+          Bandwidth items use the 32-bit ifInOctets/ifOutOctets columns
+          with Change per second preprocessing.
+        - G32: Bosch firmware updates renumber ifIndex and hrStorageIndex.
+          Every table-row item is LLD-discovered by name, never by
+          hardcoded integer index.
+        - Bucket A/B/C compatibility: items that depend on the Bosch
+          private branch reference 'bosch.dev.has_full_mib' in their
+          formulas / triggers so they auto-suppress on older Bosch models
+          (CPP4 generation 5000 HD, DINION 6000 HD, etc.) where the
+          private branch is absent or shape-deviant.
+        
+        REQUIRED MACROS (defaults shown, override per-host as needed):
+          {$MS.CAM.SNMP.VERSION}        '2'   (1, 2, or 3)
+          {$MS.CAM.SNMP.COMMUNITY}      ''    SECRET_TEXT (v1/v2c only)
+          {$MS.CAM.SNMP.V3.USER}        ''    (v3 only)
+          {$MS.CAM.SNMP.V3.AUTH.PROTO}  SHA
+          {$MS.CAM.SNMP.V3.AUTH.PASS}   ''    SECRET_TEXT
+          {$MS.CAM.SNMP.V3.PRIV.PROTO}  AES
+          {$MS.CAM.SNMP.V3.PRIV.PASS}   ''    SECRET_TEXT
+          {$MS.CAM.BOSCH.POLL.INTERVAL} 5m
+          {$MS.CAM.BOSCH.MOTION.POLL}   1m
+        
+        OPERATOR-SIDE PREREQUISITE: SNMP must be enabled on the camera
+        under Configuration -> Service -> SNMP. Recent Bosch firmware
+        ships with SNMPv1/v2c DISABLED by default; either enable it or
+        create a dedicated v3 read-only user (the default 'service'
+        account does NOT have SNMP access).
+      vendor:
+        name: Community
+        version: 7.4-0
+      groups:
+        - name: Templates/Video
+      items:
+        - uuid: bc906fababe24696941ccab41f5a3906
+          name: 'Cam: CPU average %'
+          type: CALCULATED
+          key: bosch.cam.cpu.avg.pct
+          delay: '{$MS.CAM.BOSCH.POLL.INTERVAL}'
+          value_type: FLOAT
+          units: '%'
+          params: 'avg(last_foreach(//bosch.cam.cpu.core.pct[*]))'
+          description: |
+            Average across all per-core CPU% items. Replaces UCD-MIB load
+            average (laTable.1.3.6.1.4.1.2021.10) which was removed from
+            net-snmpd in the firmware track that ships kernel 5.15
+            (FLEXIDOME 5100i FW 06010980 and later).
+          tags:
+            - tag: component
+              value: bosch-health
+            - tag: src
+              value: zbx
+          triggers:
+            - uuid: 138e016196c44b028771a1a804313283
+              expression: 'avg(/Milestone Camera vendor - Bosch/bosch.cam.cpu.avg.pct,15m)>90'
+              name: 'Cam [{HOST.NAME}]: CPU sustained >90% for 15m'
+              priority: WARNING
+        - uuid: 29e1cabab533475a8918a27eb1a5c450
+          name: 'Cam: Process count'
+          type: SNMP_AGENT
+          snmp_oid: 1.3.6.1.2.1.25.1.6.0
+          key: bosch.cam.process.count
+          delay: '{$MS.CAM.BOSCH.POLL.INTERVAL}'
+          description: |
+            hrSystemProcesses. Pilot baselines: 5100i ~106 (old FW) /
+            ~151 (new FW), 7000i ~99. Sub-90 means camera is half-booted
+            or has services failing.
+          tags:
+            - tag: component
+              value: bosch-health
+            - tag: src
+              value: zbx
+        - uuid: 4c018f52272a4ffbbcfae398e8d7169b
+          name: 'Cam: System uptime (kernel boot)'
+          type: SNMP_AGENT
+          snmp_oid: 1.3.6.1.2.1.25.1.1.0
+          key: bosch.cam.uptime
+          delay: '{$MS.CAM.BOSCH.POLL.INTERVAL}'
+          units: uptime
+          description: |
+            G28: uses hrSystemUptime (camera kernel uptime) NOT sysUpTime
+            (snmpd agent uptime) - the latter resets on every SNMP config
+            change and would fire false reboot alarms.
+          preprocessing:
+            - type: MULTIPLIER
+              parameters:
+                - '0.01'
+          tags:
+            - tag: component
+              value: bosch-health
+            - tag: src
+              value: zbx
+          triggers:
+            - uuid: 93d056407c3c42e2b4ca31118ea14502
+              expression: 'last(/Milestone Camera vendor - Bosch/bosch.cam.uptime)<10m'
+              name: 'Cam [{HOST.NAME}]: rebooted (uptime <10m)'
+              priority: INFO
+              description: 'Camera kernel uptime less than 10 minutes - it rebooted recently.'
+        - uuid: c6549ce0b52946f5a5c62f74d8282b0c
+          name: 'Bosch: Board fingerprint'
+          type: SNMP_AGENT
+          snmp_oid: 1.3.6.1.4.1.3967.1.1.1.6.0
+          key: bosch.dev.board.fingerprint
+          delay: 1d
+          value_type: CHAR
+          description: |
+            Per-board hardware fingerprint hex string. Stable across
+            firmware updates (validated 5100i pre/post FW flash). Useful
+            for hardware-identity audit and platform-deviation detection.
+          preprocessing:
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 7d
+          tags:
+            - tag: component
+              value: bosch-identity
+            - tag: src
+              value: zbx
+        - uuid: a2e3228f8cda45e7951a055c8fed14b4
+          name: 'Bosch: Firmware short code'
+          type: SNMP_AGENT
+          snmp_oid: 1.3.6.1.4.1.3967.1.1.1.5.0
+          key: bosch.dev.fw.short
+          delay: 1d
+          value_type: CHAR
+          description: |
+            Bosch internal firmware short code. NOT numerically sortable -
+            different model families use different numbering spaces. Surface
+            informationally only; do not put numeric comparisons on this.
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - '^([\x20-\x7E]+).*'
+                - \1
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 7d
+          tags:
+            - tag: component
+              value: bosch-identity
+            - tag: src
+              value: zbx
+        - uuid: 792181fe80b44790a3d8e2f1d65be195
+          name: 'Bosch: Has full Bosch MIB?'
+          type: CALCULATED
+          key: bosch.dev.has_full_mib
+          delay: '{$MS.CAM.BOSCH.POLL.INTERVAL}'
+          params: |
+            (length(last(//bosch.dev.vendor))>0)
+            * (length(last(//bosch.dev.model))>0)
+          description: |
+            Bucket A/B/C gate. 1 = full Bosch private MIB present (alarm
+            and encoder items will populate), 0 = identity-only or
+            minimal (those items will return errors - suppress triggers).
+            
+            Reference this in vendor-specific trigger expressions to
+            auto-disable on older Bosch generations (CPP4 5000 HD,
+            DINION 6000 HD, etc.) per M0_Bosch_Fleet_Compatibility.md.
+          tags:
+            - tag: component
+              value: bosch-identity
+            - tag: src
+              value: zbx
+        - uuid: afaf8a5fa91742cabc7ad7ea2d6a5a3d
+          name: 'Bosch: Model'
+          type: SNMP_AGENT
+          snmp_oid: 1.3.6.1.4.1.3967.1.1.5.1.0
+          key: bosch.dev.model
+          delay: 1d
+          value_type: CHAR
+          description: 'Model string (e.g. "FLEXIDOME indoor 5100i IR - 5MP"). G29 strip applied.'
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - '^([\x20-\x7E]+).*'
+                - \1
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 7d
+          tags:
+            - tag: component
+              value: bosch-identity
+            - tag: src
+              value: zbx
+        - uuid: aa89026db7e5481cafb1a8b74626d7b0
+          name: 'Bosch: Hardware platform code'
+          type: SNMP_AGENT
+          snmp_oid: 1.3.6.1.4.1.3967.1.1.1.4.0
+          key: bosch.dev.platform.code
+          delay: 1d
+          value_type: CHAR
+          description: |
+            CPP platform family code (e.g. "F000B543" = CPP7.3). NOT a
+            per-model discriminator - 5100i and 7000i share this value.
+            Useful for "which chipset generation" reporting only.
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - '^([\x20-\x7E]+).*'
+                - \1
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 7d
+          tags:
+            - tag: component
+              value: bosch-identity
+            - tag: src
+              value: zbx
+        - uuid: c451e30005e3429c9da991f1e59c5fad
+          name: 'Bosch: Vendor string'
+          type: SNMP_AGENT
+          snmp_oid: 1.3.6.1.4.1.3967.1.1.1.7.0
+          key: bosch.dev.vendor
+          delay: 1d
+          value_type: CHAR
+          description: 'Should be "Bosch". Empty/absent on bucket-C (non-Bosch-MIB) cameras.'
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - '^([\x20-\x7E]+).*'
+                - \1
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 7d
+          tags:
+            - tag: component
+              value: bosch-identity
+            - tag: src
+              value: zbx
+        - uuid: 729053b08b244bacbe4ef513a7e9a1c9
+          name: 'Bosch: VMS endpoint (camera-side record)'
+          type: SNMP_AGENT
+          snmp_oid: 1.3.6.1.4.1.3967.1.5.2.1.1.1
+          key: bosch.dev.vms.endpoint
+          delay: '{$MS.CAM.BOSCH.POLL.INTERVAL}'
+          value_type: CHAR
+          description: |
+            IP of the VMS / management server the camera believes itself
+            registered with. Cross-check against {$MILESTONE.HOST} to
+            detect cameras pointed at the wrong VMS (e.g. left over from
+            a prior install or mis-staged hardware).
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - '^([\x20-\x7E]+).*'
+                - \1
+          tags:
+            - tag: component
+              value: bosch-identity
+            - tag: src
+              value: zbx
+      discovery_rules:
+        - uuid: 50d21b1902354ad49759f8ad8160e426
+          name: 'Bosch: CPU core discovery'
+          type: SNMP_AGENT
+          snmp_oid: 'discovery[{#SNMPINDEX},1.3.6.1.2.1.25.3.3.1.2]'
+          key: bosch.cam.cpu.discovery
+          delay: 1h
+          description: |
+            Discovers per-core CPU% via hrProcessorTable. Pilot boxes
+            (both 5100i and 7000i, both firmware tracks) report 4 cores
+            at indices 196608..196611 - stable across firmware updates.
+          item_prototypes:
+            - uuid: c60acd5200294ebdb716babf994f64cf
+              name: 'Cam CPU core {#SNMPINDEX}: % busy'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.2.1.25.3.3.1.2.{#SNMPINDEX}'
+              key: 'bosch.cam.cpu.core.pct[{#SNMPINDEX}]'
+              delay: '{$MS.CAM.BOSCH.POLL.INTERVAL}'
+              units: '%'
+              tags:
+                - tag: component
+                  value: bosch-cpu
+                - tag: cpu_core
+                  value: '{#SNMPINDEX}'
+                - tag: src
+                  value: zbx
+        - uuid: 3ef0e7b64e2e4bb5a79c2ed4f0375815
+          name: 'Bosch: Filesystem discovery'
+          type: SNMP_AGENT
+          snmp_oid: 'discovery[{#SNMPINDEX},1.3.6.1.2.1.25.2.3.1.1,{#FSNAME},1.3.6.1.2.1.25.2.3.1.3,{#FSTYPE},1.3.6.1.2.1.25.2.3.1.2]'
+          key: bosch.cam.fs.discovery
+          delay: 1h
+          filter:
+            evaltype: AND
+            conditions:
+              - macro: '{#FSNAME}'
+                value: ^(/data|/var/log)$
+          description: |
+            G32: discover by name not index. Bosch firmware updates
+            renumber hrStorage indices (/data moved from idx 49 to 47
+            across the 5100i FW upgrade). Filter on hrStorageDescr =~
+            ^/ to exclude memory pseudo-rows. G29 strip on the descr.
+          item_prototypes:
+            - uuid: f5cae53300494dbdadb95ced7eaa2c69
+              name: 'Cam FS [{#SNMPINDEX}]: total (alloc units)'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.2.1.25.2.3.1.5.{#SNMPINDEX}'
+              key: 'bosch.cam.fs.total.units[{#SNMPINDEX}]'
+              delay: 1h
+              tags:
+                - tag: component
+                  value: bosch-fs
+                - tag: fs
+                  value: '{#FSNAME}'
+                - tag: src
+                  value: zbx
+            - uuid: bbc64b4a30ad4e6892f17bd68a8348f3
+              name: 'Cam FS [{#SNMPINDEX}]: used %'
+              type: CALCULATED
+              key: 'bosch.cam.fs.used.pct[{#SNMPINDEX}]'
+              delay: '{$MS.CAM.BOSCH.POLL.INTERVAL}'
+              value_type: FLOAT
+              units: '%'
+              params: 'last(//bosch.cam.fs.used.units[{#SNMPINDEX}])*100/last(//bosch.cam.fs.total.units[{#SNMPINDEX}])'
+              tags:
+                - tag: component
+                  value: bosch-fs
+                - tag: fs
+                  value: '{#FSNAME}'
+                - tag: src
+                  value: zbx
+            - uuid: e08ffcac8bd946db8967b953d0d1395e
+              name: 'Cam FS [{#SNMPINDEX}]: used (alloc units)'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.2.1.25.2.3.1.6.{#SNMPINDEX}'
+              key: 'bosch.cam.fs.used.units[{#SNMPINDEX}]'
+              delay: '{$MS.CAM.BOSCH.POLL.INTERVAL}'
+              tags:
+                - tag: component
+                  value: bosch-fs
+                - tag: fs
+                  value: '{#FSNAME}'
+                - tag: src
+                  value: zbx
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // G29 - strip trailing binary garbage from {#FSNAME}
+                  var arr = JSON.parse(value);
+                  for (var i = 0; i < arr.length; i++) {
+                    if (arr[i]['{#FSNAME}']) {
+                      arr[i]['{#FSNAME}'] = String(arr[i]['{#FSNAME}']).replace(/[^\x20-\x7E].*$/, '');
+                    }
+                  }
+                  return JSON.stringify(arr);
+        - uuid: a227943d9d7b40cea82e090986b3db74
+          name: 'Bosch: Network interface discovery'
+          type: SNMP_AGENT
+          snmp_oid: 'discovery[{#SNMPINDEX},1.3.6.1.2.1.2.2.1.1,{#IFNAME},1.3.6.1.2.1.2.2.1.2]'
+          key: bosch.cam.if.discovery
+          delay: 1h
+          filter:
+            evaltype: AND
+            conditions:
+              - macro: '{#IFNAME}'
+                value: ^eth\d+$
+          description: |
+            G32: discover by name not index. Bosch firmware updates
+            renumber ifIndex (eth0 moved from idx 2 to idx 3 across
+            5100i FW upgrade because a sit0 IPv6-in-IPv4 tunnel
+            pseudo-interface appeared). Filter on ifDescr =~ ^eth\d+$
+            to exclude lo and tunnel pseudos. G29 strip on the descr.
+          item_prototypes:
+            - uuid: cfae1d253a1f4f6e8f7856222f75a69f
+              name: 'Cam IF [{#IFNAME}]: incoming bps'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.2.1.2.2.1.10.{#SNMPINDEX}'
+              key: 'bosch.cam.if.in.bps[{#IFNAME}]'
+              delay: '{$MS.CAM.BOSCH.POLL.INTERVAL}'
+              units: bps
+              description: |
+                G30: uses 32-bit ifInOctets, NOT ifHCInOctets (HC counters
+                are absent or zero on Bosch firmware). Counter32 with
+                Change per second handles wraparound natively.
+              preprocessing:
+                - type: CHANGE_PER_SECOND
+                - type: MULTIPLIER
+                  parameters:
+                    - '8'
+              tags:
+                - tag: component
+                  value: bosch-net
+                - tag: interface
+                  value: '{#IFNAME}'
+                - tag: src
+                  value: zbx
+            - uuid: 132ed4ab28c34c7aa7924eb688ecd69a
+              name: 'Cam IF [{#IFNAME}]: oper status'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.2.1.2.2.1.8.{#SNMPINDEX}'
+              key: 'bosch.cam.if.oper.status[{#IFNAME}]'
+              valuemap:
+                name: IfOperStatus
+              tags:
+                - tag: component
+                  value: bosch-net
+                - tag: interface
+                  value: '{#IFNAME}'
+                - tag: src
+                  value: zbx
+              trigger_prototypes:
+                - uuid: e4e305e6986a4def890b2718faa09e9f
+                  expression: 'last(/Milestone Camera vendor - Bosch/bosch.cam.if.oper.status[{#IFNAME}])=2'
+                  name: 'Cam [{HOST.NAME}]: interface {#IFNAME} down'
+                  priority: WARNING
+            - uuid: c10bc9d82bb44b52b18b5d87790c13f5
+              name: 'Cam IF [{#IFNAME}]: outgoing bps'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.2.1.2.2.1.16.{#SNMPINDEX}'
+              key: 'bosch.cam.if.out.bps[{#IFNAME}]'
+              delay: '{$MS.CAM.BOSCH.POLL.INTERVAL}'
+              units: bps
+              preprocessing:
+                - type: CHANGE_PER_SECOND
+                - type: MULTIPLIER
+                  parameters:
+                    - '8'
+              tags:
+                - tag: component
+                  value: bosch-net
+                - tag: interface
+                  value: '{#IFNAME}'
+                - tag: src
+                  value: zbx
+            - uuid: 6df93e73375f4b72a9c5609a87002bfa
+              name: 'Cam IF [{#IFNAME}]: link speed'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.2.1.2.2.1.5.{#SNMPINDEX}'
+              key: 'bosch.cam.if.speed[{#IFNAME}]'
+              delay: 1d
+              units: bps
+              tags:
+                - tag: component
+                  value: bosch-net
+                - tag: interface
+                  value: '{#IFNAME}'
+                - tag: src
+                  value: zbx
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // G29 - strip trailing binary garbage from {#IFNAME}
+                  var arr = JSON.parse(value);
+                  for (var i = 0; i < arr.length; i++) {
+                    if (arr[i]['{#IFNAME}']) {
+                      arr[i]['{#IFNAME}'] = String(arr[i]['{#IFNAME}']).replace(/[^\x20-\x7E].*$/, '');
+                    }
+                  }
+                  return JSON.stringify(arr);
+        - uuid: 45e8a52573b544ee883423fb102c9d23
+          name: 'Bosch: Imager discovery'
+          type: SNMP_AGENT
+          snmp_oid: 'discovery[{#IMAGER.IDX},1.3.6.1.4.1.3967.1.1.1.3.1.1]'
+          key: bosch.imager.discovery
+          delay: 1h
+          description: |
+            Walks the per-imager name table. 1 row on single-imager
+            FLEXIDOMEs (5100i, 4000i, 3000i); 4 rows on multi-imager
+            housings (7000i multi). Returns no rows on bucket-C cameras
+            without the Bosch private branch - all per-imager items
+            then silently no-discover.
+          item_prototypes:
+            - uuid: 4c807442d7a447dfb360f7f429134d1e
+              name: 'Imager {#IMAGER.IDX}: encoder bitrate'
+              type: DEPENDENT
+              key: 'bosch.imager.encoder.bitrate.kbps[{#IMAGER.IDX}]'
+              units: kbps
+              description: |
+                Live encoded bitrate for the imager's primary stream.
+                Pilot range observed: 750 kbps idle scene to 6 Mbps
+                active scene on a FLEXIDOME 5100i-5MP. Extracted from
+                bytes 4-7 of the encoder slot 1 blob as big-endian uint32.
+              preprocessing:
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      // Bytes 4-7 of the slot blob = bitrate uint32 BE.
+                      // Input is space-separated hex like "00 00 01 2C 00 00 03 42 ..."
+                      var hex = String(value).replace(/[^0-9A-Fa-f]/g, '');
+                      if (hex.length < 16) return null;
+                      var b4 = parseInt(hex.substr(8, 2), 16);
+                      var b5 = parseInt(hex.substr(10, 2), 16);
+                      var b6 = parseInt(hex.substr(12, 2), 16);
+                      var b7 = parseInt(hex.substr(14, 2), 16);
+                      return (b4 * 16777216) + (b5 * 65536) + (b6 * 256) + b7;
+              master_item:
+                key: 'bosch.imager.encoder.slot1.raw[{#IMAGER.IDX}]'
+              tags:
+                - tag: component
+                  value: bosch-encoder
+                - tag: imager_idx
+                  value: '{#IMAGER.IDX}'
+                - tag: src
+                  value: zbx
+            - uuid: d8660e9417bc4182a21074c3eddb6419
+              name: 'Imager {#IMAGER.IDX}: encoder slot 1 raw'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.3967.1.2.2.1.1.{#IMAGER.IDX}'
+              key: 'bosch.imager.encoder.slot1.raw[{#IMAGER.IDX}]'
+              delay: '{$MS.CAM.BOSCH.POLL.INTERVAL}'
+              value_type: CHAR
+              description: |
+                Raw 44-byte encoder slot 1 blob (hex octets). Master item
+                for the dependent bitrate / width / height extracts.
+                Layout decoded from pilot 5100i-5MP (M0_Bosch_Findings.md
+                §3e): bytes 4-7 bitrate, 20-23 width, 24-27 height, 28
+                codec, 40 enabled.
+              tags:
+                - tag: component
+                  value: bosch-encoder
+                - tag: imager_idx
+                  value: '{#IMAGER.IDX}'
+                - tag: src
+                  value: zbx
+            - uuid: b70c4de61f574b768e77eb6bc0da40cd
+              name: 'Imager {#IMAGER.IDX}: VCA motion active'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.3967.1.3.2.1.1.{#IMAGER.IDX}'
+              key: 'bosch.imager.motion.active[{#IMAGER.IDX}]'
+              delay: '{$MS.CAM.BOSCH.MOTION.POLL}'
+              description: |
+                Primary VCA motion-active boolean (0 idle / 1 active).
+                Decoded from M0 pilot live motion test, May 2026.
+                Requires an enabled VCA rule on the camera (Configuration
+                -> Alarm -> VCA); without one, this stays at 0 no matter
+                what's happening in the scene.
+              valuemap:
+                name: 'Bool string'
+              tags:
+                - tag: component
+                  value: bosch-motion
+                - tag: imager_idx
+                  value: '{#IMAGER.IDX}'
+                - tag: src
+                  value: zbx
+            - uuid: 72fd24577c8740e696f8687d08666979
+              name: 'Imager {#IMAGER.IDX}: alarm detail bitmap'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.3967.1.3.3.1.1.{#IMAGER.IDX}'
+              key: 'bosch.imager.motion.detail[{#IMAGER.IDX}]'
+              delay: '{$MS.CAM.BOSCH.MOTION.POLL}'
+              value_type: CHAR
+              description: |
+                5-byte alarm-detail bitmap. Idle: "00 00 00 00 00".
+                Active example: "80 00 00 01 01" (byte 0 high bit = active
+                flag, byte 3 = alarm-type code, byte 4 = rule index).
+              tags:
+                - tag: component
+                  value: bosch-motion
+                - tag: imager_idx
+                  value: '{#IMAGER.IDX}'
+                - tag: src
+                  value: zbx
+            - uuid: ea2fad81db254bdc8b9670f7ac50e4ce
+              name: 'Imager {#IMAGER.IDX}: motion-trip indicator'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.3967.1.1.4.1.1.2.{#IMAGER.IDX}'
+              key: 'bosch.imager.motion.indicator[{#IMAGER.IDX}]'
+              delay: '{$MS.CAM.BOSCH.MOTION.POLL}'
+              description: |
+                Secondary motion flag. Pair with bosch.imager.motion.active
+                for cross-check. Semantics still TBD (boolean vs lifetime
+                counter - deferred per M0_Bosch_Findings.md §8).
+              tags:
+                - tag: component
+                  value: bosch-motion
+                - tag: imager_idx
+                  value: '{#IMAGER.IDX}'
+                - tag: src
+                  value: zbx
+          trigger_prototypes:
+            - uuid: 274870a275c14e5aac8727fe0264c4ec
+              expression: 'avg(/Milestone Camera vendor - Bosch/bosch.imager.encoder.bitrate.kbps[{#IMAGER.IDX}],15m)<100 and last(/Milestone Camera vendor - Bosch/bosch.dev.has_full_mib)=1'
+              name: 'Imager {#IMAGER.IDX} on [{HOST.NAME}]: encoder bitrate <100 kbps for 15m (may be stalled or scene fully static)'
+              priority: INFO
+              description: |
+                Gated on bosch.dev.has_full_mib=1 so this only fires on
+                bucket-A cameras where the encoder telemetry is known
+                to populate correctly.
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // G29 strip on the imager name value
+                  var arr = JSON.parse(value);
+                  for (var i = 0; i < arr.length; i++) {
+                    if (arr[i]['{#SNMPVALUE}']) {
+                      arr[i]['{#IMAGER.NAME}'] = String(arr[i]['{#SNMPVALUE}']).replace(/[^\x20-\x7E].*$/, '');
+                    }
+                  }
+                  return JSON.stringify(arr);
+      macros:
+        - macro: '{$MS.CAM.BOSCH.MOTION.POLL}'
+          value: 1m
+          description: 'Faster poll for alarm OIDs - 1m catches sub-minute VCA trips.'
+        - macro: '{$MS.CAM.BOSCH.POLL.INTERVAL}'
+          value: 5m
+          description: 'Default Bosch SNMP poll interval. Tune for fleet size per G12.'
+      valuemaps:
+        - uuid: 4cc6b33c6db54ebdb11d0fb0eb8993a4
+          name: 'Bool string'
+          mappings:
+            - value: '0'
+              newvalue: Idle
+            - value: '1'
+              newvalue: Active
+        - uuid: 42f74dbcd7fd4b3c854d41b668f62f4d
+          name: IfOperStatus
+          mappings:
+            - value: '1'
+              newvalue: up
+            - value: '2'
+              newvalue: down
+            - value: '3'
+              newvalue: testing
+            - value: '4'
+              newvalue: unknown
+            - value: '5'
+              newvalue: dormant
+            - value: '6'
+              newvalue: notPresent
+            - value: '7'
+              newvalue: lowerLayerDown
+  triggers:
+    - uuid: cc541fa5f67e4e8e822e3b5ed1cde3b7
+      expression: 'last(/Milestone Camera vendor - Bosch/bosch.cam.process.count)<80 and last(/Milestone Camera vendor - Bosch/bosch.cam.uptime)>10m'
+      name: 'Cam [{HOST.NAME}]: process count low ({ITEM.VALUE})'
+      priority: AVERAGE
+      description: 'Process count below baseline - camera may be partly booted or services missing. Suppressed for 10m post-boot.'

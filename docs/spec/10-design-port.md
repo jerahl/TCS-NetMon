@@ -236,7 +236,8 @@ Per-page fidelity notes (what degrades and why):
   queues snapshots; timelines dropped).
 - **Surveillance:** overview KPIs + XProtect card + storage card + sites + server minis + camera tables,
   camera detail (attributes, recording KV, network KV incl. **linked switch port via FDB**, device-scoped
-  events; stream-health rings only if ONVIF/RTSP probing is added later — v1 renders state from
+  events; camera **host-health** rings — CPU/kernel-uptime/interface/FS/encoder — are the post-parity
+  direct-SNMP add-on (**spec 13, ⛔ D10**); v1 renders state from
   Milestone + poller ping), server detail (Milestone-known fields; host CPU/mem/RAID are Zabbix's domain
   → omitted), alarms tab (NetMon alerts until the WebSocket lands), storage tab (volumes per server).
   Camera wall thumbnails: no image source read-only — render status tiles, not video (deep link to
