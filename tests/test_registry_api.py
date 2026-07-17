@@ -10,7 +10,7 @@ from netmon.supervisor import Supervisor
 from tests.conftest import create_core_tables, write_config
 
 
-def _conf(tmp_path, url, *, allow_edit=True, xiq=False):
+def _conf(tmp_path, url, *, allow_edit=True, xiq=False, milestone=False):
     conf = tmp_path / "netmon.conf"
     lines = [
         f"[db]\nurl = {url}\n",
@@ -20,6 +20,8 @@ def _conf(tmp_path, url, *, allow_edit=True, xiq=False):
     ]
     if xiq:
         lines.append("[xiq]\nenabled = true\napi_token = tok\nbase_url = https://xiq.example\n")
+    if milestone:
+        lines.append("[milestone]\nenabled = true\nhost = ms.example\nuser = svc\npass = pw\n")
     conf.write_text("\n".join(lines))
     return conf
 
@@ -506,6 +508,41 @@ def test_import_xiq_writes_and_preserves_site(tmp_path, monkeypatch):
         assert r["added"] == 1 and r["updated"] == 1
     assert db.fetch_one(engine, "SELECT site FROM devices WHERE xiq_device_id='900001'")["site"] == "BHS"
     assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM devices")["n"] == 2
+
+
+def test_import_milestone_writes_and_links(tmp_path, monkeypatch):
+    url = f"sqlite:///{tmp_path/'r.db'}"
+    _seed(url)
+
+    async def fake_rs(self):
+        return [{"id": "rs-1", "name": "BHS-NVR", "hostName": "nvr.bhs"}]
+
+    async def fake_cams(self):
+        return [{"id": "cam-1", "name": "Front Door", "address": "10.9.0.5"},
+                {"id": "cam-2", "name": "Gym"}]
+    monkeypatch.setattr("netmon.collectors.milestone_client.MilestoneClient.recording_servers", fake_rs)
+    monkeypatch.setattr("netmon.collectors.milestone_client.MilestoneClient.cameras", fake_cams)
+
+    with _client(_conf(tmp_path, url, milestone=True)) as client:
+        dry = client.post("/api/registry/import-milestone", json={"dry_run": True}).json()
+        assert dry["fetched_servers"] == 1 and dry["fetched_cameras"] == 2 and dry["would_add"] == 3
+        r = client.post("/api/registry/import-milestone", json={"dry_run": False}).json()
+        assert r["added"] == 3
+
+    engine = db.make_engine(url)
+    # The camera is now linked by milestone_hardware_id — exactly what the
+    # collector matches on, so the Surveillance page can finally show data.
+    row = db.fetch_one(engine, "SELECT device_type, milestone_hardware_id FROM devices WHERE name='Front Door'")
+    assert row["device_type"] == "camera" and row["milestone_hardware_id"] == "cam-1"
+    nvr = db.fetch_one(engine, "SELECT device_type FROM devices WHERE name='BHS-NVR'")
+    assert nvr["device_type"] == "recording_server"
+
+
+def test_import_milestone_requires_source_enabled(tmp_path):
+    url = f"sqlite:///{tmp_path/'r.db'}"
+    _seed(url)
+    with _client(_conf(tmp_path, url, milestone=False)) as client:
+        assert client.post("/api/registry/import-milestone", json={"dry_run": True}).status_code == 400
 
 
 def test_import_xiq_requires_source_enabled(tmp_path):

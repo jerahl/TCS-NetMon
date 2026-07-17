@@ -6,6 +6,7 @@ from netmon.seed import (
     canon_mac,
     load_fixture,
     load_site_index,
+    normalize_milestone,
     normalize_pf,
     normalize_xiq,
     reconcile,
@@ -125,6 +126,42 @@ def _registry_engine(tmp_path):
     engine = db.make_engine(f"sqlite:///{tmp_path/'seed.db'}")
     create_core_tables(engine)
     return engine
+
+
+def test_normalize_milestone_links_by_id():
+    servers = [{"id": "rs-guid-1", "name": "BHS-NVR", "hostName": "bhs-nvr.local"}]
+    cameras = [
+        {"id": "cam-guid-1", "name": "BHS Front Door", "address": "10.9.0.5"},
+        {"id": "cam-guid-2", "displayName": "Gym West"},   # name via displayName
+        {"name": "no-id"},                                   # skipped: no id
+    ]
+    devs = {d.name: d for d in normalize_milestone(servers, cameras)}
+    assert devs["BHS-NVR"].device_type == DeviceType.recording_server
+    assert devs["BHS-NVR"].milestone_hardware_id == "rs-guid-1"
+    assert devs["BHS-NVR"].mgmt_ip == "bhs-nvr.local"
+    assert devs["BHS Front Door"].device_type == DeviceType.camera
+    assert devs["BHS Front Door"].milestone_hardware_id == "cam-guid-1"
+    assert devs["BHS Front Door"].mgmt_ip == "10.9.0.5"
+    assert devs["Gym West"].milestone_hardware_id == "cam-guid-2"
+    assert "no-id" not in devs                              # entity without id dropped
+
+
+def test_upsert_persists_milestone_id(tmp_path):
+    """Regression: upsert_devices must write milestone_hardware_id (it silently
+    dropped it before, so the collector could never link a camera)."""
+    from netmon import db
+    from netmon.seed import upsert_devices
+
+    engine = _registry_engine(tmp_path)
+    cam = Device(name="cam-1", device_type=DeviceType.camera,
+                 milestone_hardware_id="cam-guid-1")
+    upsert_devices(engine, [cam])
+    row = db.fetch_one(engine, "SELECT milestone_hardware_id FROM devices WHERE name='cam-1'")
+    assert row["milestone_hardware_id"] == "cam-guid-1"
+    # And it never regresses to NULL on a re-import that omits the key.
+    upsert_devices(engine, [Device(name="cam-1", device_type=DeviceType.camera)])
+    row = db.fetch_one(engine, "SELECT milestone_hardware_id FROM devices WHERE name='cam-1'")
+    assert row["milestone_hardware_id"] == "cam-guid-1"
 
 
 def test_upsert_devices_portable_and_idempotent(tmp_path):
