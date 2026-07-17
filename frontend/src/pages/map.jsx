@@ -469,7 +469,8 @@ export function MapPage() {
         // treated as EDP, a non-EDP protocol (e.g. lldp) is excluded.
         [devId]: (ns || [])
           .filter((n) => !n.protocol || String(n.protocol).toLowerCase() === "edp")
-          .map((n) => ({ ifindex: n.local_ifindex, port: n.local_port })),
+          .map((n) => ({ ifindex: n.local_ifindex, port: n.local_port,
+                         remote: n.remote_sysname, remotePort: n.remote_port })),
       })))
       .catch(() => { /* leave unset → picker falls back to all ports */ });
   }, []);
@@ -746,7 +747,10 @@ export function MapPage() {
                         // neighbors fetch hasn't resolved (or failed), fall back to all
                         // ports so the picker is never mysteriously empty.
                         let options = edp
-                          ? edp.map((e) => ({ ifindex: e.ifindex, text: label(e.ifindex, e.port) }))
+                          ? edp.map((e) => {
+                              const nb = e.remote ? ` → ${e.remote}${e.remotePort ? ` ${e.remotePort}` : ""}` : "";
+                              return { ifindex: e.ifindex, text: label(e.ifindex, e.port) + nb };
+                            })
                           : (portsByDev[devVal] || []).map((p) => ({ ifindex: p.ifindex, text: label(p.ifindex, p.name) }));
                         // Keep the currently-saved port selectable even if it's not an
                         // EDP uplink (a legacy/manual attach), so the selection renders.

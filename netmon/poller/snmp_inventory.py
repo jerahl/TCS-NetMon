@@ -273,10 +273,12 @@ def build_fdb(fdb_port: dict[str, str], base_port_ifindex: dict[str, str]) -> li
 
 
 def build_edp(walks: dict[str, dict[str, str]]) -> list[dict]:
-    """extremeEdpTable → neighbor rows. The row index is the LOCAL slot.port
-    (EXOS ifIndex = slot*1000 + port, the same scheme as ifName). EDP is
-    point-to-point, so one neighbor per local port; last-writer-wins if a
-    walk ever returns duplicates. remote_sysdesc carries the neighbor's EXOS
+    """extremeEdpTable → neighbor rows. The row index's FIRST component is the
+    LOCAL ifIndex (EXOS slot*1000+port, e.g. 1001 = port 1:1), followed by a
+    neighbor sub-index — so we take the ifIndex verbatim, NOT slot*1000+port
+    (that double-scaled it to e.g. 1001000, which matched no port). EDP is
+    point-to-point, so one neighbor per local port; last-writer-wins if a walk
+    ever returns duplicates. remote_sysdesc carries the neighbor's EXOS
     version; remote_chassis stays NULL (EDP carries no chassis MAC)."""
     by_local: dict[int, dict] = {}
     keys: set[str] = set()
@@ -285,10 +287,9 @@ def build_edp(walks: dict[str, dict[str, str]]) -> list[dict]:
     g = walks.get
     for idx in keys:
         parts = idx.split(".")
-        slot, port = _to_int(parts[0]), (_to_int(parts[1]) if len(parts) > 1 else None)
-        if slot is None:
+        local = _to_int(parts[0])
+        if local is None:
             continue
-        local = slot * 1000 + port if port is not None else slot
         r_slot = _to_int(g("edp_slot", {}).get(idx))
         r_port = _to_int(g("edp_port", {}).get(idx))
         remote_port = (f"{r_slot}:{r_port}" if r_slot is not None and r_port is not None

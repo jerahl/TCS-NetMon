@@ -85,9 +85,9 @@ def test_build_edp():
     rows = si.build_edp(_walks(si._SWEEP_OIDS["edp"][2]))
     assert len(rows) == 1
     n = rows[0]
-    assert n["local_ifindex"] == 1001        # local slot.port 1.1 -> 1*1000+1
-    assert n["remote_sysname"] == "core-1"
-    assert n["remote_port"] == "1:52"        # neighbor slot:port
+    assert n["local_ifindex"] == 1001        # table indexed by local ifIndex (1001.0)
+    assert n["remote_sysname"] == "CHS-CORE-MDF"
+    assert n["remote_port"] == "1:50"        # neighbor slot:port
     assert n["remote_sysdesc"] == "31.7.1.4"  # neighbor EXOS version
     assert n["protocol"] == "edp" and n["age_s"] == 12
     assert n["remote_chassis"] is None       # EDP carries no chassis MAC
@@ -298,7 +298,7 @@ def test_run_once_populates_all_tables(tmp_path):
     assert [p["oper_state"] for p in ports] == ["up", "down"]
     assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM fdb_entries")["n"] == 2
     edp = db.fetch_one(engine, "SELECT remote_sysname, protocol FROM neighbors WHERE local_ifindex=1001")
-    assert edp["remote_sysname"] == "core-1" and edp["protocol"] == "edp"
+    assert edp["remote_sysname"] == "CHS-CORE-MDF" and edp["protocol"] == "edp"
     assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM switch_vlans")["n"] == 2
     stack = db.fetch_one(engine, "SELECT * FROM stack_members WHERE slot=1")
     assert stack["mem_pct"] == 40.0

@@ -101,6 +101,7 @@ function MemberGrid({ member, ports, selected, onSelect }) {
   const cols = Math.max(1, odds.length, evens.length);
   const up = ports.filter((p) => p.oper_state === "up").length;
   const poe = ports.filter((p) => p.poe_delivering).length;
+  const sfp = ports.filter((p) => p.is_sfp === 1).length;
   return (
     <div className="swport-member">
       <div className="swport-member-head">
@@ -109,6 +110,7 @@ function MemberGrid({ member, ports, selected, onSelect }) {
           <span className="m-up">{up} up</span> / <span className="m-down">{ports.length - up} down</span>
         </span>
         {poe > 0 && <span className="m-stats">⚡ {poe} PoE on</span>}
+        {sfp > 0 && <span className="m-stats" title="fiber / SFP ports">◆ {sfp} SFP</span>}
       </div>
       {[odds, evens].map((row, i) => (
         <div className="swport-grid" key={i}
