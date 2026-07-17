@@ -2,6 +2,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 import { Nav } from "./nav.jsx";
+import { CommandPalette } from "./search.jsx";
 import { GlobalPage } from "./pages/global.jsx";
 import { SwitchesPage } from "./pages/switches.jsx";
 import { ApDetailPage } from "./pages/ap_detail.jsx";
@@ -70,6 +71,7 @@ function App() {
     <div className="app">
       <Nav active={active} />
       <main className={"content" + (flush ? " content-flush" : "")}>{page}</main>
+      <CommandPalette />
     </div>
   );
 }

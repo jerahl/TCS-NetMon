@@ -3,7 +3,7 @@
 **2026-07-15:** adopted into the standalone-scope revision — `docs/spec/11-standalone-scope.md` is the plan of
 record; it amends the phases below (adds NetMon Status page, seed `--sites-from-db`, 10.6 history buffer,
 11.x post-parity bucket) and records recommendations for this spec's §10 open questions as decisions D1–D9.
-**Status:** IN PROGRESS — Phase 10.0 complete incl. the spec-11 amendments (2026-07-16); Phase 10.1 **feature-complete** (SNMP sweeps + switch API + 8-tab UI + PoE/entity sweeps, 2026-07-15/16); Phase 10.2 **built** (wireless tables + XIQ cycles + wireless API + XIQ/AP-Detail pages, 2026-07-16 — live-fleet validation of the FULL/clients payload shapes pending); Phase 10.3 **built** (`pf_nodes` persistence + snapshot fetchers + NAC API/pages + the FDB⋈PF port-identity join, 2026-07-16 — PF snapshot endpoint paths pending validation on PF 12.3); Phase 10.4 **built** (camera/RS/trunk/extension persistence + milestone.overview/threecx.system snapshots + surveillance/voip API + pages + camera→FDB switch-port join, 2026-07-16 — ESS WebSocket D5 and camera JPEG proxy D7 deferred; Milestone/3CX payload shapes pending live validation); Phase 10.5 pending. Originated as the design-analysis session deliverable (2026-07-14).
+**Status:** IN PROGRESS — Phase 10.0 complete incl. the spec-11 amendments (2026-07-16); Phase 10.1 **feature-complete** (SNMP sweeps + switch API + 8-tab UI + PoE/entity sweeps, 2026-07-15/16); Phase 10.2 **built** (wireless tables + XIQ cycles + wireless API + XIQ/AP-Detail pages, 2026-07-16 — live-fleet validation of the FULL/clients payload shapes pending); Phase 10.3 **built** (`pf_nodes` persistence + snapshot fetchers + NAC API/pages + the FDB⋈PF port-identity join, 2026-07-16 — PF snapshot endpoint paths pending validation on PF 12.3); Phase 10.4 **built** (camera/RS/trunk/extension persistence + milestone.overview/threecx.system snapshots + surveillance/voip API + pages + camera→FDB switch-port join, 2026-07-16 — ESS WebSocket D5 and camera JPEG proxy D7 deferred; Milestone/3CX payload shapes pending live validation); Phase 10.5 **built** (`/api/summary` + `/api/search`, site-tile problem roll-up, rebuilt Global page, ⌘K command palette, shared `format.js` staleness pass — 2026-07-17). Originated as the design-analysis session deliverable (2026-07-14).
 **Design source:** `Zabbix_Extreme.zip` (Claude Design handoff: 18 HTML pages + ~50 JSX/CSS modules). Keep the
 archive out of the repo (it contains real hostnames/IPs in mock data); extract locally when implementing.
 **Goal:** make NetMon's UI match this design, and build the data layer the pages need — **cache current
@@ -565,8 +565,53 @@ Smart Client deep-link, no video). Verified headlessly end-to-end. Milestone
 Config-API + 3CX v20 field shapes are inferred from the reference client —
 validate against the live VMS/PBX (spec §10 Q4).
 
+**2026-07-17 — Phase 10.5 Global + Search + polish built.** No migration — all
+three additions are read-only roll-ups over existing tables (spec §1: zero
+source calls at render).
+- **`GET /api/summary`** (`netmon/api/summary.py`): the Global dashboard's
+  above-the-fold data in one call — a **fleet** count (up/down/unknown/blind
+  from `device_state.ping`/`source_status`), a device **severity** roll-up
+  (each device's worst dimension), an open-**alerts** roll-up
+  (crit/warn/acked/assigned), and six per-domain **system cards** (switching,
+  wireless, nac, surveillance, voip, config-backup). Each card folds the
+  domain's device-state roll-up with its backing collector's `collector_health`
+  so a *blind* source (consecutive failures) is flagged and never renders `ok`
+  (§4.5), and carries the source's `last_success` for honest staleness. NAC
+  counts `pf_nodes` (not registry devices); config-backup reads the
+  `device_state.config_backup` freshness.
+- **`GET /api/search?q=`** (`netmon/api/search.py`): the ⌘K palette's three
+  indexed lookups — `devices` by name/mgmt_ip, `endpoints` (`pf_nodes`) by
+  MAC/hostname/owner/dot1x_user/ip, `macs` (`fdb_entries`) by MAC — each capped
+  at 12, ≥2-char query guard, every hit carrying an SPA `href`. (MAC matching is
+  a raw substring `LIKE`; a colon-agnostic normaliser is a later nicety.)
+- **`/api/sites` extended**: `SiteRollup` gains `problems` (open-alert count
+  scoped to the site, joined on the same effective `group_key`/name key) +
+  `worst_severity` — the Global site-tile heatmap. Additive; the map ignores
+  them.
+- **Frontend**: rebuilt `global.jsx` (severity strip, system-card grid, site
+  heatmap, active triggers, event stream — 30 s refresh, all DB-only); new
+  `search.jsx` ⌘K command palette (⌘/Ctrl-K or the sidebar Search button;
+  ↑↓/↵/esc; debounced) wired globally in `main.jsx`; a shared `format.js`
+  (`ageOf`/`ageSeconds`) + a `<Freshness>` primitive consolidating the `ageOf`
+  that had been copy-pasted into seven page modules — the **staleness badging
+  pass**. Verified end-to-end against a live uvicorn + seeded SQLite (summary
+  domains incl. a blind XIQ card, search by user/MAC, site problem roll-up, UI
+  bundle served); pytest suite green (`test_summary_api`, `test_search_api`,
+  extended `test_sites_api`).
+- **DoD met**: Global renders every in-scope card from NetMon's DB only, zero
+  runtime external fetches, shadow-mode alerting untouched.
+
 ## Next session
 
+- **Phase 10.5 is built (2026-07-17)** — `/api/summary`, `/api/search` + ⌘K
+  palette, site-tile problem roll-up, rebuilt Global page, shared-`format.js`
+  staleness pass. All page-parity phases (10.0–10.5) are now built; what remains
+  before cutover (Phase 8) is **live-source validation** of the inferred payload
+  shapes (10.2/10.3/10.4 below) and the two gated extras.
+- **Next code phase: 10.6 history ring buffer (⛔ D3)** — `state_samples`
+  (24 h, auto-pruned) + writers (port rates, fleet counts, VoIP calls) to fill
+  the empty sparkline/chart slots the 10.x pages leave. Gated on owner D3
+  sign-off (recorded approved in spec §10 Q3 — reconcile the spec-11 D3 mark).
 - **10.4 validation on live sources**: capture real Milestone `/cameras`,
   `/recordingServers`, `/storages`, `/hardware` and 3CX `/Trunks`, `/Users`,
   `/SystemStatus` payloads; confirm the field mappings in

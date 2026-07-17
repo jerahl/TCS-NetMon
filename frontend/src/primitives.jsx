@@ -2,6 +2,7 @@
 // dependency-free (no Zabbix bridges, no CDN).
 
 import { sevLabel, sourceBadge } from "./severity.js";
+import { ageOf, ageSeconds } from "./format.js";
 
 export const SEV_COLOR = {
   ok: "#1fb75a",
@@ -71,6 +72,26 @@ export function Stat({ label, value, severity }) {
       <div className="stat-value" style={{ color: sevColor(severity) }}>{value}</div>
       <div className="stat-label">{label}</div>
     </div>
+  );
+}
+
+// A uniform freshness chip: "<age> ago", coloured warn once older than
+// `staleAfter` seconds, and crit-flagged when `ok === false` (a snapshot whose
+// last refresh failed). Renders "never" when there's no timestamp at all
+// (spec 10 §6 staleness badging pass).
+export function Freshness({ at, staleAfter = 600, ok = true, prefix = "" }) {
+  const age = ageOf(at);
+  if (age === null) {
+    return <span className="freshness" style={{ color: sevColor("unknown") }}>never</span>;
+  }
+  const secs = ageSeconds(at);
+  const stale = !ok || (secs !== null && secs > staleAfter);
+  const sev = !ok ? "crit" : stale ? "warn" : "ok";
+  const label = !ok ? `STALE · ${age} ago` : `${age} ago`;
+  return (
+    <span className="freshness" style={{ color: sevColor(sev) }} title={at || ""}>
+      {prefix}{label}
+    </span>
   );
 }
 

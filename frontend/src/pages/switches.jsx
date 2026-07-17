@@ -2,6 +2,7 @@ import React from "react";
 import { getJSON } from "../api.js";
 import { Card, Loading, ErrorMsg, SourceBadge, sevColor } from "../primitives.jsx";
 import { SshButton } from "../ssh.jsx";
+import { ageOf } from "../format.js";
 
 // Switches dashboard (spec 10 §7 / phase 10.1) — the ZCD port of the "big
 // build": site navigator, KPI strip, port faceplate, port-detail pane (with
@@ -23,17 +24,6 @@ const TABS = [
   { id: "triggers", label: "Triggers" },
   { id: "backups", label: "Backups" },
 ];
-
-function ageOf(iso) {
-  if (!iso) return null;
-  const t = Date.parse(iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z");
-  if (Number.isNaN(t)) return null;
-  const s = Math.max(0, (Date.now() - t) / 1000);
-  if (s < 90) return `${Math.round(s)}s`;
-  if (s < 5400) return `${Math.round(s / 60)}m`;
-  if (s < 129600) return `${Math.round(s / 3600)}h`;
-  return `${Math.round(s / 86400)}d`;
-}
 
 function fmtRate(kbps) {
   if (kbps === null || kbps === undefined) return "—";

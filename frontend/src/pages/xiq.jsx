@@ -1,21 +1,12 @@
 import React from "react";
 import { getJSON, qs } from "../api.js";
 import { Card, Loading, ErrorMsg, Dot, SourceBadge, sevColor } from "../primitives.jsx";
+import { ageOf } from "../format.js";
 
 // XIQ Wireless fleet page (spec 10 §7, Phase 10.2). All data from NetMon's
 // wireless tables (XIQ collector cycles) — zero XIQ calls at render.
 
 const REFRESH_MS = 30000;
-
-function ageOf(iso) {
-  if (!iso) return null;
-  const t = Date.parse(iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z");
-  if (Number.isNaN(t)) return null;
-  const s = Math.max(0, (Date.now() - t) / 1000);
-  if (s < 90) return `${Math.round(s)}s`;
-  if (s < 5400) return `${Math.round(s / 60)}m`;
-  return `${Math.round(s / 3600)}h`;
-}
 
 function fmtUptime(s) {
   if (s === null || s === undefined) return "—";

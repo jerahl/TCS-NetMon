@@ -164,6 +164,15 @@ shadow-alert diff has run clean for the agreed window.
 
 ## Next session
 
+- **Phases 10.1–10.5 are built (2026-07-16/17).** The full ZCD page-parity set
+  now renders from NetMon's DB: Switches (10.1), Wireless/XIQ + AP Detail
+  (10.2), the five PacketFence pages (10.3), Surveillance + VoIP (10.4), and the
+  Global dashboard + ⌘K search + staleness polish (10.5 — `/api/summary`,
+  `/api/search`, site-tile problem roll-up, shared `format.js`). What remains
+  before cutover: **live-source payload validation** for 10.2/10.3/10.4 (shapes
+  inferred from `reference/`), the two gated extras (**D5** WebSocket alarms,
+  **D7** JPEG proxy), and **10.6** (⛔ **D3** history ring buffer for the empty
+  chart slots). Details in spec 10's progress log.
 - **Phase 10.0 is complete (2026-07-16)** including this spec's amendments:
   NetMon Status page + `/api/netmon-status` (D2), `netmon-seed
   --sites-from-db` (D9), nav disposition (Servers/FortiGate as Zabbix

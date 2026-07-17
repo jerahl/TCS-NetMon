@@ -1,6 +1,7 @@
 import React from "react";
 import { getJSON, qs } from "../api.js";
 import { Card, Loading, ErrorMsg, SourceBadge, sevColor } from "../primitives.jsx";
+import { ageOf } from "../format.js";
 
 // NAC (PacketFence) — Phase 10.3: five ZCD PF views as tabs over pf_nodes +
 // snapshot_cache. All reads from NetMon's DB (5-minute collector cadence,
@@ -16,16 +17,6 @@ const TABS = [
   { id: "policies", label: "NAC Policies" },
   { id: "cluster", label: "Cluster Status" },
 ];
-
-function ageOf(iso) {
-  if (!iso) return null;
-  const t = Date.parse(iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z");
-  if (Number.isNaN(t)) return null;
-  const s = Math.max(0, (Date.now() - t) / 1000);
-  if (s < 90) return `${Math.round(s)}s`;
-  if (s < 5400) return `${Math.round(s / 60)}m`;
-  return `${Math.round(s / 3600)}h`;
-}
 
 function RegBadge({ status }) {
   if (!status) return <span className="dim">—</span>;

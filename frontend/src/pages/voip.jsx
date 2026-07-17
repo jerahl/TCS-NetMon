@@ -1,22 +1,13 @@
 import React from "react";
 import { getJSON, qs } from "../api.js";
 import { Card, Loading, ErrorMsg, SourceBadge, sevColor } from "../primitives.jsx";
+import { ageOf } from "../format.js";
 
 // VoIP (3CX) — Phase 10.4. Trunks + extensions + SystemStatus, all from
 // NetMon's DB. Active calls / MOS / queues depend on the Phase 0 ODBC
 // decision and aren't persisted (spec §7).
 
 const REFRESH_MS = 30000;
-
-function ageOf(iso) {
-  if (!iso) return null;
-  const t = Date.parse(iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z");
-  if (Number.isNaN(t)) return null;
-  const s = Math.max(0, (Date.now() - t) / 1000);
-  if (s < 90) return `${Math.round(s)}s`;
-  if (s < 5400) return `${Math.round(s / 60)}m`;
-  return `${Math.round(s / 3600)}h`;
-}
 
 function ChannelBar({ used, total }) {
   if (!total) return <span className="dim">—</span>;
