@@ -81,11 +81,12 @@ function PortCell({ p, selected, onClick }) {
   ].filter(Boolean).join(" ");
   const bits = [`${p.name || p.ifindex}`, state];
   if (state === "up") bits.push(fmtSpeed(p.speed_mbps));
+  if (p.is_sfp === 1) bits.push("SFP/fiber");
   if (p.poe_delivering) bits.push("PoE");
   if (p.err_in_delta || p.err_out_delta) bits.push("errors");
   return (
-    <div className={cls} onClick={onClick} title={bits.join(" · ")}>
-      <div className="pn">{portNum(p)}</div>
+    <div className={cls + (p.is_sfp === 1 ? " sfp" : "")} onClick={onClick} title={bits.join(" · ")}>
+      <div className="pn">{portNum(p)}{p.is_sfp === 1 ? <span style={{ fontSize: 7, verticalAlign: "super", opacity: 0.85 }} title="SFP / fiber">◆</span> : null}</div>
       <div className="body">
         <span className="led led-link" />
         <span className="led led-speed" />
@@ -169,6 +170,7 @@ function PortDetail({ switchId, ifindex }) {
           {row("State", <span style={{ color: p.oper_state === "up" ? sevColor("ok") : sevColor("unknown"), fontWeight: 600 }}>
             {p.oper_state}{p.admin_up === 0 ? " (admin down)" : ""}</span>)}
           {row("Speed", p.speed_mbps ? fmtSpeed(p.speed_mbps) : "—")}
+          {row("Media", p.is_sfp === 1 ? "SFP / fiber" : p.is_sfp === 0 ? "copper / fixed" : "—")}
           {row("Duplex", p.duplex || "—")}
           {row("Utilization", p.util_pct !== null && p.util_pct !== undefined ? `${p.util_pct}%` : "—")}
           <div className="pd-row">

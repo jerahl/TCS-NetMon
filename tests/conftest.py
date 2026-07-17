@@ -221,6 +221,7 @@ CREATE TABLE switch_ports (
     err_out_delta INTEGER,
     disc_in_delta INTEGER,
     disc_out_delta INTEGER,
+    is_sfp INTEGER,
     last_change TIMESTAMP,
     prev_counters TEXT,
     updated_at TIMESTAMP,

@@ -142,6 +142,38 @@ def test_build_entity_slots():
     assert all(r["model"] == "X465-48P" for r in rows.values())
 
 
+_SFP_WALK = """
+.1.3.6.1.2.1.47.1.1.1.1.2.100 = STRING: "1 Gbps Ethernet Port"
+.1.3.6.1.2.1.47.1.1.1.1.5.100 = INTEGER: 10
+.1.3.6.1.2.1.47.1.3.2.1.2.100.0 = OID: .1.3.6.1.2.1.2.2.1.1.1001
+.1.3.6.1.2.1.47.1.1.1.1.2.200 = STRING: "1 Gbps Ethernet Port"
+.1.3.6.1.2.1.47.1.1.1.1.5.200 = INTEGER: 10
+.1.3.6.1.2.1.47.1.3.2.1.2.200.0 = OID: .1.3.6.1.2.1.2.2.1.1.1049
+.1.3.6.1.2.1.47.1.1.1.1.2.201 = STRING: "SFP+ 10GBASE-SR"
+.1.3.6.1.2.1.47.1.1.1.1.5.201 = INTEGER: 9
+.1.3.6.1.2.1.47.1.1.1.1.4.201 = INTEGER: 200
+.1.3.6.1.2.1.47.1.1.1.1.2.300 = STRING: "10GBASE-LR SFP+ Port"
+.1.3.6.1.2.1.47.1.1.1.1.5.300 = INTEGER: 10
+.1.3.6.1.2.1.47.1.3.2.1.2.300.0 = OID: .1.3.6.1.2.1.2.2.1.1.1050
+"""
+
+
+def test_build_sfp_ports():
+    keys = ["ent_descr", "ent_contained", "ent_class", "ent_alias"]
+    walks = {k: si.parse_walk(_SFP_WALK, si.OID[k]) for k in keys}
+    rows = {r["ifindex"]: r["is_sfp"] for r in si.build_sfp_ports(walks)}
+    # 1001: plain copper port → 0
+    # 1049: has an inserted-optic child entity → 1
+    # 1050: port whose own descr names the optic → 1
+    assert rows == {1001: 0, 1049: 1, 1050: 1}
+
+
+def test_build_sfp_ports_empty_without_entity_alias():
+    # No entAliasMappingTable → nothing can be tied to an ifIndex → no rows
+    # (honest: leaves is_sfp NULL rather than guessing).
+    assert si.build_sfp_ports({"ent_descr": {}, "ent_class": {}, "ent_alias": {}}) == []
+
+
 def test_build_stack():
     rows = si.build_stack(_walks(si._SWEEP_OIDS["stack"][2]))
     assert len(rows) == 1

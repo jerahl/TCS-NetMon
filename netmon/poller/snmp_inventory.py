@@ -93,6 +93,10 @@ OID = {
     "ent_class": "1.3.6.1.2.1.47.1.1.1.1.5",
     "ent_sw": "1.3.6.1.2.1.47.1.1.1.1.10",
     "ent_serial": "1.3.6.1.2.1.47.1.1.1.1.11",
+    # entAliasMappingIdentifier: (entPhysicalIndex.0) -> an OID ending in the
+    # ifIndex the physical port maps to. Lets us tie an ENTITY-MIB port (and
+    # any optic contained in it) back to a switch_ports row for SFP detection.
+    "ent_alias": "1.3.6.1.2.1.47.1.3.2.1.2",
     # Extreme stacking + per-slot sensors:
     "stack_status": "1.3.6.1.4.1.1916.1.33.2.1.3",
     "stack_temp": "1.3.6.1.4.1.1916.1.33.2.1.21",
@@ -299,6 +303,81 @@ def build_edp(walks: dict[str, dict[str, str]]) -> list[dict]:
             "age_s": _to_int(g("edp_age", {}).get(idx)),
         }
     return list(by_local.values())
+
+
+# ENTITY-MIB entPhysicalClass values we care about (RFC 4133).
+_ENT_CLASS_PORT = "10"
+# Descr/name patterns that identify a fiber optic or an SFP/QSFP cage. EXOS
+# names an inserted optic in the ENTITY-MIB (e.g. "SFP+", "10G BASE-SR",
+# "1000BASE-LX"); an empty copper port reads generically ("... Ethernet Port").
+_OPTIC_RE = re.compile(
+    r"\b("
+    r"sfp\+?|sfp28|qsfp\d*|xfp|cfp\d*|gbic|"                 # cage / optic families
+    r"1000\s*base-?(?:x|sx|lx|bx|zx|ex)|"                    # 1G fiber
+    r"10\s*g?\s*base-?(?:sr|lr|er|zr|lrm|cx|bx)|"            # 10G fiber
+    r"(?:25|40|100)\s*g\s*base-?(?:sr|lr|er|cr|dr|fr)|"      # 25/40/100G
+    r"fiber|optical|transceiver"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _ifindex_from_alias(value: str | None):
+    """entAliasMappingIdentifier value is an OID (e.g. ``.1.3.6.1.2.1.2.2.1.1.1001``)
+    whose trailing integer is the ifIndex the physical entity maps to."""
+    if not value:
+        return None
+    m = re.search(r"(\d+)\s*$", str(value).strip())
+    return int(m.group(1)) if m else None
+
+
+def build_sfp_ports(walks: dict[str, dict[str, str]]) -> list[dict]:
+    """ENTITY-MIB → per-ifIndex ``is_sfp`` rows.
+
+    A port is SFP/fiber when the ENTITY-MIB port entity's own descr matches an
+    optic pattern OR it contains a child entity (an inserted transceiver) whose
+    descr does. Ports are mapped to their ifIndex via entAliasMappingTable;
+    only ports we can map are emitted, so copper ports get an explicit
+    ``is_sfp=0`` (honest) and unmappable ones are simply left untouched.
+
+    Chosen source: ENTITY-MIB (owner decision 2026-07-17) — EXOS exposes no
+    media/optic on the IF-MIB. Depends on the fleet populating optic entities;
+    the ``_OPTIC_RE`` pattern may need tuning once verified on a live switch.
+    """
+    descr = walks.get("ent_descr", {})
+    contained = walks.get("ent_contained", {})
+    classes = walks.get("ent_class", {})
+    alias = walks.get("ent_alias", {})
+
+    # entPhysicalIndex -> ifIndex (alias index is "<entIdx>.<logicalOrZero>").
+    ent_to_if: dict[str, int] = {}
+    for idx, val in alias.items():
+        ent_idx = idx.split(".", 1)[0]
+        ifx = _ifindex_from_alias(val)
+        if ent_idx and ifx is not None:
+            ent_to_if.setdefault(ent_idx, ifx)
+
+    # Optic children grouped by the port entity they're contained in.
+    optic_children: set[str] = set()
+    for ent_idx, d in descr.items():
+        if _enum_int(classes.get(ent_idx)) == _ENT_CLASS_PORT:
+            continue  # a port itself is handled below, not as its own child
+        if d and _OPTIC_RE.search(d):
+            parent = contained.get(ent_idx)
+            if parent:
+                optic_children.add(str(parent))
+
+    rows: list[dict] = []
+    for ent_idx, ifx in ent_to_if.items():
+        cls = _enum_int(classes.get(ent_idx))
+        # Restrict to port entities when the class is known; if the device omits
+        # entPhysicalClass, fall back to alias-mapped entities (still ifIndexed).
+        if cls is not None and cls != _ENT_CLASS_PORT:
+            continue
+        d = descr.get(ent_idx) or ""
+        is_sfp = bool(_OPTIC_RE.search(d)) or ent_idx in optic_children
+        rows.append({"ifindex": ifx, "is_sfp": 1 if is_sfp else 0})
+    return rows
 
 
 def build_vlans(walks: dict[str, dict[str, str]]) -> list[dict]:
@@ -526,7 +605,8 @@ _SWEEP_OIDS = {
             ["edp_name", "edp_version", "edp_slot", "edp_port", "edp_age"]),
     "vlans": ("sweep_vlans", "vlans_interval_s", ["vlan_name", "vlan_vid", "vlan_admin"]),
     "entity": ("sweep_entity", "entity_interval_s",
-               ["ent_descr", "ent_contained", "ent_class", "ent_sw", "ent_serial"]),
+               ["ent_descr", "ent_contained", "ent_class", "ent_sw", "ent_serial",
+                "ent_alias"]),
     "stack": ("sweep_stack", "stack_interval_s",
               ["stack_status", "stack_temp", "cpu_5m", "mem_total", "mem_avail"]),
 }
@@ -719,6 +799,7 @@ class SnmpInventory:
         if "entity" in due:
             walks = await self._walk_keys(host, _SWEEP_OIDS["entity"][2])
             written += self._write_entity(dev_id, build_entity_slots(walks))
+            written += self._write_sfp(dev_id, build_sfp_ports(walks))
         if "stack" in due:
             walks = await self._walk_keys(host, _SWEEP_OIDS["stack"][2])
             status_map = getattr(self, "_stack_status_map", None)
@@ -824,6 +905,20 @@ class SnmpInventory:
                 params,
             )
         return len(slot_rows)
+
+    def _write_sfp(self, dev_id: int, rows: list[dict]) -> int:
+        """Partial UPDATE of switch_ports.is_sfp (same contract as _write_poe:
+        no insert, no prune, no updated_at bump — the ports sweep owns the rows
+        and their freshness; this just classifies existing ones)."""
+        if not rows:
+            return 0
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("UPDATE switch_ports SET is_sfp = :is_sfp "
+                     "WHERE device_id = :device_id AND ifindex = :ifindex"),
+                [{**r, "device_id": dev_id} for r in rows],
+            )
+        return len(rows)
 
     def _write_ports(self, dev_id: int, rows: list[dict]) -> int:
         now, now_ts = self._now(), time.time()
