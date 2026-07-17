@@ -2,7 +2,7 @@ import pytest
 from fastapi import Response
 from fastapi.testclient import TestClient
 
-from netmon.api.auth_routes import complete_login, saml_debug_page
+from netmon.api.auth_routes import complete_login, saml_debug_page, saml_error_page
 from netmon.app import create_app
 from netmon.auth.local import check_local, hash_password, verify_password
 from netmon.auth.saml import (
@@ -93,6 +93,26 @@ def test_saml_debug_page_flags_unmapped_and_escapes(tmp_path):
     # IdP-supplied values are untrusted → must be escaped, never raw.
     assert "<script>evil</script>" not in html
     assert "&lt;script&gt;" in html
+
+
+def test_saml_error_page_shows_reason_codes_and_hint(tmp_path):
+    cfg = load_config(write_config(tmp_path, dev_bypass=False))
+    html = saml_error_page(
+        ["invalid_audience"],
+        "Invalid audience https://wrong (expected https://netmon.example/sp)",
+        "<samlp:Response>...</samlp:Response>", cfg,
+    )
+    assert "Invalid audience" in html          # the reason line
+    assert "invalid_audience" in html          # the error code
+    assert "must match exactly" in html        # the targeted hint
+    assert "samlp:Response" in html            # decoded XML echoed back
+    assert cfg.auth.sp_entity_id in html       # what NetMon expects, for comparison
+
+
+def test_saml_error_page_escapes_xml(tmp_path):
+    cfg = load_config(write_config(tmp_path, dev_bypass=False))
+    html = saml_error_page([], "boom", "<x>&<script></x>", cfg)
+    assert "<script>" not in html and "&lt;script&gt;" in html
 
 
 def test_saml_debug_config_flag(tmp_path):

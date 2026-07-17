@@ -224,6 +224,76 @@ def saml_debug_page(
 </div>"""
 
 
+def saml_error_page(errors: list[str], reason: str | None, response_xml: str,
+                    cfg: Config) -> str:
+    """Render a SAML *validation* failure (before attribute mapping).
+
+    Shown by the ACS when ``saml_debug=true`` and the assertion is rejected —
+    the OneLogin error codes, the human-readable reason (the single most useful
+    line: signature/audience/destination/clock), and the decoded response XML.
+    Only reachable with the debug flag on, so it never leaks to normal users.
+    """
+    e = html.escape
+    codes = ", ".join(e(str(c)) for c in errors) or "(none)"
+    reason_html = e(reason) if reason else "(no reason reported by python3-saml)"
+    xml_html = (f"<pre>{e(response_xml)}</pre>" if response_xml
+                else '<p class="muted">No decoded response available.</p>')
+
+    hints = {
+        "invalid_response_signature": "The assertion/response signature did not "
+            "verify — the IdP signing cert in saml_idp_x509cert is wrong, stale, "
+            "or the IdP is not signing what NetMon expects.",
+        "invalid_audience": "The assertion Audience does not equal saml_sp_entity_id "
+            "— they must match exactly (the ClassLink app's Entity ID / Audience).",
+        "invalid_destination": "The response Destination does not equal saml_sp_acs_url "
+            "— check for http vs https or a proxy rewriting the host/path.",
+        "response_not_success": "The IdP returned a non-Success status (the user "
+            "may not be assigned to this app in ClassLink).",
+        "assertion_expired": "Clock skew — NotBefore/NotOnOrAfter rejected. Check NTP "
+            "on the NetMon host.",
+    }
+    matched = [f"<li><b>{e(c)}</b>: {e(h)}</li>"
+               for c, h in hints.items() if c in set(errors)]
+    hint_html = (f"<h2>Likely cause</h2><ul>{''.join(matched)}</ul>" if matched else "")
+
+    return f"""<!doctype html><meta charset=utf-8><title>SAML error · TCS NetMon</title>
+<style>
+  body{{margin:0;padding:32px;background:#12141c;color:#e9e9ed;
+       font:14px system-ui,sans-serif;line-height:1.5}}
+  .wrap{{max-width:900px;margin:0 auto}}
+  h1{{font-size:20px;margin:0 0 4px}} .sub{{color:#8a8f98;margin:0 0 24px;font-size:12px}}
+  h2{{font-size:14px;margin:28px 0 8px;color:#9184d9}}
+  table{{width:100%;border-collapse:collapse;background:#1b1e29;border:1px solid #2b2f42;
+         border-radius:8px;overflow:hidden}}
+  td{{padding:8px 12px;border-top:1px solid #2b2f42;vertical-align:top}}
+  td:first-child{{color:#8a8f98;width:22%;white-space:nowrap}}
+  code{{color:#e9e9ed;background:#12141c;padding:1px 5px;border-radius:4px}}
+  pre{{background:#1b1e29;border:1px solid #2b2f42;border-radius:8px;padding:14px;
+       overflow:auto;max-height:420px;font-size:12px;white-space:pre-wrap;word-break:break-word}}
+  .muted{{color:#8a8f98}} ul{{margin:0;padding-left:18px}}
+  .banner{{background:#3a1516;border:1px solid #7a2e2e;color:#ff9592;padding:10px 14px;
+           border-radius:8px;margin:0 0 20px}}
+</style>
+<div class="wrap">
+  <h1>SAML validation failed</h1>
+  <p class="sub">TCS NetMon · <code>saml_debug=true</code> · the assertion was rejected
+  before role mapping</p>
+  <div class="banner"><b>Reason:</b> {reason_html}</div>
+
+  <table><tbody>
+    <tr><td>Error codes</td><td><code>{codes}</code></td></tr>
+    <tr><td>SP entityId</td><td><code>{e(cfg.auth.sp_entity_id) or "—"}</code></td></tr>
+    <tr><td>SP ACS URL</td><td><code>{e(cfg.auth.sp_acs_url) or "—"}</code></td></tr>
+    <tr><td>IdP entityId</td><td><code>{e(cfg.auth.idp_entity_id) or "—"}</code></td></tr>
+  </tbody></table>
+
+  {hint_html}
+
+  <h2>Decoded SAML response</h2>
+  {xml_html}
+</div>"""
+
+
 # ── SAML SSO ──────────────────────────────────────────────────────────────────
 
 @router.get("/sso")
@@ -243,10 +313,33 @@ async def acs(
 ):
     form = await _form_dict(request)
     auth = saml.build_auth(_request_data(request, form), cfg.auth)
-    auth.process_response()
-    if auth.get_errors() or not auth.is_authenticated():
-        log.warning("SAML ACS rejected: %s / %s", auth.get_errors(), auth.get_last_error_reason())
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="SAML authentication failed")
+    # process_response() itself can raise on a malformed/undecodable response
+    # (bad base64, not XML); treat that as a validation failure with a reason
+    # rather than a bare 500.
+    try:
+        auth.process_response()
+        errors = auth.get_errors()
+        reason = auth.get_last_error_reason()
+        authenticated = auth.is_authenticated()
+    except Exception as exc:  # noqa: BLE001 — surfaced to the operator below
+        errors, reason, authenticated = ["exception"], str(exc), False
+
+    if errors or not authenticated:
+        log.warning("SAML ACS rejected: %s / %s", errors, reason)
+        # Validation failures (signature, audience, destination, clock skew,
+        # cert mismatch) happen *before* attribute mapping. In debug mode show
+        # the actual reason + decoded response so the operator can fix it
+        # without shell access to the logs.
+        if cfg.auth.saml_debug:
+            xml = getattr(auth, "get_last_response_xml", lambda: "")() or ""
+            return HTMLResponse(
+                saml_error_page(errors, reason, xml, cfg),
+                status_code=status.HTTP_401_UNAUTHORIZED,
+            )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="SAML authentication failed (enable [auth] saml_debug for the reason)",
+        )
 
     attributes = auth.get_attributes()
     name_id = auth.get_nameid()

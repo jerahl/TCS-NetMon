@@ -62,6 +62,30 @@ by tenant and by how the app is configured in the ClassLink console. The
    should now land in `/ui/` with the expected role. Confirm with
    `GET /auth/me`.
 
+## "SAML authentication failed" (401 at the ACS)
+
+This is a **validation** failure — the assertion was rejected *before* role
+mapping (signature, audience, destination, clock skew, or an unassigned user),
+so the attribute page above is never reached. With `saml_debug = false` the
+browser only sees a generic 401 and the reason goes to the server log:
+
+```
+SAML ACS rejected: [<codes>] / <reason>
+```
+
+Set `saml_debug = true` and retry the login: the ACS then renders a **SAML
+error page** with the human-readable reason, the OneLogin error codes, a
+targeted hint for the common codes, and the **decoded SAML response XML** — no
+shell access to the logs needed. Common codes and fixes:
+
+| Error code | Fix |
+|---|---|
+| `invalid_response_signature` | `saml_idp_x509cert` is wrong/stale, or the IdP isn't signing as expected. |
+| `invalid_audience` | Assertion Audience ≠ `saml_sp_entity_id` — must match the ClassLink app's Entity ID exactly. |
+| `invalid_destination` | Response Destination ≠ `saml_sp_acs_url` — check http vs https or a proxy rewriting host/path (set `x-forwarded-proto`). |
+| `response_not_success` | IdP returned non-Success — the user may not be assigned to this app in ClassLink. |
+| `assertion_expired` | Clock skew — check NTP on the NetMon host. |
+
 ## Debug is off (normal operation) but a user is denied
 
 A validated ClassLink user who maps to no role gets a 403 ("maps to no NetMon
