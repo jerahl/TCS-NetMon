@@ -346,6 +346,11 @@ Done this session:
   derived from the loaded feed — no extra round-trip.
 - **Problems** page reworked to wire all three NetMon-native actions —
   Ack / Assign / Suppress-1h — on `/api/alerts/*`, with an `assigned_to` column.
+  Columns include the alert's **Location** (`devices.site`) and device **Type**
+  (`devices.device_type`), both carried on `/api/alerts`; every column header is
+  click-to-sort (severity by rank, the rest lexically, newest-open tie-break),
+  so an operator can group open faults by site or by kind. Default sort is
+  worst-severity first. Sorting is client-side over the already-loaded open set.
 - **Nav source-health pills** from `/api/collector-health` (green/red/grey per
   collector, hover for last-success + error). Refresh 30 s.
 - Shared modules added: `severity.js` (the single home of the 5-level design →

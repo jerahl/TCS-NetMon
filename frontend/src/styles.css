@@ -87,6 +87,9 @@ a:hover { text-decoration: underline; }
 table.grid { width: 100%; border-collapse: collapse; }
 table.grid th, table.grid td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); }
 table.grid th { font-size: 10px; letter-spacing: .05em; text-transform: uppercase; color: var(--dim); }
+table.grid th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+table.grid th.sortable:hover { color: var(--text); }
+table.grid th.sortable[aria-sort]:not([aria-sort="none"]) { color: var(--text); }
 table.grid.kv td:first-child { color: var(--dim); width: 160px; }
 
 .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
