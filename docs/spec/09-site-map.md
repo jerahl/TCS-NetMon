@@ -84,17 +84,28 @@ Rollback note lives in the migration file. No existing table is altered.
 ## Site roll-up semantics (`/api/sites`)
 
 Per curated site, over its **enabled** devices (`devices.site = sites.name`).
-Revised 2026-07-17 (owner directive) and 2026-07-27 (source_status folded in):
+Revised 2026-07-17 (owner directive) and 2026-07-27 (source_status folded in;
+`snmp` accepted as a tiebreaker):
 
 - a device is **down** when its native `ping` value is `down`, **or** its
-  federated `source_status` value is `down` and the poller does not contradict
-  it (a `ping = up` reading wins — the native poller is the tiebreaker,
-  spec 00 / CLAUDE.md §1). Folding in `source_status` is what lets an
-  XIQ-managed switch — which carries its up/down only in `source_status`, never
-  a native ping — count as down. `source_status = blind` is a **warn** (source
-  unreachable), never a device-down;
+  federated `source_status` value is `down` and no native probe contradicts it
+  (a `ping = up` **or `snmp = up`** reading wins — the native poller is the
+  tiebreaker, spec 00 / CLAUDE.md §1). Folding in `source_status` is what lets
+  an XIQ-managed switch — which carries its up/down only in `source_status`,
+  never a native ping — count as down. `source_status = blind` is a **warn**
+  (source unreachable), never a device-down;
+- **`snmp` is positive evidence only.** Answering `snmpget sysUpTime` proves a
+  device is alive, so it overrides a source's down verdict; *not* answering
+  proves nothing (blocked UDP/161, wrong community — the poller records it
+  `warn`, not `crit`), so `snmp = down` never makes a device down on its own.
+  This matters because `[poller] enabled = false` on the deploy VM means there
+  are **no `ping` rows at all** — `snmp` is the only native evidence in the DB,
+  and without it four MDF switches read as down on 2026-07-27 while answering
+  SNMP. `ping = down` stays authoritative over `snmp = up`: that contradiction
+  (ICMP-silent, SNMP-answering) is one to surface, not to silently resolve;
 - site **down** — the site has reachability-monitored devices (a definitive
-  `ping`/`source_status` up or down reading) and **all** of them are down;
+  `ping`/`source_status` up or down reading, or `snmp = up`) and **all** of them
+  are down;
 - site **degraded** — not fully down, but a **switch** is down (by either
   dimension, above) OR a trunk fiber link into the site is alarmed. A down
   camera/AP/phone does NOT degrade the site, and neither does a mere warning

@@ -52,11 +52,11 @@ blind source must never render as healthy. A payload with no
 `device_admin_state` is treated as managed so the signal survives on tenants or
 views that omit the field.
 
-Sites with unmanaged-but-alive switches are the visible symptom; the second
-half of that bug (the `rollup_site` poller tiebreaker reads only the `ping`
+Sites with unmanaged-but-alive switches were the visible symptom. The second
+half of that bug — `rollup_site()`'s poller tiebreaker read only the `ping`
 dimension, which is empty while `[poller] enabled = false`, so the `snmp`
-dimension never overrides a source verdict) is **not** fixed here — see
-"Next session".
+dimension never overrode a source verdict — is fixed in `netmon/api/sites.py`
+(spec 09 §roll-up, same day).
 
 ## Blind detection (the important part)
 
@@ -117,13 +117,14 @@ is nothing metric-class to persist under §6.
   endpoints that reuse `XiqClient`.
 - Source-disagreement surfacing: XIQ `source_status=down` while poller
   `ping=up` → a distinct rendered state (tiebreaker) — design with Phase 4.
-- **The other half of the 2026-07-27 false-down bug (not fixed):**
-  `rollup_site()` (`netmon/api/sites.py`) lets the native poller override a
-  source verdict via `ping_up` only, and `_DEVICE_FLAGS_SQL` doesn't select the
-  `snmp` dimension at all. With `[poller] enabled = false` on the deploy VM
-  there are **zero `ping` rows** in `device_state`, so the tiebreaker can never
-  fire and a MANAGED-but-cloud-disconnected switch still counts as down even
-  while it answers SNMP (4 such switches district-wide on 2026-07-27). Fix is
-  to add `snmp_up` to the flags SQL and accept it as a tiebreaker alongside
-  `ping_up` — and/or decide whether the ping sweep should be enabled at all,
-  since the whole tiebreaker design assumes it runs.
+- **Should `[poller] enabled` be flipped on?** The site roll-up's tiebreaker
+  design assumes the native poller runs, but the deploy VM has it disabled, so
+  `device_state` holds **zero `ping` rows** — the 2026-07-27 fix leans entirely
+  on the `snmp` dimension (which is populated) as native evidence. Enabling the
+  fping sweep needs `[poller] snmp_community` reviewed and an ICMP-sweep
+  blast-radius sanity check first.
+- **A MANAGED switch that is cloud-disconnected but SNMP-alive is now `up` on
+  the site cards** (correctly — it's reachable), but losing the XIQ management
+  connection is still a real condition worth its own surfaced state rather than
+  silence; four MDF switches were in it on 2026-07-27. Pairs with the
+  source-disagreement item above.
