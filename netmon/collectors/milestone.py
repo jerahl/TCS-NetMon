@@ -162,10 +162,12 @@ class MilestoneCollector(Collector):
 
         # State writes (unchanged contract) + RS device-id map for camera links.
         rs_devid: dict[str, int] = {}
+        linked_servers = linked_cameras = 0
         for srv in servers:
             r = registry.get(str(srv.get("id")))
             if r is None:
                 continue
+            linked_servers += 1
             rs_devid[str(srv.get("id"))] = int(r["id"])
             running = _truthy(srv.get("running"), srv.get("state"), srv.get("enabled"))
             write_state(self.engine, int(r["id"]), "source_status",
@@ -175,10 +177,24 @@ class MilestoneCollector(Collector):
             r = registry.get(str(cam.get("id")))
             if r is None:
                 continue
+            linked_cameras += 1
             recording = _truthy(cam.get("recordingEnabled"), cam.get("recording"), cam.get("enabled"))
             write_state(self.engine, int(r["id"]), "recording",
                         "up" if recording else "down", "ok" if recording else "crit", "milestone")
             written += 1
+
+        # Fail loud on the silent-empty trap: Milestone answered, but none of its
+        # entities are linked to a registry device (nothing seeded
+        # milestone_hardware_id). Without this the run "succeeds" writing 0 rows
+        # and the page is mysteriously blank (§4.5). The overview snapshot below
+        # carries the discovered-vs-linked counts so the UI can point at the fix.
+        if (servers or cameras) and not (linked_servers or linked_cameras):
+            log.warning(
+                "Milestone returned %d server(s) + %d camera(s) but NONE are "
+                "linked to a registry device — import them via Registry → Import "
+                "from Milestone (nothing populates milestone_hardware_id otherwise).",
+                len(servers), len(cameras),
+            )
 
         # Optional enrichment — fail-soft (older XProtect lacks these endpoints).
         storage_by_rs: dict[str, dict] = {}
@@ -205,11 +221,18 @@ class MilestoneCollector(Collector):
         written += db.replace_rows(self.engine, "recording_servers", ["device_id"], rs_rows)
         written += db.replace_rows(self.engine, "cameras", ["device_id"], cam_rows)
 
-        # Environment overview singleton.
+        # Environment overview singleton. `discovered_*` is what Milestone
+        # returned; `recording_servers`/`cameras` are what actually linked to the
+        # registry — a gap between them means devices need importing (surfaced on
+        # the Surveillance page).
         write_snapshot(self.engine, "milestone.overview", {
             "recording_servers": len(rs_rows),
             "cameras": len(cam_rows),
             "cameras_recording": sum(1 for c in cam_rows if c["enabled"]),
+            "discovered_servers": len(servers),
+            "discovered_cameras": len(cameras),
+            "linked_servers": linked_servers,
+            "linked_cameras": linked_cameras,
             "storage_used_gb": round(sum(r["storage_used_gb"] or 0 for r in rs_rows), 1),
             "storage_total_gb": round(sum(r["storage_total_gb"] or 0 for r in rs_rows), 1),
         }, self.name)

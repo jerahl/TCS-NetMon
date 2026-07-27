@@ -76,6 +76,8 @@ export function RegistryPage() {
 
       <XiqImport onDone={load} />
 
+      <MilestoneImport onDone={load} />
+
       <DeviceAssignments sites={sites} onDone={load} />
 
       <EnumMaps />
@@ -500,6 +502,53 @@ function XiqImport({ onDone }) {
         <div style={{ marginTop: 10 }}>
           <div className="msg">
             Fetched {preview.fetched} · would add <b style={{ color: sevColor("ok") }}>{preview.would_add}</b> ·
+            would update {preview.would_update}
+          </div>
+          {preview.new_devices?.length > 0 && (
+            <table className="grid">
+              <thead><tr><th>New device</th><th>Type</th><th>Site</th></tr></thead>
+              <tbody>{preview.new_devices.map((d) => (
+                <tr key={d.name}><td>{d.name}</td><td className="dim">{d.type}</td><td className="dim">{d.site}</td></tr>
+              ))}</tbody>
+            </table>
+          )}
+          <button type="button" className="btn" disabled={busy || !preview.would_add} style={{ marginTop: 8 }}
+                  onClick={() => run(false)}>Apply import ({preview.would_add} new)</button>
+        </div>
+      )}
+      {msg && <div className={"msg" + (msg.ok ? "" : " error")}>{msg.text}</div>}
+    </Card>
+  );
+}
+
+function MilestoneImport({ onDone }) {
+  const [preview, setPreview] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState(null);
+
+  const run = async (dry_run) => {
+    setBusy(true); setMsg(null);
+    try {
+      const r = await req("POST", "/api/registry/import-milestone", { dry_run });
+      if (dry_run) { setPreview(r); }
+      else { setPreview(null); setMsg({ ok: true, text: `Imported: ${r.added} added, ${r.updated} updated.` }); onDone?.(); }
+    } catch (e) { setMsg({ ok: false, text: String(e.message || e) }); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Card kicker="Milestone XProtect" title="Import cameras & recording servers from Milestone">
+      <div className="dim" style={{ marginBottom: 8 }}>
+        Reads Milestone's recording servers and cameras (read-only) and links them into the
+        registry by their Milestone id. <b>Required for the Surveillance page to show any data</b> —
+        the collector only reports on devices imported here. Existing site assignments are preserved.
+      </div>
+      <button type="button" className="btn" disabled={busy} onClick={() => run(true)}>Preview (dry run)</button>
+      {preview && (
+        <div style={{ marginTop: 10 }}>
+          <div className="msg">
+            Fetched {preview.fetched_servers} server(s) + {preview.fetched_cameras} camera(s) ·
+            would add <b style={{ color: sevColor("ok") }}>{preview.would_add}</b> ·
             would update {preview.would_update}
           </div>
           {preview.new_devices?.length > 0 && (

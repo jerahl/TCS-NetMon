@@ -797,3 +797,68 @@ async def import_xiq(
         upsert_devices(engine, devices)
         log.info("XIQ import by %s: %d added, %d updated", user.username, len(added), len(updated))
     return result
+
+
+class MilestoneImport(BaseModel):
+    dry_run: bool = True
+
+
+@router.post("/import-milestone")
+async def import_milestone(
+    body: MilestoneImport,
+    request: Request,
+    engine: Engine = Depends(get_engine),
+    cfg: Config = Depends(get_config),
+    user: UserSession = Depends(require_role(Role.admin)),
+) -> dict:
+    """Pull Milestone recording servers + cameras (read-only) and reconcile them
+    into the registry, linked by ``milestone_hardware_id``. This is the seeding
+    step that lets the Milestone collector produce data at all — without it no
+    device carries the id the collector matches on, so the Surveillance page
+    stays empty even with the source configured. ``dry_run`` (default) reports
+    what would change without writing; sites are preserved from the existing
+    registry (D9)."""
+    _require_edit(cfg)
+    if not cfg.source_enabled("milestone"):
+        raise HTTPException(status_code=400, detail="the Milestone source is not enabled in config")
+
+    from netmon.collectors.milestone_client import MilestoneClient, MilestoneError
+    from netmon.seed import assign_sites, normalize_milestone, site_index_from_db, upsert_devices
+
+    s = cfg.sources["milestone"].settings
+    client = MilestoneClient(
+        host=(s.get("host") or "").strip(),
+        user=(s.get("user") or "").strip(),
+        password=s.get("pass") or "",
+        scheme=(s.get("scheme") or "https").strip(),
+        client_id=(s.get("client_id") or "GrantValidatorClient").strip(),
+        verify_ssl=str(s.get("verify_ssl", "true")).strip().lower() in ("1", "true", "yes", "on"),
+    )
+    try:
+        servers = await client.recording_servers()
+        cameras = await client.cameras()
+    except MilestoneError as exc:
+        raise HTTPException(status_code=502, detail=f"Milestone fetch failed: {exc}")
+
+    devices = normalize_milestone(servers, cameras)
+    assign_sites(devices, site_index_from_db(engine))
+
+    existing = {r["milestone_hardware_id"] for r in db.fetch_all(
+        engine, "SELECT milestone_hardware_id FROM devices "
+                "WHERE milestone_hardware_id IS NOT NULL AND milestone_hardware_id <> ''")}
+    added = [d for d in devices if d.milestone_hardware_id not in existing]
+    updated = [d for d in devices if d.milestone_hardware_id in existing]
+
+    result = {
+        "dry_run": body.dry_run,
+        "fetched_servers": len(servers),
+        "fetched_cameras": len(cameras),
+        "reconciled": len(devices),
+        "would_add" if body.dry_run else "added": len(added),
+        "would_update" if body.dry_run else "updated": len(updated),
+        "new_devices": [{"name": d.name, "type": d.device_type.value, "site": d.site} for d in added[:100]],
+    }
+    if not body.dry_run:
+        upsert_devices(engine, devices)
+        log.info("Milestone import by %s: %d added, %d updated", user.username, len(added), len(updated))
+    return result

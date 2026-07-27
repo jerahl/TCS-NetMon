@@ -190,6 +190,51 @@ def normalize_pf(rows: list[dict[str, Any]]) -> list[Device]:
     return out
 
 
+def _ms_str(d: dict, *keys: str) -> str | None:
+    for k in keys:
+        v = d.get(k)
+        if v not in (None, ""):
+            return str(v).strip()
+    return None
+
+
+def normalize_milestone(servers: list[dict[str, Any]], cameras: list[dict[str, Any]]) -> list[Device]:
+    """Milestone recording-server + camera entities → Device rows (unsaved),
+    linked by ``milestone_hardware_id`` = the entity's GUID.
+
+    This is what lets the Milestone collector do anything at all: it only writes
+    state/inventory for registry devices whose ``milestone_hardware_id`` matches
+    a fetched entity's ``id``. Names must be unique (``devices.name``), so a
+    nameless entity falls back to a stable ``ms-rs-<id>`` / ``ms-cam-<id>``.
+    Sites are assigned later from the existing registry (D9)."""
+    out: list[Device] = []
+    for srv in servers or []:
+        sid = _ms_str(srv, "id")
+        if not sid:
+            continue
+        name = _ms_str(srv, "name", "displayName", "hostName", "hostname") or f"ms-rs-{sid}"
+        out.append(Device(
+            name=name,
+            device_type=DeviceType.recording_server,
+            mgmt_ip=_ms_str(srv, "hostName", "hostname", "address"),
+            snmp_capable=False,
+            milestone_hardware_id=sid,
+        ))
+    for cam in cameras or []:
+        cid = _ms_str(cam, "id")
+        if not cid:
+            continue
+        name = _ms_str(cam, "name", "displayName", "shortName") or f"ms-cam-{cid}"
+        out.append(Device(
+            name=name,
+            device_type=DeviceType.camera,
+            mgmt_ip=_ms_str(cam, "address", "ip"),
+            snmp_capable=False,
+            milestone_hardware_id=cid,
+        ))
+    return out
+
+
 def reconcile(xiq: list[Device], pf: list[Device]) -> list[Device]:
     """Merge XIQ + PF device lists into one row per real device.
 
@@ -247,15 +292,18 @@ def upsert_devices(engine, devices: list[Device]) -> int:
         "UPDATE devices SET site=:site, "
         " mgmt_ip=:mgmt_ip, "
         " xiq_device_id=COALESCE(:xiq_device_id, xiq_device_id), "
-        " pf_node_mac=COALESCE(:pf_node_mac, pf_node_mac) "
+        " pf_node_mac=COALESCE(:pf_node_mac, pf_node_mac), "
+        " milestone_hardware_id=COALESCE(:milestone_hardware_id, milestone_hardware_id), "
+        " rconfig_device_id=COALESCE(:rconfig_device_id, rconfig_device_id), "
+        " threecx_ref=COALESCE(:threecx_ref, threecx_ref) "
         "WHERE name=:name"
     )
     insert_sql = (
         "INSERT INTO devices "
         "(name, site, device_type, mgmt_ip, snmp_capable, enabled, "
-        " xiq_device_id, pf_node_mac) "
+        " xiq_device_id, pf_node_mac, milestone_hardware_id, rconfig_device_id, threecx_ref) "
         "VALUES (:name, :site, :device_type, :mgmt_ip, :snmp_capable, :enabled, "
-        " :xiq_device_id, :pf_node_mac)"
+        " :xiq_device_id, :pf_node_mac, :milestone_hardware_id, :rconfig_device_id, :threecx_ref)"
     )
     count = 0
     for d in devices:
@@ -268,6 +316,9 @@ def upsert_devices(engine, devices: list[Device]) -> int:
             "enabled": int(d.enabled),
             "xiq_device_id": d.xiq_device_id,
             "pf_node_mac": d.pf_node_mac,
+            "milestone_hardware_id": d.milestone_hardware_id,
+            "rconfig_device_id": d.rconfig_device_id,
+            "threecx_ref": d.threecx_ref,
         }
         exists = db.fetch_one(
             engine, "SELECT 1 FROM devices WHERE name = :name", {"name": d.name}

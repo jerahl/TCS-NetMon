@@ -124,6 +124,26 @@ def test_milestone_persists_cameras_servers_and_overview(tmp_path):
     assert ov["ok"] and ov["payload"]["cameras"] == 1 and ov["payload"]["recording_servers"] == 1
 
 
+def test_milestone_unlinked_entities_surface_in_overview(tmp_path):
+    """The exact 'configured but no data' trap: Milestone answers, but no
+    registry device carries the matching milestone_hardware_id. The overview
+    snapshot must expose discovered>0 / linked==0 so the UI can point at the
+    import (and nothing is silently blank)."""
+    from netmon.snapshots import read_snapshot
+    engine = db.make_engine(f"sqlite:///{tmp_path/'ms.db'}")
+    create_core_tables(engine)  # NOTE: no devices linked to Milestone
+    fake = FakeMs()
+    fake.servers = [{"id": "RS-X", "running": True}]
+    fake.cameras_data = [{"id": "CAM-X", "recordingEnabled": True},
+                         {"id": "CAM-Y", "recordingEnabled": True}]
+    n = asyncio.run(MilestoneCollector(engine, fake).run_once())
+    assert n == 0  # nothing linked → nothing written
+    ov = read_snapshot(engine, "milestone.overview")["payload"]
+    assert ov["discovered_servers"] == 1 and ov["discovered_cameras"] == 2
+    assert ov["linked_servers"] == 0 and ov["linked_cameras"] == 0
+    assert ov["cameras"] == 0  # no rows persisted
+
+
 def test_milestone_storage_endpoint_fail_soft(tmp_path):
     from netmon.collectors.milestone_client import MilestoneError
     engine = _engine(tmp_path)
