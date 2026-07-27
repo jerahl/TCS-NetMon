@@ -150,11 +150,17 @@ function SiteHeatmap({ sites }) {
             return (
               <a className="site-tile" key={s.name} href="#/map"
                  style={{ borderLeftColor: sevColor(sev) }}
-                 title={`${s.display_name || s.name} · ${s.status}`}>
+                 title={`${s.display_name || s.name} · ${s.status}` +
+                        (s.devices_degraded ? ` · ${s.devices_degraded} switch${s.devices_degraded === 1 ? "" : "es"} down` : "")}>
                 <div className="site-tile-name">{s.display_name || s.name}</div>
                 <div className="site-tile-meta mono dim">
                   {s.devices_total} dev{s.devices_down ? ` · ${s.devices_down} down` : ""}
                 </div>
+                {s.devices_degraded > 0 && (
+                  <div className="site-tile-switch mono" style={{ color: sevColor(sev) }}>
+                    {s.devices_degraded} switch{s.devices_degraded === 1 ? "" : "es"} down
+                  </div>
+                )}
                 {s.problems > 0 && (
                   <div className="site-tile-prob" style={{ color: sevColor(s.worst_severity) }}>
                     {s.problems} open
