@@ -19,8 +19,10 @@ S = SiteStatus
 
 # ---------------------------------------------------------------- pure logic
 
-def _flags(pinged=0, ping_down=0, device_type="switch", has_state=1):
-    return {"pinged": pinged, "ping_down": ping_down,
+def _flags(ping_up=0, ping_down=0, source_up=0, source_down=0,
+           device_type="switch", has_state=1):
+    return {"ping_up": ping_up, "ping_down": ping_down,
+            "source_up": source_up, "source_down": source_down,
             "device_type": device_type, "has_state": has_state}
 
 
@@ -33,39 +35,68 @@ def test_rollup_no_state_is_unknown_never_up():
 
 
 def test_rollup_all_pinged_down_is_down():
-    devs = [_flags(pinged=1, ping_down=1), _flags(pinged=1, ping_down=1), _flags(has_state=1)]
+    devs = [_flags(ping_down=1), _flags(ping_down=1), _flags(has_state=1)]
     assert rollup_site(devs)[0] is S.down
 
 
 def test_rollup_switch_down_is_degraded():
     # A switch down (but not a full outage) → degraded; switch_down is counted.
-    devs = [_flags(pinged=1, ping_down=1, device_type="switch"), _flags(pinged=1)]
+    devs = [_flags(ping_down=1, device_type="switch"), _flags(ping_up=1)]
     status, total, down, switch_down = rollup_site(devs)
     assert status is S.degraded and total == 2 and down == 1 and switch_down == 1
+
+
+def test_rollup_switch_source_status_down_degrades():
+    # A switch whose up/down lives only in source_status (XIQ-federated, no
+    # native ping) still degrades its site — the 2026-07-27 fix.
+    devs = [_flags(source_down=1, device_type="switch"), _flags(ping_up=1)]
+    status, total, down, switch_down = rollup_site(devs)
+    assert status is S.degraded and down == 1 and switch_down == 1
+
+
+def test_rollup_ping_up_overrides_source_down():
+    # Native poller is the tiebreaker: a switch answering ICMP is up even when
+    # its source reports it disconnected → site stays UP, no false degrade.
+    devs = [_flags(ping_up=1, source_down=1, device_type="switch")]
+    status, _total, down, switch_down = rollup_site(devs)
+    assert status is S.up and down == 0 and switch_down == 0
+
+
+def test_rollup_source_status_only_full_outage_is_down():
+    # When every reachable device is down — including a source-only switch —
+    # the site is a full outage, not merely degraded.
+    devs = [_flags(source_down=1, device_type="switch"), _flags(ping_down=1)]
+    assert rollup_site(devs)[0] is S.down
 
 
 def test_rollup_non_switch_down_does_not_degrade():
     # A down camera/AP/phone with the switch up → site stays UP (owner rule
     # 2026-07-17: only a switch down or an alarmed trunk degrades a site).
     for t in ("ap", "camera", "trunk", "other"):
-        devs = [_flags(pinged=1, device_type="switch"),
-                _flags(pinged=1, ping_down=1, device_type=t)]
+        devs = [_flags(ping_up=1, device_type="switch"),
+                _flags(ping_down=1, device_type=t)]
         assert rollup_site(devs)[0] is S.up, t
 
 
 def test_rollup_warn_only_does_not_degrade():
     # A blind source / a switch with port errors (no ping-down) must NOT
     # degrade anymore — the old "any warn/crit" rule is gone.
-    assert rollup_site([_flags(pinged=1, device_type="switch")])[0] is S.up
+    assert rollup_site([_flags(ping_up=1, device_type="switch")])[0] is S.up
+
+
+def test_rollup_blind_source_is_not_down():
+    # source_status = blind is a warn (source unreachable), never a device-down:
+    # a switch that is only blind (no ping, no source down) does not degrade.
+    assert rollup_site([_flags(device_type="switch")])[0] is S.up
 
 
 def test_rollup_trunk_alarm_degrades():
     # No device down, but the uplink trunk is alarmed → degraded.
-    assert rollup_site([_flags(pinged=1, device_type="switch")], trunk_alarm=True)[0] is S.degraded
+    assert rollup_site([_flags(ping_up=1, device_type="switch")], trunk_alarm=True)[0] is S.degraded
 
 
 def test_rollup_healthy_is_up():
-    assert rollup_site([_flags(pinged=1), _flags(pinged=1)])[0] is S.up
+    assert rollup_site([_flags(ping_up=1), _flags(ping_up=1)])[0] is S.up
 
 
 def test_link_down_endpoint_wins():
@@ -149,6 +180,29 @@ def test_sites_rollup(tmp_path):
         assert sites["CO"]["status"] == "unknown"        # no devices, never 'up'
         assert sites["CO"]["tier"] == "hub"
         assert isinstance(sites["CO"]["lat"], float)
+
+
+def test_sites_rollup_xiq_switch_source_down_degrades(tmp_path):
+    """Real-world regression (Rock Quarry, 2026-07-27): an XIQ-managed switch
+    carries its up/down only in source_status (no native ping). A source-down
+    switch must degrade its site and be counted in devices_degraded — the site
+    can no longer render green with a switch down."""
+    url = f"sqlite:///{tmp_path/'netmon.db'}"
+    _seed(url)   # CHS: switch(3) up, ap(4) up+blind → 'up' on its own
+    engine = db.make_engine(url)
+    now = datetime.now(timezone.utc)
+    db.execute(engine, "INSERT INTO devices (name, site, device_type, enabled) "
+                       "VALUES ('CHS-IDF-2','CHS','switch',1)")
+    swid = db.fetch_one(engine, "SELECT id FROM devices WHERE name='CHS-IDF-2'")["id"]
+    # XIQ reports it disconnected; it has no mgmt_ip, so no ping row at all.
+    db.upsert(engine, "device_state", {"device_id": swid, "dimension": "source_status"},
+              {"value": "down", "severity": "crit", "source": "xiq", "updated_at": now})
+    engine.dispose()
+    with TestClient(_app(write_config(tmp_path, db_url=url))) as client:
+        sites = {s["name"]: s for s in client.get("/api/sites").json()}
+        assert sites["CHS"]["status"] == "degraded"
+        assert sites["CHS"]["devices_degraded"] == 1
+        assert sites["CHS"]["devices_down"] == 1
 
 
 def test_sites_carry_open_problem_rollup(tmp_path):

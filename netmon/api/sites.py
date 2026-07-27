@@ -27,16 +27,26 @@ from netmon.models.schemas import (
 
 router = APIRouter(tags=["map"])
 
-# One row per enabled device: its type + whether its ping dimension is down.
+# One row per enabled device: its type + its up/down reachability across BOTH
+# reachability dimensions. A device's down-ness can live in either:
+#   * ping         — the native poller (devices with a mgmt_ip), or
+#   * source_status — the federating source (e.g. XIQ), which is the ONLY
+#     up/down signal for switches NetMon doesn't natively poll (XIQ-managed
+#     switches carry `source_status = up|down`, never a ping — xiq.py).
+# We carry the up/down of each dimension separately so the roll-up can apply
+# the native poller as the tiebreaker (spec 00 / CLAUDE.md §1): a device that
+# answers ICMP is up even if its source momentarily reports it disconnected.
 # device_type is carried so the roll-up can treat switches (infrastructure) as
 # the only devices whose being down degrades a site — a down camera/AP/phone
-# does not, and a mere warn (e.g. a port with errors, or a blind source) never
-# does (spec 09; owner directive 2026-07-17).
+# does not, and a mere warn (port errors, a blind source) never does
+# (spec 09; owner directive 2026-07-17).
 _DEVICE_FLAGS_SQL = """
 SELECT d.site AS site,
        d.device_type AS device_type,
-       MAX(CASE WHEN s.dimension = 'ping' THEN 1 ELSE 0 END) AS pinged,
+       MAX(CASE WHEN s.dimension = 'ping' AND s.value = 'up' THEN 1 ELSE 0 END) AS ping_up,
        MAX(CASE WHEN s.dimension = 'ping' AND s.value = 'down' THEN 1 ELSE 0 END) AS ping_down,
+       MAX(CASE WHEN s.dimension = 'source_status' AND s.value = 'up' THEN 1 ELSE 0 END) AS source_up,
+       MAX(CASE WHEN s.dimension = 'source_status' AND s.value = 'down' THEN 1 ELSE 0 END) AS source_down,
        MAX(CASE WHEN s.device_id IS NULL THEN 0 ELSE 1 END) AS has_state
 FROM devices d
 LEFT JOIN device_state s ON s.device_id = d.id
@@ -70,8 +80,8 @@ def rollup_site(
 ) -> tuple[SiteStatus, int, int, int]:
     """Roll one site's device flag rows up to (status, total, down, switch_down).
 
-    Semantics (spec 09, revised 2026-07-17):
-      * ``down``     — every ping-monitored device is down (a full outage).
+    Semantics (spec 09, revised 2026-07-17; source_status folded in 2026-07-27):
+      * ``down``     — every reachability-monitored device is down (full outage).
       * ``degraded`` — not fully down, but a **switch** is down OR a trunk
         fiber link into the site is alarmed (``trunk_alarm``). A down
         camera/AP/phone does NOT degrade the site, and neither does a mere
@@ -80,19 +90,36 @@ def rollup_site(
       * ``unknown``  — no state data at all (never renders as up).
       * else ``up``.
 
+    A device is **down** if its native ``ping`` says down, or its federated
+    ``source_status`` says down and the poller does not contradict it — the
+    native poller is the tiebreaker (spec 00 / CLAUDE.md §1), so a device that
+    answers ICMP is up even when its source reports it disconnected. Folding
+    in ``source_status`` is what lets an XIQ-managed switch (which carries its
+    up/down only in ``source_status``, never a ping) degrade its site.
+
     The 4th return value is the count of switches down (the degraded drivers),
     surfaced to the UI; it is a subset of ``down``.
     """
     total = len(device_flags)
-    pinged = sum(1 for d in device_flags if d["pinged"])
-    down = sum(1 for d in device_flags if d["ping_down"])
+
+    def _reachable(d) -> bool:
+        # Has a definitive up/down reading in either reachability dimension.
+        return bool(d.get("ping_up") or d.get("ping_down")
+                    or d.get("source_up") or d.get("source_down"))
+
+    def _down(d) -> bool:
+        return bool(d.get("ping_down")
+                    or (d.get("source_down") and not d.get("ping_up")))
+
+    reachable = sum(1 for d in device_flags if _reachable(d))
+    down = sum(1 for d in device_flags if _down(d))
     switch_down = sum(
-        1 for d in device_flags if d["ping_down"] and d.get("device_type") == "switch"
+        1 for d in device_flags if _down(d) and d.get("device_type") == "switch"
     )
 
     if total == 0 or not any(d["has_state"] for d in device_flags):
         return SiteStatus.unknown, total, down, switch_down
-    if pinged > 0 and down == pinged:
+    if reachable > 0 and down == reachable:
         return SiteStatus.down, total, down, switch_down
     if switch_down or trunk_alarm:
         return SiteStatus.degraded, total, down, switch_down
