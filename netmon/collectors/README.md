@@ -23,8 +23,15 @@ Ported from `reference/lib/XIQFleetClient.php`.
 - **Endpoint:** `GET /devices?views=BASIC` (paged, `limit=100`,
   `total_pages` drain). Bearer token (`[xiq] api_token`).
 - **Writes:** `device_state` dimension `source_status` per matched device —
-  `up` (connected, ok) / `down` (not connected, crit) / `blind` (source
-  unreachable, warn). Backfills empty `devices.mgmt_ip` from XIQ `ip_address`.
+  `up` (connected, ok) / `down` (not connected, crit) / `unknown` (XIQ isn't
+  managing it, see below) / `blind` (source unreachable, warn). Backfills empty
+  `devices.mgmt_ip` from XIQ `ip_address`.
+- **`device_admin_state` gates up/down** (`source_state`): XIQ reports
+  `connected: false` for every device it is not actively managing
+  (`UNMANAGED` / `NEW` / `BOOTSTRAP`), so only `MANAGED` devices get a real
+  `up`/`down` — the rest map to `unknown`, never crit. Reading `connected`
+  alone flagged 13 switches down district-wide while 11 of them were answering
+  SNMP (2026-07-27). A missing `device_admin_state` is treated as managed.
 - **AP-detail cycles (10.2):** the `detail`/`clients`/`ssids` cycles persist
   `ap_details`/`ap_radios`/`wireless_clients`/`ssids`. **NetMon's registry
   `device_type` is authoritative** — only devices typed `ap` flow through the

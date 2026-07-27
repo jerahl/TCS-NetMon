@@ -29,6 +29,10 @@ class XiqDevice(BaseModel):
     id: int
     hostname: str = ""
     connected: bool = False
+    # MANAGED | UNMANAGED | NEW | BOOTSTRAP — whether XIQ is actually managing
+    # the device. `connected` is only meaningful for MANAGED (see
+    # collectors/xiq.py source_state). Present in the BASIC view.
+    device_admin_state: str | None = None
     ip_address: str | None = None
     device_function: str | None = None
     product_type: str | None = None
@@ -40,7 +44,7 @@ class XiqDevice(BaseModel):
     def _normalize_mac(cls, v: str) -> str:
         return _mac_with_colons(v)
 
-    @field_validator("ip_address")
+    @field_validator("ip_address", "device_admin_state")
     @classmethod
     def _blank_to_none(cls, v: str | None) -> str | None:
         return v or None

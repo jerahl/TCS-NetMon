@@ -19,10 +19,11 @@ S = SiteStatus
 
 # ---------------------------------------------------------------- pure logic
 
-def _flags(ping_up=0, ping_down=0, source_up=0, source_down=0,
+def _flags(ping_up=0, ping_down=0, source_up=0, source_down=0, snmp_up=0,
            device_type="switch", has_state=1):
     return {"ping_up": ping_up, "ping_down": ping_down,
             "source_up": source_up, "source_down": source_down,
+            "snmp_up": snmp_up,
             "device_type": device_type, "has_state": has_state}
 
 
@@ -60,6 +61,43 @@ def test_rollup_ping_up_overrides_source_down():
     devs = [_flags(ping_up=1, source_down=1, device_type="switch")]
     status, _total, down, switch_down = rollup_site(devs)
     assert status is S.up and down == 0 and switch_down == 0
+
+
+def test_rollup_snmp_up_overrides_source_down():
+    # The poller's snmpget probe is native ground truth too: a switch answering
+    # SNMP is up even when its source calls it disconnected. This is the only
+    # tiebreaker available while [poller] enabled = false (no ping rows exist)
+    # — 2026-07-27, four MDF switches flagged down while answering snmpget.
+    devs = [_flags(snmp_up=1, source_down=1, device_type="switch")]
+    status, _total, down, switch_down = rollup_site(devs)
+    assert status is S.up and down == 0 and switch_down == 0
+
+
+def test_rollup_snmp_down_alone_is_not_a_down_device():
+    # NOT answering SNMP proves nothing (blocked port, wrong community — the
+    # poller writes it warn). Only a source verdict or a ping-down makes a
+    # device down; a switch with no snmp_up and no down verdict stays up.
+    assert rollup_site([_flags(device_type="switch")])[0] is S.up
+    # …and snmp silence does not rescue a switch its source calls down.
+    status, _total, down, switch_down = rollup_site(
+        [_flags(source_down=1, device_type="switch"), _flags(ping_up=1)])
+    assert status is S.degraded and down == 1 and switch_down == 1
+
+
+def test_rollup_ping_down_stays_authoritative_over_snmp_up():
+    # An ICMP-silent but SNMP-answering device is a contradiction to surface,
+    # not to resolve here: the poller's ping verdict still wins.
+    devs = [_flags(ping_down=1, snmp_up=1, device_type="switch"), _flags(ping_up=1)]
+    status, _total, down, switch_down = rollup_site(devs)
+    assert status is S.degraded and down == 1 and switch_down == 1
+
+
+def test_rollup_snmp_up_alone_counts_as_reachable_and_up():
+    # A device whose only reading is snmp=up must not be invisible to the
+    # full-outage test: one alive device means the site is not fully down.
+    devs = [_flags(snmp_up=1, device_type="switch"), _flags(ping_down=1, device_type="ap")]
+    status, total, down, switch_down = rollup_site(devs)
+    assert status is S.up and total == 2 and down == 1 and switch_down == 0
 
 
 def test_rollup_source_status_only_full_outage_is_down():

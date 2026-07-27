@@ -166,6 +166,40 @@ shadow-alert diff has run clean for the agreed window.
 
 ## Next session
 
+- **False "switches down" fixed end-to-end (2026-07-27).** Verner reported
+  "3 switches down" with all three switches alive; fleet-wide 13 switches read
+  down while 11 answered SNMP. Two independent causes, both fixed and live
+  (service restarted; site cards now flag **0** false switch-down, 21 sites up /
+  2 degraded — BUS and SKY, both genuinely trunk-alarmed):
+  1. `8767766` — the XIQ status cycle mapped `connected` straight to up/down,
+     but XIQ reports `connected: false` for every device it is not managing
+     (`UNMANAGED`/`NEW`/`BOOTSTRAP`). `source_state()` now gates on
+     `device_admin_state`; non-MANAGED → `unknown`, never crit (spec 03).
+  2. `9dc609d` — `rollup_site()`'s poller tiebreaker read only `ping_up`, and
+     with `[poller] enabled = false` there are **zero `ping` rows** in
+     `device_state`. `snmp_up` is now selected and accepted as native evidence,
+     positive-only (`snmp = down` proves nothing) (spec 09).
+  Open threads from it: **should `[poller] enabled` be flipped on?** (the whole
+  tiebreaker design assumes the fping sweep runs; needs `snmp_community` review
+  + ICMP blast-radius check); a **MANAGED-but-cloud-disconnected** switch is now
+  silent on the cards though it's a real condition (4 MDF switches were in it);
+  Verner still shows `problems=3` from **stale `alerts` rows** the engine can't
+  close while `[engine] enabled = false`; and `devices` holds a **duplicate
+  registry entry** for `192.168.100.253` (id 834 `VES-GYM` + id 1029, distinct
+  XIQ records, different serials — a replaced switch whose old XIQ record
+  survives), inflating Verner's device count.
+- **Git state (2026-07-27): `main` is ahead of `origin/main` by 6 and unpushed.**
+  `gh` 2.96.0 was installed from GitHub's apt repo this session (owner chose the
+  device-flow login over a stored PAT), but `gh auth login` is interactive and
+  had not been run, so nothing outward-facing happened. Queued once
+  authenticated: push `main`; PR `claude/site-cards-switch-down-ogiuzk` closes
+  itself as merged (its 4 commits are already in `main` at identical SHAs);
+  **close PR `claude/settings-admin-interface-a1ro3x` unmerged** — its
+  `269e4c6` snmp_inventory-timeout fix is superseded by `run_timeout_s` on main
+  and references the removed `cfg.lldp_interval_s` (now `edp_interval_s`), so it
+  would break `SnmpInventory` construction; then delete the 11 fully-merged
+  remote branches (audit: 11 merged, 1 already-contained, 1 superseded — no
+  branch holds unique work).
 - **Phases 10.1–10.6 are built (2026-07-16/17).** The full ZCD page-parity set
   now renders from NetMon's DB: Switches (10.1), Wireless/XIQ + AP Detail
   (10.2), the five PacketFence pages (10.3), Surveillance + VoIP (10.4), the

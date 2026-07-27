@@ -14,8 +14,8 @@ authoritative record of what works against live XIQ.
 
 NetMon stores *state*, not metrics (§2: no long-term metric time-series). So:
 
-- **Stored (this phase):** per-device `source_status` (`up` / `down` / `blind`)
-  in `device_state`, transitions in `state_events`. Optional backfill of
+- **Stored (this phase):** per-device `source_status` (`up` / `down` /
+  `unknown` / `blind`) in `device_state`, transitions in `state_events`. Optional backfill of
   `devices.mgmt_ip` from XIQ `ip_address` when the registry value is empty.
 - **Live-read later (Phase 4 UI, not stored):** firmware, model, PoE, port
   state, client counts, CPU/mem — the `devices` table has no columns for these
@@ -29,12 +29,34 @@ NetMon stores *state*, not metrics (§2: no long-term metric time-series). So:
 | XIQ field | use |
 |---|---|
 | `id` | match to `devices.xiq_device_id` |
-| `connected` (bool) | → `source_status`: `up` (ok) / `down` (crit) |
+| `connected` (bool) | → `source_status`: `up` (ok) / `down` (crit) — **only when `device_admin_state = MANAGED`** |
+| `device_admin_state` | gates the above: non-MANAGED → `source_status = unknown` (unknown severity) |
 | `ip_address` | backfill `devices.mgmt_ip` if empty |
 | `hostname`, `product_type`, `software_version`, `mac_address` | validated into the `XiqDevice` model; live-read surface, not stored |
 
 Severity: `up`→`ok`, `down`→`crit`, `blind`→`warn` (blind is *not-ok* and
 distinct from down — we don't know, we're not claiming down). `source = xiq`.
+
+### Why `device_admin_state` gates up/down (fixed 2026-07-27)
+
+XIQ only maintains a connection to devices it is *managing*. An `UNMANAGED`
+device (onboarded, then released), a `NEW` one (onboarded, never adopted), or a
+`BOOTSTRAP` one always reports `connected: false` — XIQ isn't watching it, which
+is not the same as the device being down. Mapping `connected` alone to crit made
+NetMon flag 13 switches down district-wide while **11 of them were answering
+SNMP** (Verner showed "3 switches down" with all switches up; 7 of the 13 were
+UNMANAGED). `source_state()` in `collectors/xiq.py` therefore returns `unknown`
+for any non-MANAGED admin state — the mirror of the blind rule (CLAUDE.md §6):
+a source that isn't watching a device must never render it as failing, just as a
+blind source must never render as healthy. A payload with no
+`device_admin_state` is treated as managed so the signal survives on tenants or
+views that omit the field.
+
+Sites with unmanaged-but-alive switches were the visible symptom. The second
+half of that bug — `rollup_site()`'s poller tiebreaker read only the `ping`
+dimension, which is empty while `[poller] enabled = false`, so the `snmp`
+dimension never overrode a source verdict — is fixed in `netmon/api/sites.py`
+(spec 09 §roll-up, same day).
 
 ## Blind detection (the important part)
 
@@ -95,3 +117,14 @@ is nothing metric-class to persist under §6.
   endpoints that reuse `XiqClient`.
 - Source-disagreement surfacing: XIQ `source_status=down` while poller
   `ping=up` → a distinct rendered state (tiebreaker) — design with Phase 4.
+- **Should `[poller] enabled` be flipped on?** The site roll-up's tiebreaker
+  design assumes the native poller runs, but the deploy VM has it disabled, so
+  `device_state` holds **zero `ping` rows** — the 2026-07-27 fix leans entirely
+  on the `snmp` dimension (which is populated) as native evidence. Enabling the
+  fping sweep needs `[poller] snmp_community` reviewed and an ICMP-sweep
+  blast-radius sanity check first.
+- **A MANAGED switch that is cloud-disconnected but SNMP-alive is now `up` on
+  the site cards** (correctly — it's reachable), but losing the XIQ management
+  connection is still a real condition worth its own surfaced state rather than
+  silence; four MDF switches were in it on 2026-07-27. Pairs with the
+  source-disagreement item above.
