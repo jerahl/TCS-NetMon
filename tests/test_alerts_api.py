@@ -36,6 +36,9 @@ def test_alerts_list_and_ack(tmp_path):
         alerts = r.json()
         assert len(alerts) == 1 and alerts[0]["rule_name"] == "device_down"
         assert alerts[0]["acked_by"] is None
+        # Location + type accompany each alert so the Problems page can sort by them.
+        assert alerts[0]["site"] == "BHS"
+        assert alerts[0]["device_type"] == "switch"
 
         aid = alerts[0]["id"]
         r2 = client.post(f"/api/alerts/{aid}/ack")

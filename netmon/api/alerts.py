@@ -33,7 +33,8 @@ def list_alerts(
     where = f"WHERE {' AND '.join(conds)}" if conds else ""
     rows = db.fetch_all(
         engine,
-        f"SELECT a.id, a.device_id, d.name AS device_name, r.name AS rule_name, "
+        f"SELECT a.id, a.device_id, d.name AS device_name, "
+        f"d.site AS site, d.device_type AS device_type, r.name AS rule_name, "
         f"r.severity, a.opened_at, a.last_seen_at, a.closed_at, a.acked_by, a.acked_at, "
         f"a.assigned_to "
         f"FROM alerts a "

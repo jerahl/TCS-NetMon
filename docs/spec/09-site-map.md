@@ -83,15 +83,24 @@ Rollback note lives in the migration file. No existing table is altered.
 
 ## Site roll-up semantics (`/api/sites`)
 
-Per curated site, over its **enabled** devices (`devices.site = sites.name`):
+Per curated site, over its **enabled** devices (`devices.site = sites.name`).
+Revised 2026-07-17 (owner directive) and 2026-07-27 (source_status folded in):
 
-- a device is **down** when its `ping` state value is `down`;
-- a device is **impaired** when it is not down but any of its `device_state`
-  rows has severity `warn` or `crit` (covers snmp-dead, `source_status`
-  blind/down, camera not recording, etc.);
-- site **down** — the site has ping-monitored devices and **all** of them are
-  down (site unreachable);
-- site **degraded** — any device down or impaired;
+- a device is **down** when its native `ping` value is `down`, **or** its
+  federated `source_status` value is `down` and the poller does not contradict
+  it (a `ping = up` reading wins — the native poller is the tiebreaker,
+  spec 00 / CLAUDE.md §1). Folding in `source_status` is what lets an
+  XIQ-managed switch — which carries its up/down only in `source_status`, never
+  a native ping — count as down. `source_status = blind` is a **warn** (source
+  unreachable), never a device-down;
+- site **down** — the site has reachability-monitored devices (a definitive
+  `ping`/`source_status` up or down reading) and **all** of them are down;
+- site **degraded** — not fully down, but a **switch** is down (by either
+  dimension, above) OR a trunk fiber link into the site is alarmed. A down
+  camera/AP/phone does NOT degrade the site, and neither does a mere warning
+  (port errors, a blind source, a stale backup) — only a switch actually being
+  down or the uplink being impaired. `devices_degraded` carries the switch-down
+  count so the Global site cards / map can surface "N switch(es) down";
 - site **unknown** — no device has any state row (or the site has no devices);
   blind-never-renders-healthy applies: unknown is displayed distinctly, never
   as up;
