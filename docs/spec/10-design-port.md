@@ -350,7 +350,10 @@ Done this session:
   (`devices.device_type`), both carried on `/api/alerts`; every column header is
   click-to-sort (severity by rank, the rest lexically, newest-open tie-break),
   so an operator can group open faults by site or by kind. Default sort is
-  worst-severity first. Sorting is client-side over the already-loaded open set.
+  worst-severity first. A Location + Type **filter bar** (Events-console
+  styling) narrows the open set; its options are derived from the loaded alerts,
+  and the card kicker shows "N of M" when a filter is active. Both filtering and
+  sorting are client-side over the already-loaded open set — no extra round-trip.
 - **Nav source-health pills** from `/api/collector-health` (green/red/grey per
   collector, hover for last-success + error). Refresh 30 s.
 - Shared modules added: `severity.js` (the single home of the 5-level design →

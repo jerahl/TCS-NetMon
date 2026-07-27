@@ -36,6 +36,23 @@ function sortRows(rows, key, dir) {
   });
 }
 
+// Filter dropdown, matching the Events console (evt-filter styling). Options
+// are derived from the loaded open set, so the choices are always self-
+// consistent with what's on screen and need no extra round-trip.
+function Select({ label, value, onChange, options }) {
+  return (
+    <label className="evt-filter">
+      <span>{label}</span>
+      <select value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">All</option>
+        {options.map((o) => (
+          <option key={o} value={o}>{o}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 function SortHeader({ label, col, sort, setSort }) {
   const active = sort.key === col;
   const arrow = active ? (sort.dir === "asc" ? " ▲" : " ▼") : "";
@@ -56,6 +73,8 @@ export function ProblemsPage() {
   const [busy, setBusy] = React.useState(null);
   // Default: worst-first, matching the server's newest-open tie-break.
   const [sort, setSort] = React.useState({ key: "severity", dir: "desc" });
+  const [filters, setFilters] = React.useState({ site: "", device_type: "" });
+  const setFilter = (k) => (v) => setFilters((f) => ({ ...f, [k]: v }));
 
   const load = React.useCallback(() => {
     getJSON("/api/alerts").then((r) => { setRows(r); setError(null); }).catch(setError);
@@ -90,13 +109,34 @@ export function ProblemsPage() {
   if (error) return <ErrorMsg error={error} />;
   if (!rows) return <Loading what="alerts" />;
 
+  // Filter options come from the loaded open set — self-consistent with what's
+  // on screen, no extra round-trip.
+  const siteOpts = [...new Set(rows.map((a) => a.site).filter(Boolean))].sort();
+  const typeOpts = [...new Set(rows.map((a) => a.device_type).filter(Boolean))].sort();
+  const shown = sortRows(
+    rows.filter((a) =>
+      (!filters.site || a.site === filters.site) &&
+      (!filters.device_type || a.device_type === filters.device_type)),
+    sort.key, sort.dir);
+  const filtered = shown.length !== rows.length;
+
   return (
     <div className="page">
       <h1>Problems</h1>
       <div className="subtitle">Open alerts · refreshes every {REFRESH_MS / 1000}s</div>
-      <Card kicker={`${rows.length} open alert(s)`}>
+
+      <div className="evt-filters">
+        <Select label="Location" value={filters.site} onChange={setFilter("site")} options={siteOpts} />
+        <Select label="Type" value={filters.device_type} onChange={setFilter("device_type")} options={typeOpts} />
+      </div>
+
+      <Card kicker={filtered
+        ? `${shown.length} of ${rows.length} open alert(s)`
+        : `${rows.length} open alert(s)`}>
         {rows.length === 0 ? (
           <div className="msg">No open alerts.</div>
+        ) : shown.length === 0 ? (
+          <div className="msg">No open alerts match these filters.</div>
         ) : (
           <table className="grid">
             <thead>
@@ -112,7 +152,7 @@ export function ProblemsPage() {
               </tr>
             </thead>
             <tbody>
-              {sortRows(rows, sort.key, sort.dir).map((a) => (
+              {shown.map((a) => (
                 <tr key={a.id}>
                   <td><Dot severity={a.severity} /></td>
                   <td><SevText severity={a.severity} /></td>
