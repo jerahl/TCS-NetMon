@@ -4,9 +4,11 @@ Cycles inside one supervised task (each independently intervalled and
 disableable — spec 10 §5; ≈1,300–1,600 calls/h total at fleet scale, ≤ ~25%
 of the 7,500/h tenant quota):
 
-  * status (base interval, 180 s): fleet list → ``source_status`` up/down.
-    Unreachable XIQ (401/transport/5xx) marks all XIQ devices ``blind``;
-    a 429 is a throttle, not blind.
+  * status (base interval, 180 s): fleet list → ``source_status`` up/down, but
+    only for devices XIQ actually manages — a non-MANAGED ``device_admin_state``
+    is always ``connected: false`` and maps to ``unknown``, never crit
+    (``source_state``). Unreachable XIQ (401/transport/5xx) marks all XIQ
+    devices ``blind``; a 429 is a throttle, not blind.
   * detail (5 min): ``views=FULL`` fleet sweep → ``ap_details`` + ``ap_radios``
     (when due, the same fetch also serves the status cycle — no extra calls).
     Only devices the registry types as ``ap`` get AP-detail rows; switches
@@ -52,6 +54,29 @@ RATE_LIMIT_WARN = 500
 
 _AP_FUNCTIONS = {"AP", "ACCESS_POINT"}
 _BANDS = {"2.4G": "2.4", "2.4GHZ": "2.4", "5G": "5", "5GHZ": "5", "6G": "6", "6GHZ": "6"}
+_MANAGED_ADMIN_STATE = "MANAGED"
+
+
+def source_state(dev: XiqDevice) -> tuple[str, str]:
+    """XIQ connectivity → (value, severity) for the ``source_status`` dimension.
+
+    XIQ reports ``connected: false`` for every device it is not actively
+    managing — ``UNMANAGED`` (onboarded then released), ``NEW`` (onboarded,
+    never adopted), ``BOOTSTRAP``. That is XIQ having *no opinion*, not the
+    device being down: when this mapping read ``connected`` alone, 11 of the 13
+    switches it flagged crit were answering SNMP at the time (2026-07-27 —
+    Verner alone showed 3 "switches down" with every switch up). Absent an
+    opinion the honest state is ``unknown``, the mirror of CLAUDE.md §6's
+    "blind must never render as healthy": a source that isn't watching a device
+    must never render it as failing.
+
+    An admin state XIQ didn't send is treated as managed, so the connectivity
+    signal is preserved on any tenant/view that omits the field.
+    """
+    admin = (dev.device_admin_state or "").strip().upper()
+    if admin and admin != _MANAGED_ADMIN_STATE:
+        return "unknown", "unknown"
+    return ("up", "ok") if dev.connected else ("down", "crit")
 
 
 def _band(raw: Any) -> str | None:
@@ -283,8 +308,7 @@ class XiqCollector(Collector):
                 # In our registry but absent from a *successful* fleet fetch.
                 absent.append(r)
                 continue
-            value = "up" if dev.connected else "down"
-            severity = "ok" if dev.connected else "crit"
+            value, severity = source_state(dev)
             write_state(self.engine, int(r["id"]), DIMENSION, value, severity, "xiq")
             if not r.get("mgmt_ip") and dev.ip_address:
                 db.execute(

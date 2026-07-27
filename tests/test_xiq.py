@@ -3,7 +3,7 @@ import asyncio
 from sqlalchemy import text
 
 from netmon import db
-from netmon.collectors.xiq import XiqCollector
+from netmon.collectors.xiq import XiqCollector, source_state
 from netmon.collectors.xiq_client import XiqAuthError, XiqRateLimitError
 from netmon.models.xiq import XiqDevice
 from tests.conftest import create_core_tables
@@ -19,6 +19,32 @@ def test_xiqdevice_parse_and_mac_normalization():
     assert d.connected is True
     assert d.mac_address == "AA:BB:CC:00:00:11"  # G3 colon-normalized
     assert d.ip_address == "192.0.2.11"
+    assert d.device_admin_state is None  # absent → None, not ""
+
+
+def _dev(connected, admin_state=None):
+    row = {"id": 1, "connected": connected}
+    if admin_state is not None:
+        row["device_admin_state"] = admin_state
+    return XiqDevice.model_validate(row)
+
+
+def test_source_state_only_trusts_connected_for_managed_devices():
+    """XIQ reports connected=false for anything it isn't managing; that is
+    'no opinion', not 'down' (2026-07-27 — 13 switches flagged down, 11 alive)."""
+    assert source_state(_dev(True, "MANAGED")) == ("up", "ok")
+    assert source_state(_dev(False, "MANAGED")) == ("down", "crit")
+
+    # Not managed → unknown regardless of the (meaningless) connected flag.
+    for admin in ("UNMANAGED", "NEW", "BOOTSTRAP", "unmanaged", " New "):
+        assert source_state(_dev(False, admin)) == ("unknown", "unknown"), admin
+        assert source_state(_dev(True, admin)) == ("unknown", "unknown"), admin
+
+    # Field absent or blank → treated as managed, so the signal survives on a
+    # tenant/view that omits it.
+    assert source_state(_dev(True)) == ("up", "ok")
+    assert source_state(_dev(False)) == ("down", "crit")
+    assert source_state(_dev(False, "")) == ("down", "crit")
 
 
 class FakeXiq:
@@ -98,6 +124,33 @@ def test_xiq_collector_writes_source_status_and_backfills_ip(tmp_path):
     ips = {r["xiq_device_id"]: r["mgmt_ip"] for r in db.fetch_all(engine, "SELECT xiq_device_id, mgmt_ip FROM devices")}
     assert ips["100001"] == "192.0.2.11"
     assert ips["100002"] == "192.0.2.2"
+
+
+def test_xiq_unmanaged_switch_is_unknown_not_down(tmp_path):
+    """An UNMANAGED switch that XIQ reports disconnected must not read as down —
+    the site roll-up counts a down switch as degrading its site (sites.py)."""
+    engine = _db(tmp_path)
+    fake = FakeXiq()
+    fake.rows = [
+        {"id": 100001, "connected": True, "device_admin_state": "MANAGED"},
+        {"id": 100002, "connected": False, "device_admin_state": "UNMANAGED"},
+    ]
+    collector = XiqCollector(engine, fake, detail_enabled=False,
+                             clients_enabled=False, ssids_enabled=False)
+    asyncio.run(collector.run_once())
+
+    st = _status(engine)
+    assert st["100001"]["value"] == "up"
+    assert st["100002"]["value"] == "unknown"
+    assert st["100002"]["severity"] == "unknown"
+
+    # And a device that later comes under management transitions honestly.
+    fake.rows[1] = {"id": 100002, "connected": False, "device_admin_state": "MANAGED"}
+    asyncio.run(collector.run_once())
+    assert _status(engine)["100002"]["value"] == "down"
+    evs = db.fetch_all(engine, "SELECT old_value,new_value FROM state_events "
+                               "WHERE new_value='down' ORDER BY id")
+    assert [(e["old_value"], e["new_value"]) for e in evs] == [("unknown", "down")]
 
 
 def test_xiq_token_revocation_marks_blind_loud(tmp_path):
