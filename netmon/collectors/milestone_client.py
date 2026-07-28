@@ -15,6 +15,10 @@ import httpx
 log = logging.getLogger("netmon.collectors.milestone")
 
 TIMEOUT = 30.0
+# The hardware tree is ~2,500 records on this deployment and the 30s default
+# reliably timed out against the live gateway (measured 2026-07-28; 180s
+# succeeded). Scoped to that one call so every other failure stays fast.
+HARDWARE_TIMEOUT = 180.0
 
 
 class MilestoneError(Exception):
@@ -105,8 +109,19 @@ class MilestoneClient:
         return _items(data)
 
     async def hardware(self) -> list[dict]:
-        """Hardware (cameras' physical device) → model + network address that
-        the /cameras entities reference by hardwareId."""
-        async with await self._mkclient() as client:
+        """Hardware (a camera's physical host) → model, MAC and network address.
+
+        Cameras link to hardware through ``camera.relations.parent``, **not** a
+        ``hardwareId`` field — ``/cameras`` does not return one (confirmed live
+        2026-07-28; the previous docstring asserted otherwise and the collector's
+        lookup was built on it, which is why ``cameras.ip`` was always NULL).
+
+        Uses a longer timeout than the other calls: this is ~2,500 records and
+        the default 30s reliably hit ``httpx.ReadTimeout`` on the live gateway.
+        The short default stays everywhere else so an ordinary failure is still
+        fast.
+        """
+        async with httpx.AsyncClient(base_url=self._base, timeout=HARDWARE_TIMEOUT,
+                                     verify=self._verify) as client:
             data = await self._get(client, "/api/rest/v1/hardware")
         return _items(data)

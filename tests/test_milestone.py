@@ -209,3 +209,62 @@ def test_healthy_cycle_reports_nothing_degraded(tmp_path):
     row = db.fetch_one(engine, "SELECT payload FROM snapshot_cache WHERE `key`='milestone.overview'")
     payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
     assert payload["degraded"] == []
+
+
+def test_camera_hardware_resolves_via_relations_parent():
+    """/cameras has no hardwareId — the link is relations.parent.
+
+    Regression (2026-07-28): build_cameras keyed hw_by_id on
+    _first(cam, "hardwareId", "hardware"), a field this XProtect never returns.
+    The key was always "", the hardware dict always empty, and cameras.ip
+    unconditionally NULL — even though the fallback to hardware was written.
+    """
+    from datetime import datetime, timezone
+
+    from netmon.collectors.milestone import build_cameras
+
+    reg = {"CAM1": {"id": 1}}
+    cams = [{
+        "id": "CAM1",
+        "relations": {"parent": {"type": "hardware", "id": "HW-GUID-1"}},
+        "recordingEnabled": True,
+    }]
+    hw = {"HW-GUID-1": {"address": "http://192.0.2.10/", "model": "FAKE-CAM",
+                        "mac": "00:00:5E:00:53:01"}}
+    rows = build_cameras(cams, reg, hw, {}, datetime.now(timezone.utc))
+
+    assert len(rows) == 1
+    assert rows[0]["ip"] == "192.0.2.10", "URL-shaped address must reduce to a bare host"
+    assert rows[0]["model"] == "FAKE-CAM"
+    assert rows[0]["mac"] is not None, "hardware MAC is the only MAC source"
+
+
+def test_camera_hardware_link_tolerates_other_shapes():
+    """Other XProtect versions expose the link differently — keep working."""
+    from netmon.collectors.milestone import _hardware_key
+
+    assert _hardware_key({"relations": {"parent": {"type": "hardware", "id": "H1"}}}) == "H1"
+    # parent as a list, and relations carrying unrelated entries first
+    assert _hardware_key({"relations": {"parent": [
+        {"type": "recordingServer", "id": "RS1"},
+        {"type": "Hardware", "id": "H2"},
+    ]}}) == "H2"
+    assert _hardware_key({"relations": {"related": [{"type": "hardware", "guid": "H3"}]}}) == "H3"
+    # Legacy flat field still honoured.
+    assert _hardware_key({"hardwareId": "H4"}) == "H4"
+    # Nothing resolvable → empty, and build_cameras degrades to NULL ip.
+    assert _hardware_key({"relations": {"parent": {"type": "recordingServer", "id": "RS"}}}) == ""
+    assert _hardware_key({}) == ""
+
+
+def test_host_from_address_handles_ports_and_bare_hosts():
+    """5 devices carry a non-default port; the host alone belongs in cameras.ip."""
+    from netmon.collectors.milestone import _host_from_address
+
+    assert _host_from_address("http://192.0.2.10/") == "192.0.2.10"
+    assert _host_from_address("http://192.0.2.10:8080/") == "192.0.2.10"
+    assert _host_from_address("192.0.2.10") == "192.0.2.10"
+    assert _host_from_address("192.0.2.10:8080") == "192.0.2.10"
+    assert _host_from_address("https://cam.example.invalid/snap") == "cam.example.invalid"
+    assert _host_from_address(None) is None
+    assert _host_from_address("") is None
