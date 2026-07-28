@@ -29,6 +29,21 @@ dependencies = [
     # libs — which suits the offline-tolerant deploy (README §8/§9). Dev/test
     # still uses the stdlib sqlite3 driver (no dependency).
     "pymysql==1.1.1",
+    # Milestone Events/State live path (spec 11 D5, owner-approved 2026-07-28).
+    # The ONLY long-lived connection in the system; collectors/ws.py wraps it
+    # with reconnect + watchdog and stays transport-agnostic so tests need no
+    # socket. Read-only in effect: the ESS protocol is request/response, so the
+    # stream is established with startSession/addSubscription/getState and
+    # nothing that mutates VMS state (CLAUDE.md §3/§4.1).
+    #
+    # Version matters. websockets >= 13 moved the asyncio client to
+    # websockets.asyncio.client.connect, which takes `additional_headers`; the
+    # legacy top-level websockets.connect takes `extra_headers`. Passing the
+    # wrong kwarg fails late inside loop.create_connection() rather than at
+    # import, so netmon.collectors.ws_milestone binds whichever exists instead
+    # of assuming — see reference/zabbix/milestone/milestone_ess_state.py, which
+    # hit exactly that in production cron logs.
+    "websockets==16.1.1",
 ]
 
 [project.optional-dependencies]

@@ -50,15 +50,33 @@ Ported from `reference/zabbix/milestone/*`.
 
 ## Resilient WebSocket contract (`collectors/ws.py`)
 
-`ResilientWebSocket(connect, handle, *, watchdog_s, base_backoff, max_backoff)`:
-`connect` is an injectable async-context-manager factory (real
+`ResilientWebSocket(connect, handle, *, on_connect, watchdog_s, base_backoff,
+max_backoff)`: `connect` is an injectable async-context-manager factory (real
 `websockets.connect` in prod, a fake in tests); `handle(msg)` processes one
-message. `run()` loops: connect → reset backoff → pump messages (each resets
-the watchdog) → on drop/watchdog, back off (capped, doubling) and reconnect;
-`stop()` ends it cleanly. Counters (`reconnects`, `messages`) are exposed for
-health/observability. **The forced-disconnect test drives this with a scripted
-fake connection that drops mid-stream and asserts it reconnects and keeps
-handling messages.**
+message. `run()` loops: connect → **handshake** → reset backoff → pump messages
+(each resets the watchdog) → on drop/watchdog, back off (capped, doubling) and
+reconnect; `stop()` ends it cleanly. Counters (`reconnects`, `messages`) are
+exposed for health/observability. **The forced-disconnect test drives this with
+a scripted fake connection that drops mid-stream and asserts it reconnects and
+keeps handling messages.**
+
+**`on_connect` (added 2026-07-28 with the D5 sign-off).** The class was
+originally receive-only, which cannot drive Milestone's ESS: the protocol is
+request/response keyed by `commandId`, and the server sends nothing until a
+session and subscription exist. A receive-only client would sit silent until the
+watchdog killed it, forever. `on_connect(conn)` is awaited on each fresh
+connection — including after every reconnect, or the resubscribed stream is dead
+— and runs **before** `connected` is set and before the backoff resets, so a
+socket that opens but fails its handshake counts as a failed connection rather
+than becoming a hot retry loop that reports itself connected.
+
+**Permitted frames (read-only in effect, not silent).** Exactly three verbs,
+per `reference/zabbix/milestone/milestone_ess_state.py`: `startSession`,
+`addSubscription`, `getState`. Anything that mutates VMS state or controls a
+device (PTZ, recording start/stop, config change) remains forbidden under
+CLAUDE.md §4.1 and needs its own sign-off. Note the earlier D5 wording — "must
+never send a command frame" — was factually wrong about this protocol and is
+corrected here and in CLAUDE.md §3.
 
 ## UI
 
