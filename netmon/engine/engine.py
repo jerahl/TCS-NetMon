@@ -18,6 +18,15 @@ from netmon import db, health
 from netmon.config import EngineConfig
 from netmon.engine import rules
 from netmon.engine.notify import record_notification
+from netmon.state import REACHABILITY_FLAGS_SQL, device_down
+
+# A federated source reporting `down` is a claim, not a verdict — the native
+# poller is the tiebreaker (CLAUDE.md §1). Only this dimension+value pair gets
+# the tiebreaker applied; `source_status = blind` (the source_blind rule) must
+# still alert on its own, since a blind source is exactly the case where no
+# native probe can vouch for anything.
+SOURCE_STATUS = "source_status"
+DOWN = "down"
 
 log = logging.getLogger("netmon.engine")
 
@@ -102,12 +111,21 @@ class AlertEngine:
     async def run_once(self) -> int:
         now = datetime.now(timezone.utc)
         notified = 0
+        flags = self._reachability_flags()
         for rule in self._rules():
             matched: set[int] = set()
             for st in self._states(rule["dimension"]):
                 if not rules.evaluate(rule["condition"], st.get("value")):
                     continue
                 device_id = int(st["device_id"])
+                if rule["dimension"] == SOURCE_STATUS and str(st.get("value")) == DOWN:
+                    # The source says down; ask the native poller before
+                    # believing it. Without this the engine held a crit alert
+                    # open while the UI — which does apply the tiebreaker —
+                    # rendered the same device up (docs/alert-engine-stale-
+                    # open-alerts.md, 2026-07-28).
+                    if not device_down(flags.get(device_id, {})):
+                        continue
                 since = self._held_since(device_id, rule["dimension"], st.get("updated_at"))
                 if since is not None and (now - since).total_seconds() < int(rule["min_duration_s"] or 0):
                     continue  # not held long enough yet
@@ -133,7 +151,47 @@ class AlertEngine:
                 )
                 notified += 1
             self._close_resolved(rule["id"], matched, now)
+        self._close_orphaned(now)
         return notified
+
+    def _reachability_flags(self) -> dict[int, dict[str, Any]]:
+        """Per-device native/source reachability flags, for the tiebreaker.
+
+        One query per cycle rather than per matched device — the engine runs
+        over the whole fleet.
+        """
+        rows = db.fetch_all(
+            self.engine,
+            f"SELECT d.id AS device_id,\n{REACHABILITY_FLAGS_SQL}\n"
+            "FROM devices d "
+            "LEFT JOIN device_state s ON s.device_id = d.id "
+            "WHERE d.enabled = 1 "
+            "GROUP BY d.id",
+        )
+        return {int(r["device_id"]): dict(r) for r in rows}
+
+    def _close_orphaned(self, now: datetime) -> None:
+        """Close alerts whose rule is disabled or gone.
+
+        ``_close_resolved`` only runs inside the enabled-rule loop, so
+        disabling a rule used to orphan its open alerts permanently — nothing
+        left could ever close them, and they kept inflating the Problems
+        console and site ``problems`` counts. Runs once per cycle, after the
+        loop. There is no resolution-note column on ``alerts``, so the close is
+        logged instead of annotated.
+        """
+        orphans = db.fetch_all(
+            self.engine,
+            "SELECT a.id, a.device_id, a.rule_id FROM alerts a "
+            "LEFT JOIN alert_rules r ON r.id = a.rule_id "
+            "WHERE a.closed_at IS NULL AND (r.id IS NULL OR r.enabled = 0)",
+        )
+        for row in orphans:
+            db.execute(self.engine, "UPDATE alerts SET closed_at = :now WHERE id = :id",
+                       {"now": now, "id": row["id"]})
+        if orphans:
+            log.info("engine: closed %d alert(s) orphaned by a disabled/deleted rule "
+                     "(rule_ids=%s)", len(orphans), sorted({r["rule_id"] for r in orphans}))
 
     def _close_resolved(self, rule_id: int, matched: set[int], now: datetime) -> None:
         for row in db.fetch_all(
