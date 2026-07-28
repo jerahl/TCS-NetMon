@@ -122,15 +122,41 @@ class Poller:
     def _apply(self, devices: list[dict[str, Any]], dimension: str, results: dict[str, bool]) -> int:
         now = datetime.now(timezone.utc)
         written = 0
+        ambiguous = self._ambiguous_ips(devices)
         for d in devices:
             ip = d["mgmt_ip"]
             if ip not in results:
                 # No verdict this sweep (e.g. fping didn't report it) — leave
                 # prior state untouched rather than fabricate one.
                 continue
+            if ip in ambiguous:
+                # More than one enabled device claims this address, so a single
+                # probe cannot say which one answered. Writing the verdict to
+                # all of them fabricates state: a decommissioned switch reads
+                # `up` because its replacement answers at the same IP. Refuse
+                # the verdict and leave prior state untouched (CLAUDE.md §4.5).
+                continue
             self._write(int(d["id"]), dimension, results[ip], now)
             written += 1
+        if ambiguous:
+            log.warning(
+                "poller: %d mgmt_ip(s) claimed by more than one enabled device — "
+                "no %s verdict written for %d device row(s); fix the registry "
+                "(duplicate/stale entries): %s",
+                len(ambiguous), dimension,
+                sum(1 for d in devices if d["mgmt_ip"] in ambiguous),
+                ", ".join(sorted(ambiguous)[:10]) + (" …" if len(ambiguous) > 10 else ""),
+            )
         return written
+
+    @staticmethod
+    def _ambiguous_ips(devices: list[dict[str, Any]]) -> set[str]:
+        """mgmt_ips claimed by more than one enabled device in this sweep."""
+        seen: dict[str, int] = {}
+        for d in devices:
+            ip = d["mgmt_ip"]
+            seen[ip] = seen.get(ip, 0) + 1
+        return {ip for ip, n in seen.items() if n > 1}
 
     def _write(self, device_id: int, dimension: str, ok: bool, now: datetime) -> None:
         transition = self.tracker.observe(device_id, dimension, ok)

@@ -162,3 +162,85 @@ def test_no_targets_is_not_a_blind_sweep(tmp_path):
     h = db.fetch_one(engine, "SELECT * FROM collector_health WHERE name='poller_ping'")
     assert h["consecutive_failures"] == 0
     assert h["last_success"] is not None and h["records_written"] == 0
+
+
+def test_shared_mgmt_ip_gets_no_verdict(tmp_path):
+    """One probe cannot say WHICH device answered at a shared address.
+
+    Regression (2026-07-28): verdicts are keyed by IP and were written to every
+    enabled row claiming it, so a decommissioned switch read `up` because its
+    replacement answers at the same address — 34 rows across 17 duplicated IPs
+    were affected in production.
+    """
+    engine = _make_db(tmp_path)
+    with engine.begin() as conn:
+        # A second enabled device claiming the SAME address as the fixture's.
+        conn.execute(text(
+            "INSERT INTO devices (name, site, device_type, mgmt_ip, snmp_capable, enabled) "
+            "VALUES ('BHS-DEAD-AP','BHS','ap','192.0.2.11',0,1)"
+        ))
+        # …and one unambiguous device, which must still be written.
+        conn.execute(text(
+            "INSERT INTO devices (name, site, device_type, mgmt_ip, snmp_capable, enabled) "
+            "VALUES ('BHS-56-Office','BHS','ap','192.0.2.12',0,1)"
+        ))
+    cfg = PollerConfig(enabled=True)
+
+    async def all_alive(ips, _cfg):
+        return {ip: True for ip in ips}
+
+    poller = Poller(engine, cfg, ping_sweep=all_alive)
+    written = asyncio.run(poller.sweep_ping())
+
+    assert written == 1, "only the unambiguous device should be written"
+    rows = db.fetch_all(engine, "SELECT d.name, s.value FROM device_state s "
+                                "JOIN devices d ON d.id = s.device_id")
+    assert [(r["name"], r["value"]) for r in rows] == [("BHS-56-Office", "up")]
+    # The contested address produced no state at all — not a guess either way.
+    assert not any(r["name"] in ("BHS-56-Hallway", "BHS-DEAD-AP") for r in rows)
+
+
+def test_shared_ip_still_counts_as_a_non_blind_sweep(tmp_path):
+    """Refusing ambiguous verdicts must not look like a blind probe.
+
+    If every target were ambiguous, `written` is 0 — but fping DID return
+    verdicts, so this is not SweepBlindError territory and must not be
+    recorded as a failure.
+    """
+    engine = _make_db(tmp_path)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO devices (name, site, device_type, mgmt_ip, snmp_capable, enabled) "
+            "VALUES ('BHS-DEAD-AP','BHS','ap','192.0.2.11',0,1)"
+        ))
+    cfg = PollerConfig(enabled=True)
+
+    async def all_alive(ips, _cfg):
+        return {ip: True for ip in ips}
+
+    poller = Poller(engine, cfg, ping_sweep=all_alive)
+    asyncio.run(poller.run_ping())
+
+    h = db.fetch_one(engine, "SELECT * FROM collector_health WHERE name='poller_ping'")
+    assert h["consecutive_failures"] == 0
+    assert h["last_success"] is not None and h["records_written"] == 0
+    assert db.fetch_one(engine, "SELECT * FROM device_state") is None
+
+
+def test_disabled_device_does_not_make_an_ip_ambiguous(tmp_path):
+    """Only *enabled* rows contend — disabling the stale duplicate is the fix,
+    and it must restore verdicts for the surviving device."""
+    engine = _make_db(tmp_path)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO devices (name, site, device_type, mgmt_ip, snmp_capable, enabled) "
+            "VALUES ('BHS-DEAD-AP','BHS','ap','192.0.2.11',0,0)"   # enabled = 0
+        ))
+    cfg = PollerConfig(enabled=True)
+
+    async def all_alive(ips, _cfg):
+        return {ip: True for ip in ips}
+
+    poller = Poller(engine, cfg, ping_sweep=all_alive)
+    assert asyncio.run(poller.sweep_ping()) == 1
+    assert db.fetch_one(engine, "SELECT value FROM device_state")["value"] == "up"
