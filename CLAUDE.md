@@ -23,8 +23,8 @@ The data strategy is unchanged from v1.0 where a source platform already has the
 Three things the sources can *not* provide are NetMon's own collection:
 
 1. **The native poller** — ground truth against registered management IPs: ICMP up/down (`fping` sweep, 60s) and SNMP-responding (`snmpget` sysUpTime, 5 min). Tiebreaker when a source disagrees with reality; canary when a source platform is unreachable.
-2. **SNMP inventory sweeps** *(⛔ D6-gated; spec 10 §4, spec 11 §5)* — read-only `snmpbulkwalk` subprocess sweeps of the switch fleet (ports/PoE, FDB, LLDP, VLANs, stack/env). The ZCD switch experience (port faceplates, FDB⋈PF identity pane) came from Zabbix's direct SNMP polling, which no federated source replaces — this is **core scope**, not an enhancement.
-3. **Direct camera health** *(⛔ D10-gated, post-parity 11.x; spec 13)* — read-only SNMP (`snmpget`/`snmpbulkwalk`, same net-snmp path as D6, no new dependency) against the cameras Milestone already registers, for host health Milestone can't federate: CPU, **kernel-uptime reboot detection**, filesystem fill, wired-interface up/down + bandwidth, per-imager encoder bitrate, and VCA motion. Bosch profile first (owner's Zabbix template in `reference/zabbix/milestone/`), vendor-extensible; `[camera_snmp]` default-off, alerts shadow-first. Beyond ZCD parity — an enhancement, not v1 parity scope.
+2. **SNMP inventory sweeps** *(✅ D6 approved 2026-07-15, built as Phase 10.1; spec 10 §4, spec 11 §5)* — read-only `snmpbulkwalk` subprocess sweeps of the switch fleet (ports/PoE, FDB, LLDP, VLANs, stack/env). The ZCD switch experience (port faceplates, FDB⋈PF identity pane) came from Zabbix's direct SNMP polling, which no federated source replaces — this is **core scope**, not an enhancement.
+3. **Direct camera health** *(✅ D10 approved 2026-07-28, build in post-parity 11.x; spec 13)* — read-only SNMP (`snmpget`/`snmpbulkwalk`, same net-snmp path as D6, no new dependency) against the cameras Milestone already registers, for host health Milestone can't federate: CPU, **kernel-uptime reboot detection**, filesystem fill, wired-interface up/down + bandwidth, per-imager encoder bitrate, and VCA motion. Bosch profile first (owner's Zabbix template in `reference/zabbix/milestone/`), vendor-extensible; `[camera_snmp]` default-off, alerts shadow-first. Beyond ZCD parity — an enhancement, not v1 parity scope.
 
 NetMon also owns **alerting** (rules → dedupe → maintenance windows → SMTP email) because Zabbix's alerting is being retired for these domains.
 
@@ -37,7 +37,7 @@ NetMon also owns **alerting** (rules → dedupe → maintenance windows → SMTP
 - The ZCD Zabbix Status page (replaced by a **NetMon Status** page over `collector_health` + supervisor stats) and the Cortex XDR mock page (dropped — spec 11 D8).
 - FortiGate — **deferred** to post-parity phase 11.x (spec 11 D1); nav deep-links to Zabbix meanwhile.
 - Long-term metric time-series / graphs — source platforms retain their own history. NetMon's history is the `state_events` transition log, plus (D3 **approved 2026-07-15, built as Phase 10.6**) one **bounded 24h ring-buffer** table (`state_samples`, auto-pruned) to power the ZCD-parity charts. Nothing beyond that window, ever.
-- Write paths to any source platform. **Every integration is read-only.** Exception path: spec 11 D4 (⛔) proposes porting ZCD's four operator write actions (PoE cycle, AP reboot, PF reevaluate/restart-port) as a post-cutover phase — role-gated, audit-logged, per-action config flags, default off. Until D4 is signed off, render disabled buttons with "managed in <source>" tooltips. If any other task appears to require a write to a source, stop and flag it.
+- Write paths to any source platform. **Every integration is read-only.** Exception path: spec 11 D4 (✅ **approved 2026-07-28**, build in 11.x post-cutover) ports ZCD's four operator write actions (PoE cycle, AP reboot, PF reevaluate/restart-port) as a post-cutover phase — role-gated, audit-logged, per-action config flags, default off. D4 is signed off but deliberately **not built until after cutover** — read-only-first holds through Phase 8; until it ships, render disabled buttons with "managed in <source>" tooltips. If any other task appears to require a write to a source, stop and flag it.
 - Notification channels beyond SMTP (no Teams/webhooks/SMS in v1).
 - Multi-tenant / multi-district features.
 
@@ -45,8 +45,8 @@ NetMon also owns **alerting** (rules → dedupe → maintenance windows → SMTP
 
 - **Python 3.11+** (3.12 preferred; the deploy VM runs Debian 12 / Python 3.11), single package `netmon`, FastAPI app served by uvicorn behind nginx.
 - **MariaDB** via **SQLAlchemy Core** (no ORM/declarative models — explicit, SQL-shaped queries). Schema via plain numbered migration scripts in `migrations/` applied by a small runner; no Alembic.
-- **Allowed third-party dependencies:** `fastapi`, `uvicorn`, `sqlalchemy`, `httpx`, `pymysql` (MariaDB DBAPI driver — owner-approved 2026-07-11), `python3-saml` (ClassLink SSO — owner-approved 2026-07-13; links `xmlsec1`/`libxml2` system libs, installed at deploy time). Pinned in a lockfile. **Do not add any other dependency without stopping and asking.** Prefer stdlib. ICMP/SNMP are subprocess calls to `fping` / `snmpget` / (⛔ D6) `snmpbulkwalk` — do not introduce a Python SNMP library.
-  - `websockets` (Milestone Events/State live path) is **recommended-pending sign-off** (⛔ spec 11 D5). `collectors/ws.py` is built and tested against a fake transport; do not wire a live socket until the dependency is approved and pinned.
+- **Allowed third-party dependencies:** `fastapi`, `uvicorn`, `sqlalchemy`, `httpx`, `pymysql` (MariaDB DBAPI driver — owner-approved 2026-07-11), `websockets` (Milestone Events/State live path — owner-approved 2026-07-28), `python3-saml` (ClassLink SSO — owner-approved 2026-07-13; links `xmlsec1`/`libxml2` system libs, installed at deploy time). Pinned in a lockfile. **Do not add any other dependency without stopping and asking.** Prefer stdlib. ICMP/SNMP are subprocess calls to `fping` / `snmpget` / `snmpbulkwalk` (D6, approved) — do not introduce a Python SNMP library.
+  - `websockets` is **approved (2026-07-28, spec 11 D5)** and must be pinned in the lockfile. `collectors/ws.py` + `tests/test_ws.py` were built against a fake transport; the live socket is a **read-only subscribe** to the Milestone Events/State path — it must never send a command frame.
   - `ldap3` is retired (SAML claims carry roles; no directory bind).
 - **Frontend:** React components ported from `jerahl/ZabbixCustomDashboard` — including the spec-10 "Zabbix Extreme" design port — built with **esbuild** to static files served by FastAPI. `leaflet` 1.9.4 (site map — owner-approved 2026-07-14) is bundled locally like React. No Babel-standalone, no unpkg/CDN loads, no framework migration.
 - **Auth:** Single sign-on. NetMon is a **SAML 2.0 Service Provider**; **ClassLink** is the IdP. Assertion `role`/`group_ids` claims map to roles (`viewer` < `operator` < `admin`); NetMon issues its own server-side session cookie and never handles a password. Break-glass local account (PBKDF2, stdlib) and a dev bypass (refused when `secure_cookies=true`) remain.
@@ -123,13 +123,13 @@ netmon/
 | Phase | Deliverable | Gate |
 |---|---|---|
 | **10.0 Foundations** | `/api/status` dimension fix; `/api/events` filters + `/api/collector-health`; `snapshot_cache` + `alerts.assigned_to` migration; design shell/nav/primitives port; Events + Problems consoles; **NetMon Status page**; seed `--sites-from-db`; nav disposition (Servers/ZbxStatus/XDR/FortiGate) | — |
-| **10.1 Switching** | `snmp_inventory` sweeps + 004-tables; switch API; 8-tab Switches page incl. FDB⋈PF port-detail pane | ⛔ D6 |
+| **10.1 Switching** | `snmp_inventory` sweeps + 004-tables; switch API; 8-tab Switches page incl. FDB⋈PF port-detail pane | ✅ D6 |
 | **10.2 Wireless** | XIQ detail/clients/SSID cycles (rate budget verified); wireless API; XIQ page + AP Detail | — |
 | **10.3 Identity** | `pf_nodes` persistence (in-memory snapshot deleted); NAC API rework; five PF pages | — |
-| **10.4 Surveillance + VoIP** | camera/RS/storage persistence + `milestone.overview`; ESS WebSocket wiring; camera JPEG proxy; trunks/extensions + SystemStatus | ⛔ D5 |
+| **10.4 Surveillance + VoIP** | camera/RS/storage persistence + `milestone.overview`; ESS WebSocket wiring; camera JPEG proxy; trunks/extensions + SystemStatus | ✅ D5 |
 | **10.5 Global + Search** | `/api/summary`, `/api/sites` cards, `/api/search` + ⌘K palette; Global page; staleness badging pass | — |
 | **10.6 History buffer** | `state_samples` (24h ring, pruned) + sampler + `/api/history` + chart slots | ✅ D3 (built 2026-07-17) |
-| **11.x Post-parity** | FortiGate collector + page (D1); operator write actions with audit log (⛔ D4); direct camera SNMP monitoring (⛔ D10 — spec 13); EAPS/SFP-DOM extras | ⛔ D4/D10 |
+| **11.x Post-parity** | FortiGate collector + page (D1); operator write actions with audit log (✅ D4); direct camera SNMP monitoring (✅ D10 — spec 13); EAPS/SFP-DOM extras | ✅ D4/D10 (2026-07-28) — post-cutover, default-off |
 | **8 — Parallel run & cutover** *(owner-gated)* | ≥4 weeks shadow comparison; owner flips `shadow=false`; Zabbix network/wireless/voice/camera hosts disabled (configs exported as rollback); Zabbix remains for servers | owner |
 
 **Cutover criterion:** an operator can do everything they did in ZabbixCustomDashboard *for the in-scope domains* without opening Zabbix — same pages, same drill-downs, honest staleness — and the shadow-alert diff has run clean for the agreed window.
@@ -143,7 +143,7 @@ netmon/
 
 ## 9. Open questions (tracked; do not guess answers)
 
-**⛔ Gates awaiting owner sign-off (spec 11 §6, recommendations recorded):** D4 (operator write actions, post-cutover), D5 (`websockets` dependency), D7 (camera JPEG proxy), D10 (direct camera SNMP monitoring, post-parity 11.x — spec 13). **Resolved:** D3 (24h ring buffer — approved 2026-07-15, built Phase 10.6) and D6 (`snmpbulkwalk` sweeps — approved, built Phase 10.1).
+**✅ All gates D1–D10 are signed off — none remain blocking.** D3 (24h ring buffer, 2026-07-15 → built 10.6) and D6 (`snmpbulkwalk` sweeps, 2026-07-15 → built 10.1); **D4, D5, D7, D10 decided 2026-07-28**: D5 approve-and-wire (`websockets` pinned, read-only subscribe); D7 approved *after* a prerequisite — all 2,659 cameras have no `mgmt_ip`, and the proxy must resolve only registered camera addresses (never a caller-supplied URL); D4 and D10 approved for **11.x post-cutover**, both default-off. D10 additionally needs a load assessment (~2,659 SNMP targets, ~17× the switch fleet) and must use `state.native_trustworthy`.
 
 **Carried over:** XIQ rate limits at production device counts (validate the ≈1.3–1.6k calls/h budget); 3CX v20 surface for extensions/active calls/queues (fixtures first); rConfig config-diff pane (on-click read-through vs. link-out — spec 10 Q5); `wireless_clients` scale/PII acceptance (~9–12k rows with usernames/MACs — spec 10 Q8); SMTP relay; SP cert rotation.
 
