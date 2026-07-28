@@ -16,6 +16,7 @@ from sqlalchemy.engine import Engine
 
 from netmon import db
 from netmon.api.deps import get_engine, require_role
+from netmon.state import REACHABILITY_FLAGS_SQL, device_down, device_reachable
 from netmon.models.schemas import (
     FiberLink,
     Role,
@@ -44,15 +45,10 @@ router = APIRouter(tags=["map"])
 # the only devices whose being down degrades a site — a down camera/AP/phone
 # does not, and a mere warn (port errors, a blind source) never does
 # (spec 09; owner directive 2026-07-17).
-_DEVICE_FLAGS_SQL = """
+_DEVICE_FLAGS_SQL = f"""
 SELECT d.site AS site,
        d.device_type AS device_type,
-       MAX(CASE WHEN s.dimension = 'ping' AND s.value = 'up' THEN 1 ELSE 0 END) AS ping_up,
-       MAX(CASE WHEN s.dimension = 'ping' AND s.value = 'down' THEN 1 ELSE 0 END) AS ping_down,
-       MAX(CASE WHEN s.dimension = 'source_status' AND s.value = 'up' THEN 1 ELSE 0 END) AS source_up,
-       MAX(CASE WHEN s.dimension = 'source_status' AND s.value = 'down' THEN 1 ELSE 0 END) AS source_down,
-       MAX(CASE WHEN s.dimension = 'snmp' AND s.value = 'up' THEN 1 ELSE 0 END) AS snmp_up,
-       MAX(CASE WHEN s.device_id IS NULL THEN 0 ELSE 1 END) AS has_state
+{REACHABILITY_FLAGS_SQL}
 FROM devices d
 LEFT JOIN device_state s ON s.device_id = d.id
 WHERE d.enabled = 1 AND d.site IS NOT NULL
@@ -120,16 +116,9 @@ def rollup_site(
     """
     total = len(device_flags)
 
-    def _reachable(d) -> bool:
-        # Has a definitive reading in a reachability dimension. `snmp_up`
-        # counts (it proves alive); a bare `snmp` down does not.
-        return bool(d.get("ping_up") or d.get("ping_down")
-                    or d.get("source_up") or d.get("source_down")
-                    or d.get("snmp_up"))
-
-    def _down(d) -> bool:
-        native_up = d.get("ping_up") or d.get("snmp_up")
-        return bool(d.get("ping_down") or (d.get("source_down") and not native_up))
+    # Shared with the switch navigator — see netmon.state (single source of
+    # truth for these two predicates).
+    _reachable, _down = device_reachable, device_down
 
     reachable = sum(1 for d in device_flags if _reachable(d))
     down = sum(1 for d in device_flags if _down(d))

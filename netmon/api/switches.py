@@ -18,6 +18,7 @@ from sqlalchemy.engine import Engine
 from netmon import db
 from netmon.api.deps import get_engine, require_role
 from netmon.models.schemas import Role
+from netmon.state import REACHABILITY_FLAGS_SQL, device_down, device_reachable
 
 router = APIRouter(prefix="/api/switches", tags=["switches"])
 
@@ -39,7 +40,14 @@ def list_switches(
     engine: Engine = Depends(get_engine),
     _user=Depends(require_role(Role.viewer)),
 ) -> list[dict]:
-    """Switches with a port-state roll-up for the navigator/KPI strip."""
+    """Switches with a port-state roll-up + reachability for the navigator.
+
+    ``status`` is the switch's own up/down (``up|down|unknown``), derived from
+    the same predicates the site roll-up uses (netmon.state) so the navigator
+    and the site cards can never disagree about whether a switch is down. It is
+    deliberately separate from the port counts: a reachable switch with every
+    access port idle is healthy, not down.
+    """
     rows = db.fetch_all(
         engine,
         "SELECT d.id, d.name, d.site, d.mgmt_ip, "
@@ -52,7 +60,36 @@ def list_switches(
         "GROUP BY d.id, d.name, d.site, d.mgmt_ip "
         "ORDER BY d.site, d.name",
     )
-    return [dict(r) for r in rows]
+    flags = {
+        r["device_id"]: dict(r)
+        for r in db.fetch_all(
+            engine,
+            f"SELECT d.id AS device_id,\n{REACHABILITY_FLAGS_SQL}\n"
+            "FROM devices d "
+            "LEFT JOIN device_state s ON s.device_id = d.id "
+            "WHERE d.device_type = 'switch' AND d.enabled = 1 "
+            "GROUP BY d.id",
+        )
+    }
+    out = []
+    for r in rows:
+        sw = dict(r)
+        f = flags.get(sw["id"], {})
+        if not f.get("has_state") or not device_reachable(f):
+            sw["status"] = "unknown"   # no reading — must never render as up
+        elif device_down(f):
+            sw["status"] = "down"
+        else:
+            sw["status"] = "up"
+        # Which dimension carried the verdict, so the UI can explain itself.
+        sw["status_source"] = (
+            "ping" if (f.get("ping_up") or f.get("ping_down"))
+            else "snmp" if f.get("snmp_up")
+            else "source" if (f.get("source_up") or f.get("source_down"))
+            else None
+        )
+        out.append(sw)
+    return out
 
 
 @router.get("/{sid}")
