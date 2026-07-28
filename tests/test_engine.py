@@ -214,3 +214,34 @@ def test_deleted_rule_closes_its_orphaned_alerts(tmp_path):
     db.execute(engine, "DELETE FROM alert_rules WHERE name = 'device_down'")
     asyncio.run(eng.run_once())
     assert db.fetch_all(engine, "SELECT * FROM alerts WHERE closed_at IS NULL") == []
+
+
+def test_contested_ip_verdict_cannot_vouch_for_a_dead_device(tmp_path):
+    """A shared-address probe must not close an alert.
+
+    Regression (2026-07-28): rows written before the poller's ambiguous-IP
+    guard existed closed 15 source_down alerts, including devices named
+    `oak-DEAD` and `DEAD_AP` — a live neighbour answering at the same address
+    vouched for hardware that was unplugged.
+    """
+    from netmon.state import device_down, device_reachable
+
+    dead = {"source_down": 1, "ping_up": 1, "has_state": 1, "ip_claimants": 2}
+    assert device_down(dead) is True, "the source's down must stand"
+
+    sole = {"source_down": 1, "ping_up": 1, "has_state": 1, "ip_claimants": 1}
+    assert device_down(sole) is False, "a trustworthy ping still wins"
+
+    # A device whose ONLY evidence is a contested probe is unknown, not up.
+    only_contested = {"ping_up": 1, "has_state": 1, "ip_claimants": 2}
+    assert device_reachable(only_contested) is False
+    assert device_down(only_contested) is False
+
+    # A contested ping=down must not mark a device down either — it may be the
+    # neighbour that is unreachable.
+    contested_down = {"ping_down": 1, "has_state": 1, "ip_claimants": 3}
+    assert device_down(contested_down) is False
+
+    # Missing column => legacy caller => trusted, so behaviour is unchanged.
+    legacy = {"source_down": 1, "ping_up": 1, "has_state": 1}
+    assert device_down(legacy) is False
