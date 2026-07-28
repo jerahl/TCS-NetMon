@@ -27,6 +27,27 @@ PING = "ping"
 SNMP = "snmp"
 
 
+class SweepBlindError(RuntimeError):
+    """A prober returned no verdicts at all for a non-empty target list.
+
+    Distinct from "every target is down": a down target still produces a
+    verdict. Zero verdicts means the probe never ran — a missing capability
+    (fping needs CAP_NET_RAW; a sandboxed unit with an empty
+    CapabilityBoundingSet silently strips it), a blocked binary, or a
+    misbuilt command line. That is a blind sweep, and CLAUDE.md §4.5 says
+    blind must never record as healthy.
+    """
+
+
+def _require_verdicts(dimension: str, targets: list[str], results: dict[str, bool]) -> None:
+    """Raise if a non-empty sweep produced nothing. No targets is legitimate."""
+    if targets and not results:
+        raise SweepBlindError(
+            f"{dimension} sweep returned 0 verdicts for {len(targets)} target(s) — "
+            f"the probe did not run (check the binary and, for fping, CAP_NET_RAW)"
+        )
+
+
 def _severity(dimension: str, settled: str) -> str:
     if settled == "up":
         return "ok"
@@ -84,6 +105,7 @@ class Poller:
         devices = self._devices(PING)
         ips = [d["mgmt_ip"] for d in devices]
         results = await self._ping_sweep(ips, self.cfg)
+        _require_verdicts(PING, ips, results)
         return self._apply(devices, PING, results)
 
     async def sweep_snmp(self) -> int:
@@ -94,20 +116,47 @@ class Poller:
         devices = self._devices(SNMP)
         ips = [d["mgmt_ip"] for d in devices]
         results = await self._snmp_sweep(ips, self.cfg)
+        _require_verdicts(SNMP, ips, results)
         return self._apply(devices, SNMP, results)
 
     def _apply(self, devices: list[dict[str, Any]], dimension: str, results: dict[str, bool]) -> int:
         now = datetime.now(timezone.utc)
         written = 0
+        ambiguous = self._ambiguous_ips(devices)
         for d in devices:
             ip = d["mgmt_ip"]
             if ip not in results:
                 # No verdict this sweep (e.g. fping didn't report it) — leave
                 # prior state untouched rather than fabricate one.
                 continue
+            if ip in ambiguous:
+                # More than one enabled device claims this address, so a single
+                # probe cannot say which one answered. Writing the verdict to
+                # all of them fabricates state: a decommissioned switch reads
+                # `up` because its replacement answers at the same IP. Refuse
+                # the verdict and leave prior state untouched (CLAUDE.md §4.5).
+                continue
             self._write(int(d["id"]), dimension, results[ip], now)
             written += 1
+        if ambiguous:
+            log.warning(
+                "poller: %d mgmt_ip(s) claimed by more than one enabled device — "
+                "no %s verdict written for %d device row(s); fix the registry "
+                "(duplicate/stale entries): %s",
+                len(ambiguous), dimension,
+                sum(1 for d in devices if d["mgmt_ip"] in ambiguous),
+                ", ".join(sorted(ambiguous)[:10]) + (" …" if len(ambiguous) > 10 else ""),
+            )
         return written
+
+    @staticmethod
+    def _ambiguous_ips(devices: list[dict[str, Any]]) -> set[str]:
+        """mgmt_ips claimed by more than one enabled device in this sweep."""
+        seen: dict[str, int] = {}
+        for d in devices:
+            ip = d["mgmt_ip"]
+            seen[ip] = seen.get(ip, 0) + 1
+        return {ip for ip, n in seen.items() if n > 1}
 
     def _write(self, device_id: int, dimension: str, ok: bool, now: datetime) -> None:
         transition = self.tracker.observe(device_id, dimension, ok)

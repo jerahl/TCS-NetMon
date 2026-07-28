@@ -105,6 +105,13 @@ class SecurityConfig:
 @dataclass(frozen=True)
 class PollerConfig:
     enabled: bool = False
+    # Run the sweeps as in-process supervised tasks. Set false when a separate
+    # unit (netmon-poller.service) owns them instead: fping needs CAP_NET_RAW,
+    # which the hardened web unit deliberately does not grant. `enabled` still
+    # describes whether the poller runs *at all* — so /api/health stays honest
+    # either way. File-only and absent from the settings registry on purpose:
+    # flipping it from the web could stop all polling with no unit to take over.
+    in_process: bool = True
     ping_interval_s: int = 60
     snmp_interval_s: int = 300
     fail_threshold: int = 3
@@ -343,6 +350,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
 
     poller = PollerConfig(
         enabled=_as_bool(parser.get("poller", "enabled", fallback="false")),
+        in_process=_as_bool(parser.get("poller", "in_process", fallback="true")),
         ping_interval_s=_pint("ping_interval_s", 60),
         snmp_interval_s=_pint("snmp_interval_s", 300),
         fail_threshold=_pint("fail_threshold", 3),

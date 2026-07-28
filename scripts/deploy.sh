@@ -321,17 +321,74 @@ SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=
 # Only these paths are writable; the whole app tree stays read-only.
 ReadWritePaths=$STATE_DIR $LOG_DIR
-# NOTE (Phase 2): the native poller shells out to fping/snmpget. fping needs
-# raw sockets — when the poller lands, either grant this service
-# AmbientCapabilities=CAP_NET_RAW (and drop NoNewPrivileges if using setuid
-# fping), or run the poller as its own less-restricted unit. Left off here
-# because Phase 1 only serves the API.
+# The native poller's fping needs CAP_NET_RAW, which this unit deliberately
+# does NOT grant — NoNewPrivileges=yes voids fping's file capability and the
+# CapabilityBoundingSet above is empty, so a raw socket is impossible here.
+# ${SERVICE_NAME}-poller.service owns the sweeps instead (see
+# install_systemd_poller and docs/runbooks/poller.md). Keep the web process
+# capability-free; do not "fix" the poller by adding capabilities here.
 
 [Install]
 WantedBy=multi-user.target
 EOF
   run systemctl daemon-reload
   ok "unit installed: ${SERVICE_NAME}.service"
+}
+
+# The poller runs in its own unit purely because fping needs CAP_NET_RAW and
+# the web unit must not have it. Same hardening otherwise, including
+# NoNewPrivileges=yes — ambient capabilities are granted by systemd before
+# exec, so they survive it (file capabilities do not, which is the whole bug
+# this split fixes). Set [poller] in_process = false in the conf so the web
+# app's supervisor does not also register the sweeps and double-write
+# device_state with a second hysteresis tracker.
+install_systemd_poller() {
+  log "installing hardened poller unit"
+  write_file "/etc/systemd/system/${SERVICE_NAME}-poller.service" 0644 root:root <<EOF
+[Unit]
+Description=TCS NetMon native poller (fping ICMP + snmpget sysUpTime sweeps)
+After=network-online.target ${SERVICE_NAME}.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=$APP_USER
+Group=$APP_GROUP
+Environment=NETMON_CONF=$CONF
+WorkingDirectory=$STATE_DIR
+ExecStart=$VENV/bin/python -m netmon.poller --loop
+Restart=on-failure
+RestartSec=10
+# --- sandboxing / hardening (mirrors the web unit, plus raw sockets) ---
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# fping's raw ICMP socket — the one privilege the web unit withholds.
+CapabilityBoundingSet=CAP_NET_RAW
+AmbientCapabilities=CAP_NET_RAW
+ReadWritePaths=$STATE_DIR $LOG_DIR
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  run systemctl daemon-reload
+  ok "unit installed: ${SERVICE_NAME}-poller.service"
 }
 
 # ─────────────────────────────── nginx / TLS ────────────────────────────────
@@ -530,6 +587,7 @@ cmd_install() {
   build_frontend
   setup_config
   install_systemd
+  install_systemd_poller
   install_nginx
   setup_firewall
   setup_fail2ban
@@ -560,6 +618,7 @@ cmd_update() {
   build_frontend      # rebuild UI bundle if npm is present
   setup_config        # reassert perms; never clobber operator secrets
   install_systemd     # pick up any unit changes
+  install_systemd_poller
   if validate_config; then
     run_migrations
     start_service
@@ -579,6 +638,7 @@ cmd_secure() {
   create_dirs
   setup_config        # reassert config perms
   install_systemd     # reassert hardened unit
+  install_systemd_poller
   install_nginx       # reassert TLS + headers
   setup_firewall
   setup_fail2ban

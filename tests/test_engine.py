@@ -103,3 +103,145 @@ def test_engine_maintenance_suppresses_notification(tmp_path):
     note = db.fetch_one(engine, "SELECT * FROM notifications")
     assert note["shadow"] == 1
     assert "suppressed: maintenance" in (note["payload_summary"] or "")
+
+
+def _source_rule(engine):
+    """Add the two source_status rules the deploy VM actually runs."""
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO alert_rules (name, dimension, `condition`, severity, min_duration_s, enabled) "
+            "VALUES ('device_source_down','source_status','{\"op\":\"eq\",\"value\":\"down\"}','crit',0,1)"
+        ))
+        conn.execute(text(
+            "INSERT INTO alert_rules (name, dimension, `condition`, severity, min_duration_s, enabled) "
+            "VALUES ('source_blind','source_status','{\"op\":\"eq\",\"value\":\"blind\"}','warn',0,1)"
+        ))
+
+
+def _set_dim(engine, device_id, dimension, value):
+    db.upsert(engine, "device_state", {"device_id": device_id, "dimension": dimension},
+              {"value": value, "severity": "crit", "source": "test",
+               "updated_at": datetime.now(timezone.utc)})
+
+
+def test_source_down_yields_to_a_native_probe(tmp_path):
+    """A source's `down` is a claim; the native poller is the tiebreaker.
+
+    Regression (2026-07-28): 4 of 55 open alerts were devices the UI showed as
+    up — the engine read source_status in isolation while rollup_site applied
+    the tiebreaker, so the site card said `up` next to `problems=1 crit`.
+    """
+    engine = _db(tmp_path)
+    _source_rule(engine)
+    eng = AlertEngine(engine, _cfg())
+
+    # XIQ says down, but the device answers SNMP.
+    _set_dim(engine, 1, "source_status", "down")
+    _set_dim(engine, 1, "snmp", "up")
+    asyncio.run(eng.run_once())
+    assert db.fetch_all(engine, "SELECT * FROM alerts WHERE closed_at IS NULL") == []
+
+
+def test_source_down_alerts_when_no_native_probe_contradicts(tmp_path):
+    """With no native evidence, the source is all we have — it must still alert."""
+    engine = _db(tmp_path)
+    _source_rule(engine)
+    eng = AlertEngine(engine, _cfg())
+
+    _set_dim(engine, 1, "source_status", "down")   # no ping/snmp row at all
+    asyncio.run(eng.run_once())
+    open_rows = db.fetch_all(engine, "SELECT * FROM alerts WHERE closed_at IS NULL")
+    assert len(open_rows) == 1
+
+
+def test_ping_down_beats_snmp_up_for_alerting(tmp_path):
+    """ping = down stays authoritative — the contradiction must surface."""
+    engine = _db(tmp_path)
+    _source_rule(engine)
+    eng = AlertEngine(engine, _cfg())
+
+    _set_dim(engine, 1, "source_status", "down")
+    _set_dim(engine, 1, "snmp", "up")
+    _set_dim(engine, 1, "ping", "down")
+    asyncio.run(eng.run_once())
+    # Both the source_down and the ping-dimension rule fire; neither is suppressed.
+    assert len(db.fetch_all(engine, "SELECT * FROM alerts WHERE closed_at IS NULL")) == 2
+
+
+def test_source_blind_is_not_subject_to_the_tiebreaker(tmp_path):
+    """`blind` must alert on its own.
+
+    A blind source is precisely the case where no native probe can vouch for
+    anything, so gating the whole source_status dimension on device_down would
+    silence the one alert that says "we cannot see".
+    """
+    engine = _db(tmp_path)
+    _source_rule(engine)
+    eng = AlertEngine(engine, _cfg())
+
+    _set_dim(engine, 1, "source_status", "blind")
+    _set_dim(engine, 1, "ping", "up")        # device is reachable...
+    asyncio.run(eng.run_once())
+    rows = db.fetch_all(
+        engine,
+        "SELECT r.name FROM alerts a JOIN alert_rules r ON r.id = a.rule_id "
+        "WHERE a.closed_at IS NULL",
+    )
+    assert [r["name"] for r in rows] == ["source_blind"]  # ...yet still alerts
+
+
+def test_disabling_a_rule_closes_its_orphaned_alerts(tmp_path):
+    """_close_resolved only ran inside the enabled-rule loop, so a disabled rule
+    used to leave its open alerts open forever, inflating Problems counts."""
+    engine = _db(tmp_path)
+    eng = AlertEngine(engine, _cfg())
+
+    _set_state(engine, 1, "down")
+    asyncio.run(eng.run_once())
+    assert len(db.fetch_all(engine, "SELECT * FROM alerts WHERE closed_at IS NULL")) == 1
+
+    db.execute(engine, "UPDATE alert_rules SET enabled = 0 WHERE name = 'device_down'")
+    asyncio.run(eng.run_once())
+    assert db.fetch_all(engine, "SELECT * FROM alerts WHERE closed_at IS NULL") == []
+
+
+def test_deleted_rule_closes_its_orphaned_alerts(tmp_path):
+    engine = _db(tmp_path)
+    eng = AlertEngine(engine, _cfg())
+
+    _set_state(engine, 1, "down")
+    asyncio.run(eng.run_once())
+    db.execute(engine, "DELETE FROM alert_rules WHERE name = 'device_down'")
+    asyncio.run(eng.run_once())
+    assert db.fetch_all(engine, "SELECT * FROM alerts WHERE closed_at IS NULL") == []
+
+
+def test_contested_ip_verdict_cannot_vouch_for_a_dead_device(tmp_path):
+    """A shared-address probe must not close an alert.
+
+    Regression (2026-07-28): rows written before the poller's ambiguous-IP
+    guard existed closed 15 source_down alerts, including devices named
+    `oak-DEAD` and `DEAD_AP` — a live neighbour answering at the same address
+    vouched for hardware that was unplugged.
+    """
+    from netmon.state import device_down, device_reachable
+
+    dead = {"source_down": 1, "ping_up": 1, "has_state": 1, "ip_claimants": 2}
+    assert device_down(dead) is True, "the source's down must stand"
+
+    sole = {"source_down": 1, "ping_up": 1, "has_state": 1, "ip_claimants": 1}
+    assert device_down(sole) is False, "a trustworthy ping still wins"
+
+    # A device whose ONLY evidence is a contested probe is unknown, not up.
+    only_contested = {"ping_up": 1, "has_state": 1, "ip_claimants": 2}
+    assert device_reachable(only_contested) is False
+    assert device_down(only_contested) is False
+
+    # A contested ping=down must not mark a device down either — it may be the
+    # neighbour that is unreachable.
+    contested_down = {"ping_down": 1, "has_state": 1, "ip_claimants": 3}
+    assert device_down(contested_down) is False
+
+    # Missing column => legacy caller => trusted, so behaviour is unchanged.
+    legacy = {"source_down": 1, "ping_up": 1, "has_state": 1}
+    assert device_down(legacy) is False

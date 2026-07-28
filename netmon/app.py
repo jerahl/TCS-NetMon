@@ -60,7 +60,7 @@ def register_tasks(app: FastAPI, cfg: Config, engine) -> None:
     supervisor: Supervisor = app.state.supervisor
     supervisor.register("heartbeat", _heartbeat, interval_s=30.0, timeout_s=5.0)
 
-    if cfg.poller.enabled:
+    if cfg.poller.enabled and cfg.poller.in_process:
         poller = Poller(engine, cfg.poller)  # one instance → shared hysteresis state
         supervisor.register(
             "poller_ping", poller.run_ping,
@@ -71,6 +71,11 @@ def register_tasks(app: FastAPI, cfg: Config, engine) -> None:
             interval_s=cfg.poller.snmp_interval_s, timeout_s=cfg.poller.snmp_interval_s,
         )
         log.info("poller enabled: ping/%ss, snmp/%ss", cfg.poller.ping_interval_s, cfg.poller.snmp_interval_s)
+    elif cfg.poller.enabled:
+        # netmon-poller.service owns the sweeps (it has CAP_NET_RAW; this unit
+        # must not). Registering here too would double-write device_state with a
+        # second, independent hysteresis tracker.
+        log.info("poller enabled but in_process=false — sweeps run in netmon-poller.service")
 
     if cfg.snmp_inventory.enabled:
         snmp_inv = SnmpInventory.from_config(engine, cfg)
