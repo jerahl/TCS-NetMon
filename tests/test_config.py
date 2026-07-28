@@ -83,3 +83,27 @@ def test_pydantic_v2_runtime():
     from netmon.models.schemas import Device
 
     assert hasattr(Device, "model_copy")
+
+
+def test_poller_in_process_defaults_true_and_is_overridable(tmp_path):
+    """`in_process` splits *where* the poller runs from *whether* it runs.
+
+    netmon.service cannot grant fping CAP_NET_RAW, so the deploy VM runs the
+    sweeps in netmon-poller.service and sets in_process = false. `enabled`
+    must stay true there so /api/health does not report the poller as off.
+    """
+    cfg = load_config(write_config(tmp_path, extra_sections="[poller]\nenabled = true\n"))
+    assert cfg.poller.enabled is True
+    assert cfg.poller.in_process is True  # default: unchanged behavior
+
+    cfg = load_config(write_config(
+        tmp_path, extra_sections="[poller]\nenabled = true\nin_process = false\n"
+    ))
+    assert cfg.poller.enabled is True and cfg.poller.in_process is False
+
+
+def test_poller_in_process_is_not_web_editable(tmp_path):
+    """Deployment topology must not be flippable from the settings UI (spec 12 S2)."""
+    from netmon import settings
+
+    assert "poller.in_process" not in settings.BY_KEY

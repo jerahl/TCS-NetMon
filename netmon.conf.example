@@ -112,6 +112,14 @@ saml_group_attr = group_ids
 # Native poller: fping ICMP sweep + snmpget sysUpTime. Read-only ground truth.
 # Disabled by default (per-step reversibility); flip on when ready.
 enabled = false
+# Where the sweeps run. true = in-process supervised tasks (default).
+# Set false when netmon-poller.service owns them: fping needs CAP_NET_RAW,
+# which the hardened netmon.service deliberately does not grant
+# (NoNewPrivileges=yes voids fping's file capability, and the
+# CapabilityBoundingSet is empty). With false, `enabled` above still governs
+# whether the poller runs at all, so /api/health reports it honestly.
+# Not web-editable on purpose — see docs/runbooks/poller.md.
+in_process = true
 ping_interval_s = 60
 snmp_interval_s = 300
 # Hysteresis: consecutive failures to declare DOWN / successes to declare UP.
