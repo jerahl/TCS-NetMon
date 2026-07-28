@@ -1,0 +1,101 @@
+{
+  "_meta": {
+    "note": "SYNTHETIC payload-drift samples for tests/test_validate_payloads.py. Every value is fake: RFC 5737 documentation IPs (192.0.2.0/24), RFC 7042 documentation MACs (00:00:5E:00:53:xx), FAKE-* names. Not a capture of any real system (CLAUDE.md §4.6). Each block deliberately drifts from the contract NetMon declares so the diff logic has something to find.",
+    "drift": {
+      "xiq_devices_full": "network_policy_name absent; active_clients arrives as a string; radios[].frequency absent on one radio",
+      "pf_nodes": "device_manufacturer absent; ip4log.ip only via the 'ip' alias; computername null everywhere",
+      "milestone_cameras": "mac/macAddress absent (breaks the FDB join); recordingEnabled only via the 'enabled' alias",
+      "threecx_trunks": "Registered only via RegistrationStatus; ActiveCalls absent"
+    }
+  },
+  "xiq_devices_full": [
+    {
+      "id": 900000000000001,
+      "hostname": "FAKE-AP-01",
+      "connected": true,
+      "device_admin_state": "MANAGED",
+      "ip_address": "192.0.2.11",
+      "device_function": "AP",
+      "product_type": "AP-FAKE-1",
+      "software_version": "0.0.0-fake",
+      "serial_number": "FAKESERIAL01",
+      "mac_address": "00:00:5E:00:53:01",
+      "system_up_time": 1750000000000,
+      "active_clients": "7",
+      "locations": ["FAKE-SITE"],
+      "radios": [
+        {"name": "wifi0", "frequency": "2.4G", "channel": 6, "channel_width": "20MHz", "power": 12, "clients": 3},
+        {"name": "wifi1", "channel": 44, "channel_width": "80MHz", "power": 15, "clients": 4}
+      ]
+    },
+    {
+      "id": 900000000000002,
+      "hostname": "FAKE-AP-02",
+      "connected": false,
+      "device_admin_state": "MANAGED",
+      "ip_address": "192.0.2.12",
+      "device_function": "AP",
+      "product_type": "AP-FAKE-1",
+      "software_version": "0.0.0-fake",
+      "serial_number": "FAKESERIAL02",
+      "mac_address": "00:00:5E:00:53:02",
+      "system_up_time": 0,
+      "active_clients": "0",
+      "locations": ["FAKE-SITE"],
+      "radios": []
+    }
+  ],
+  "pf_nodes": [
+    {
+      "mac": "00:00:5e:00:53:03",
+      "pid": "fakeuser",
+      "computername": null,
+      "status": "reg",
+      "category_id": 4,
+      "device_class": "FAKE OS",
+      "device_type": "FAKE Laptop",
+      "dhcp_fingerprint": "1,2,3",
+      "ip": "192.0.2.30",
+      "last_seen": "2026-07-28 00:00:00"
+    },
+    {
+      "mac": "00:00:5e:00:53:04",
+      "pid": "fakeuser2",
+      "computername": null,
+      "status": "unreg",
+      "category_id": 5,
+      "device_class": "FAKE OS",
+      "device_type": "FAKE Phone",
+      "dhcp_fingerprint": "1,2,3",
+      "ip": "192.0.2.31",
+      "last_seen": "2026-07-28 00:00:00"
+    }
+  ],
+  "milestone_cameras": [
+    {
+      "id": "00000000-0000-0000-0000-00000000c001",
+      "hardwareId": "00000000-0000-0000-0000-00000000h001",
+      "model": "FAKE-CAM-100",
+      "resolution": "1920x1080",
+      "framerate": 15,
+      "codec": "H264",
+      "bitrateMode": "VBR",
+      "recordingMode": "always",
+      "stateMessage": "OK",
+      "address": "192.0.2.60",
+      "recordingServerId": "00000000-0000-0000-0000-0000000rs001",
+      "enabled": true,
+      "displayName": "FAKE-CAM-100 (front)"
+    }
+  ],
+  "threecx_trunks": [
+    {
+      "Id": 10000,
+      "Name": "FAKE-SIP-TRUNK",
+      "Host": "sip.fake.invalid",
+      "MainNumber": "+15550000000",
+      "RegistrationStatus": "Registered",
+      "SimultaneousCalls": 20
+    }
+  ]
+}
