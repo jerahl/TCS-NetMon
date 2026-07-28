@@ -42,6 +42,22 @@ Ported from `reference/lib/XIQFleetClient.php`.
   the type override is insert-only in the seed/import upsert, so it survives
   re-imports. (XIQ's switch-specific wired-client grid is a **POST** — a
   non-GET source call, owner-gated per CLAUDE.md §2/§4.1 — not implemented.)
+- **Client band is an INTEGER enum.** `/clients/active` returns `radio_type`
+  as an int, not a band string: **1 = 2.4G, 2 = 5G, 3 = WIRED, 4 = 6G,
+  5 = THREAD** (verbatim from the tenant's own `GET /openapi`, ExtremeCloud IQ
+  API 25.11.1-3; corroborated against live `channel`/`mac_protocol` — see
+  `docs/xiq-radio-type-enum.md`). Mapping it through the *AP radio* band map
+  (`XiqRadio.frequency`, a string enum: `2.4GHz`/`5GHz`/`6GHz`) left
+  `wireless_clients.band` NULL for **every** client until 2026-07-28.
+  `/clients/active` also returns **wired switch clients** (≈85% of rows on this
+  fleet), which is why `wired` is a real band label here.
+- **Unmapped enum values are loud, not NULL (§4.5).** Any `radio_type` /
+  `frequency` value the maps don't cover logs a WARNING (rate-limited to one per
+  distinct value per 5 min) and is counted into `snapshot_cache` key
+  `xiq.unmapped_enums` — `ok=1, total=0` on a clean cycle, `ok=0` plus
+  `{value: count}` when something is unmapped. The clients cycle also logs its
+  per-band histogram, so an all-`unknown` cycle is obvious. Query it with:
+  `SELECT ok, payload FROM snapshot_cache WHERE \`key\` = 'xiq.unmapped_enums';`
 - **Interval:** `[xiq] status_interval_s` (default 180s).
 - **Rate limits:** 7,500 req/hr per VIQ, **shared across all integrations**
   (Zabbix, SolarWinds, NetMon). `RateLimit-Remaining`/`-Reset` tracked; a low-

@@ -16,7 +16,8 @@ of the 7,500/h tenant quota):
     detail comes from the SNMP inventory sweep, never the AP endpoints.
   * clients (10 min): ``/clients/active?views=FULL`` → ``wireless_clients``.
     Carries usernames/MACs (PII — spec 10 Q8): disable with
-    ``[xiq] clients_enabled = false``.
+    ``[xiq] clients_enabled = false``. ``radio_type`` is an **integer** enum
+    (see ``_CLIENT_RADIO_TYPES``), not a band string.
   * ssids (30 min): network policies → per-policy SSID list → ``ssids``.
 
 Read-only.    python -m netmon.collectors.xiq --once|--loop
@@ -28,6 +29,7 @@ import logging
 import re
 import sys
 import time
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -45,6 +47,7 @@ from netmon.collectors.xiq_client import (
 )
 from netmon.config import Config
 from netmon.models.xiq import XiqDevice
+from netmon.snapshots import write_snapshot
 from netmon.state import write_state
 
 log = logging.getLogger("netmon.collectors.xiq")
@@ -53,8 +56,29 @@ DIMENSION = "source_status"
 RATE_LIMIT_WARN = 500
 
 _AP_FUNCTIONS = {"AP", "ACCESS_POINT"}
+# AP radio band, from ``XiqRadio.frequency`` — a *string* enum whose only values
+# are "2.4GHz" / "5GHz" / "6GHz". The bare "2.4G"/"5G"/"6G" spellings are kept
+# for tenants/views that shorten it.
 _BANDS = {"2.4G": "2.4", "2.4GHZ": "2.4", "5G": "5", "5GHZ": "5", "6G": "6", "6GHZ": "6"}
+# Client band, from ``XiqClient.radio_type`` — an *integer* enum, NOT a band
+# string. Verbatim from this tenant's own published schema (read-only
+# ``GET /openapi``, ExtremeCloud IQ API 25.11.1-3): "The radio type. Represented
+# by an integer code for each standard: 1 - 2.4G, 2 - 5G, 3 - WIRED, 4 - 6G,
+# 5 - THREAD". Corroborated on live data (2026-07-28): every radio_type=2 client
+# sat on a 5 GHz channel (36–165) with a 5 GHz mac_protocol (802.11a/na/ac/
+# ax-5g), and every radio_type=3 client sat on a switch, on a port-notation
+# interface ("1:51"), with mac_protocol "N/A". ``/clients/active`` returns wired
+# clients too, so WIRED and THREAD are real, expected values here — they are
+# labelled, not silently dropped, because NULL is what a *bug* looks like.
+_CLIENT_RADIO_TYPES = {1: "2.4", 2: "5", 3: "wired", 4: "6", 5: "thread"}
 _MANAGED_ADMIN_STATE = "MANAGED"
+
+#: A value the maps above don't cover is logged at most this often per value, so
+#: a source-side enum change is loud in the log without flooding it (§4.5).
+UNMAPPED_WARN_INTERVAL_S = 300.0
+#: snapshot_cache key carrying the per-cycle tally of unmapped enum values.
+UNMAPPED_SNAPSHOT_KEY = "xiq.unmapped_enums"
+_unmapped_last_warn: dict[str, float] = {}
 
 
 def source_state(dev: XiqDevice) -> tuple[str, str]:
@@ -79,10 +103,57 @@ def source_state(dev: XiqDevice) -> tuple[str, str]:
     return ("up", "ok") if dev.connected else ("down", "crit")
 
 
-def _band(raw: Any) -> str | None:
-    """Band from the radio's own frequency field — never from the radio index
-    (dual-5G APs exist; spec 00 G10)."""
-    return _BANDS.get(str(raw or "").strip().upper())
+def _note_unmapped(field: str, raw: Any, tally: Counter | None) -> None:
+    """Make an unmapped source enum value visible instead of silently NULL.
+
+    ``radio_type`` shipped as an int while ``_BANDS`` only held band *strings*,
+    so ``band`` was NULL for every wireless client for weeks and nothing said a
+    word (2026-07-28). Per §4.5 an unrecognised value is now loud: a
+    rate-limited WARNING plus a per-cycle tally the collector persists to
+    ``snapshot_cache`` — a future enum change cannot be silent again.
+    """
+    key = f"{field}={raw!r}"
+    if tally is not None:
+        tally[key] += 1
+    now = time.monotonic()
+    last = _unmapped_last_warn.get(key)
+    if last is None or (now - last) >= UNMAPPED_WARN_INTERVAL_S:
+        _unmapped_last_warn[key] = now
+        log.warning(
+            "XIQ %s: unmapped value %r — band left NULL. The source enum likely "
+            "changed (or a new band shipped); update the map in "
+            "netmon/collectors/xiq.py.", field, raw,
+        )
+
+
+def _band(raw: Any, tally: Counter | None = None) -> str | None:
+    """AP radio band from the radio's own frequency field — never from the radio
+    index (dual-5G APs exist; spec 00 G10)."""
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    band = _BANDS.get(str(raw).strip().upper())
+    if band is None:
+        _note_unmapped("radios[].frequency", raw, tally)
+    return band
+
+
+def _client_band(raw: Any, tally: Counter | None = None) -> str | None:
+    """Client band from ``/clients/active``'s integer ``radio_type`` enum.
+
+    Absent/blank stays None (XIQ said nothing). Anything present but unmapped is
+    reported through :func:`_note_unmapped`. Textual values are still accepted
+    so a tenant or ``fields=RADIO_TYPE`` view that returns "5G" keeps working.
+    """
+    if raw is None or (isinstance(raw, str) and not raw.strip()) or isinstance(raw, bool):
+        if isinstance(raw, bool):
+            _note_unmapped("clients.radio_type", raw, tally)
+        return None
+    code = _to_int(raw)
+    band = (_CLIENT_RADIO_TYPES.get(code) if code is not None
+            else _BANDS.get(str(raw).strip().upper()))
+    if band is None:
+        _note_unmapped("clients.radio_type", raw, tally)
+    return band
 
 
 def _width_mhz(raw: Any):
@@ -114,7 +185,7 @@ def _uptime_s(raw: Any, now_s: float):
 
 def build_ap_rows(
     raw: list[dict], xiq_to_dev: dict[str, int], now_s: float, now: datetime,
-    ap_ids: set[int] | None = None,
+    ap_ids: set[int] | None = None, tally: Counter | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """FULL fleet rows → (ap_details rows, ap_radios rows) for registry APs.
 
@@ -155,7 +226,7 @@ def build_ap_rows(
             radios.append({
                 "device_id": dev_id,
                 "radio": name,
-                "band": _band(radio.get("frequency")),
+                "band": _band(radio.get("frequency"), tally),
                 "channel": _to_int(radio.get("channel")),
                 "width_mhz": _width_mhz(radio.get("channel_width")),
                 "tx_power_dbm": _to_int(radio.get("power")),
@@ -166,7 +237,8 @@ def build_ap_rows(
 
 
 def build_client_rows(
-    raw: list[dict], xiq_to_dev: dict[str, int], now: datetime
+    raw: list[dict], xiq_to_dev: dict[str, int], now: datetime,
+    tally: Counter | None = None,
 ) -> list[dict]:
     """/clients/active FULL rows → wireless_clients rows (deduped by MAC)."""
     by_mac: dict[str, dict] = {}
@@ -181,7 +253,7 @@ def build_client_rows(
             "mac": mac,
             "device_id": xiq_to_dev.get(str(r.get("device_id"))),
             "ssid": (r.get("ssid") or None),
-            "band": _band(r.get("radio_type")),
+            "band": _client_band(r.get("radio_type"), tally),
             "rssi_dbm": _to_int(r.get("rssi")),
             "snr_db": _to_int(r.get("snr")),
             "os": (r.get("os_type") or None),
@@ -334,20 +406,28 @@ class XiqCollector(Collector):
         # their detail comes from the SNMP inventory sweep, never the AP API.
         ap_ids = {int(r["id"]) for r in registry if r.get("device_type") == "ap"}
         now = datetime.now(timezone.utc)
+        # Enum values the band maps don't cover, counted per cycle and published
+        # so an upstream enum change is visible, not a silent NULL (§4.5).
+        tally: Counter = Counter()
+        band_cycle_ran = False
 
         if detail_due:
-            details, radios = build_ap_rows(raw, xiq_to_dev, time.time(), now, ap_ids)
+            details, radios = build_ap_rows(raw, xiq_to_dev, time.time(), now, ap_ids, tally)
             written += db.replace_rows(self.engine, "ap_details", ["device_id"], details)
             written += db.replace_rows(self.engine, "ap_radios", ["device_id", "radio"], radios)
             self._last_cycle["detail"] = mono
+            band_cycle_ran = True
             log.info("xiq detail cycle: %d AP(s), %d radio row(s)", len(details), len(radios))
 
         if self.clients_enabled and self._due("clients", self.clients_interval_s, mono):
             raw_clients = await self.client.get_active_clients()
-            rows = build_client_rows(raw_clients, xiq_to_dev, now)
+            rows = build_client_rows(raw_clients, xiq_to_dev, now, tally)
             written += db.replace_rows(self.engine, "wireless_clients", ["mac"], rows)
             self._last_cycle["clients"] = mono
-            log.info("xiq clients cycle: %d client(s)", len(rows))
+            band_cycle_ran = True
+            by_band = Counter(r["band"] or "unknown" for r in rows)
+            log.info("xiq clients cycle: %d client(s); by band: %s",
+                     len(rows), dict(sorted(by_band.items())))
 
         if self.ssids_enabled and self._due("ssids", self.ssids_interval_s, mono):
             ssid_rows: dict[str, dict] = {}
@@ -362,10 +442,37 @@ class XiqCollector(Collector):
             self._last_cycle["ssids"] = mono
             log.info("xiq ssids cycle: %d SSID(s)", len(ssid_rows))
 
+        if band_cycle_ran:
+            self._publish_unmapped(tally)
+
         rem = self.client.rate_limit_remaining
         if rem is not None and rem < RATE_LIMIT_WARN:
             log.warning("XIQ quota low: %s requests remaining this window", rem)
         return written
+
+    def _publish_unmapped(self, tally: Counter) -> None:
+        """Persist this cycle's unmapped-enum tally to ``snapshot_cache``.
+
+        Clean cycle → ``ok=1``, ``total: 0``. Anything unmapped → the offending
+        values and counts in the payload *and* ``ok=0``, so the condition is
+        queryable (and badge-able) rather than a log line that scrolled away.
+        The payload is written first because ``write_snapshot(ok=False)``
+        deliberately preserves the existing payload instead of replacing it.
+        Fail-soft: this bookkeeping must never sink a cycle that wrote good rows.
+        """
+        try:
+            write_snapshot(self.engine, UNMAPPED_SNAPSHOT_KEY,
+                           {"counts": dict(sorted(tally.items())),
+                            "total": sum(tally.values())},
+                           source="xiq", ok=True)
+            if tally:
+                write_snapshot(self.engine, UNMAPPED_SNAPSHOT_KEY, None,
+                               source="xiq", ok=False)
+        except Exception as exc:  # pragma: no cover - defensive
+            log.warning("could not publish %s: %s", UNMAPPED_SNAPSHOT_KEY, exc)
+        if tally:
+            log.warning("xiq: %d value(s) the band maps don't cover this cycle: %s",
+                        sum(tally.values()), dict(sorted(tally.items())))
 
     def _mark_blind(self, registry: list[dict[str, Any]]) -> None:
         for r in registry:

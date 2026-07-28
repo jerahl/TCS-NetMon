@@ -343,3 +343,89 @@ def test_xiq_cycles_are_interval_gated_and_disableable(tmp_path):
     asyncio.run(c2.run_once())
     assert db.fetch_one(engine2, "SELECT COUNT(*) AS n FROM wireless_clients")["n"] == 0
     assert db.fetch_one(engine2, "SELECT COUNT(*) AS n FROM ap_details")["n"] >= 1
+
+
+# ---- client radio_type: the integer band enum (task #15) ---------------------
+
+def test_client_band_maps_the_integer_radio_type_enum():
+    """``/clients/active`` returns ``radio_type`` as an INT, not a band string —
+    the whole reason ``wireless_clients.band`` was NULL for every client until
+    2026-07-28. Codes are verbatim from the tenant's own published schema
+    (ExtremeCloud IQ API 25.11.1-3): 1=2.4G, 2=5G, 3=WIRED, 4=6G, 5=THREAD."""
+    from netmon.collectors.xiq import _client_band
+
+    assert _client_band(1) == "2.4"
+    assert _client_band(2) == "5"
+    assert _client_band(3) == "wired"     # /clients/active carries wired clients too
+    assert _client_band(4) == "6"
+    assert _client_band(5) == "thread"
+    # Numeric strings are the same enum.
+    assert _client_band("2") == "5"
+    # Legacy/textual tenants (or a ``fields=RADIO_TYPE`` view) still work.
+    assert _client_band("5G") == "5"
+    assert _client_band("2.4GHz") == "2.4"
+    # Nothing said → nothing claimed (and no false alarm).
+    tally = __import__("collections").Counter()
+    assert _client_band(None, tally) is None
+    assert _client_band("", tally) is None
+    assert tally == {}
+
+
+def test_unmapped_radio_type_is_loud_not_silently_null(caplog):
+    """§4.5: an enum value the map doesn't cover must be visible. It still
+    yields NULL (never a guessed band) but it is logged and counted."""
+    import logging
+    from collections import Counter
+
+    from netmon.collectors import xiq as xiq_mod
+
+    xiq_mod._unmapped_last_warn.clear()
+    tally: Counter = Counter()
+    with caplog.at_level(logging.WARNING, logger="netmon.collectors.xiq"):
+        assert xiq_mod._client_band(9, tally) is None          # hypothetical new band
+        assert xiq_mod._client_band(9, tally) is None          # counted twice…
+        assert xiq_mod._band("7GHz", tally) is None            # AP radio path too
+    assert tally["clients.radio_type=9"] == 2
+    assert tally["radios[].frequency='7GHz'"] == 1
+    # …but warned about once per value per window, not once per row.
+    warnings = [r for r in caplog.records if "unmapped value" in r.message]
+    assert len(warnings) == 2
+    assert all(r.levelno == logging.WARNING for r in warnings)
+
+
+def test_client_bands_persist_and_unmapped_values_reach_snapshot_cache(tmp_path):
+    """End to end: the fixture's int radio_types land as real bands, and a value
+    the map doesn't cover is published to ``snapshot_cache`` (ok=0 + counts) so
+    a future enum change cannot go unnoticed again."""
+    from netmon.collectors.xiq import UNMAPPED_SNAPSHOT_KEY
+    from netmon.snapshots import read_snapshot
+
+    engine = _db_with_chs(tmp_path)
+    fake = _fake_with_fixtures()
+    asyncio.run(XiqCollector(engine, fake).run_once())
+
+    bands = {r["mac"]: r["band"] for r in
+             db.fetch_all(engine, "SELECT mac, band FROM wireless_clients")}
+    assert bands["aa:bb:cc:00:01:01"] == "5"      # radio_type 2
+    assert bands["aa:bb:cc:00:01:02"] == "2.4"    # radio_type 1
+    assert None not in bands.values()
+
+    snap = read_snapshot(engine, UNMAPPED_SNAPSHOT_KEY)
+    assert snap["ok"] is True and snap["payload"]["total"] == 0
+
+    # Now XIQ ships a code we don't know: the row is kept with a NULL band, and
+    # the anomaly is flagged, counted and queryable.
+    from pathlib import Path
+    d2 = Path(str(tmp_path)) / "unmapped"
+    d2.mkdir(exist_ok=True)
+    engine2 = _db_with_chs(d2)
+    fake2 = _fake_with_fixtures()
+    fake2.client_rows = [dict(r, radio_type=42) for r in fake2.client_rows]
+    asyncio.run(XiqCollector(engine2, fake2).run_once())
+
+    rows = db.fetch_all(engine2, "SELECT mac, band FROM wireless_clients")
+    assert rows and all(r["band"] is None for r in rows)
+    snap2 = read_snapshot(engine2, UNMAPPED_SNAPSHOT_KEY)
+    assert snap2["ok"] is False
+    assert snap2["payload"]["total"] == len(rows)
+    assert snap2["payload"]["counts"] == {"clients.radio_type=42": len(rows)}
