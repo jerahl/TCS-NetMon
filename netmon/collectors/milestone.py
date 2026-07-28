@@ -196,7 +196,14 @@ class MilestoneCollector(Collector):
                 len(servers), len(cameras),
             )
 
-        # Optional enrichment — fail-soft (older XProtect lacks these endpoints).
+        # Optional enrichment — fail-soft (older XProtect lacks these
+        # endpoints), but NOT silent. A degradation nobody can see is the
+        # failure mode §4.5 exists to prevent: /storages has been answering
+        # HTTP 400 on this deployment and the storage roll-up was empty while
+        # the collector reported success (found 2026-07-28 by
+        # scripts/validate_payloads.py). Record which enrichments degraded so
+        # the NetMon Status page and the overview blob can say so.
+        degraded: list[str] = []
         storage_by_rs: dict[str, dict] = {}
         try:
             for s in await self.client.storage():
@@ -209,12 +216,16 @@ class MilestoneCollector(Collector):
                     agg["total_gb"] += total / 1_000_000_000 if total > 1_000_000 else total
                 agg["retention_days"] = _num(s.get("retentionDays")) or agg["retention_days"]
         except MilestoneError as exc:
-            log.info("milestone storage endpoint unavailable: %s", exc)
+            degraded.append("storage")
+            log.warning("milestone storage endpoint unavailable — storage roll-up "
+                        "will be empty, not zero: %s", exc)
         hw_by_id: dict[str, dict] = {}
         try:
             hw_by_id = {str(h.get("id")): h for h in await self.client.hardware()}
         except MilestoneError as exc:
-            log.info("milestone hardware endpoint unavailable: %s", exc)
+            degraded.append("hardware")
+            log.warning("milestone hardware endpoint unavailable — camera hardware "
+                        "enrichment missing: %s", exc)
 
         rs_rows = build_recording_servers(servers, registry, storage_by_rs, now)
         cam_rows = build_cameras(cameras, registry, hw_by_id, rs_devid, now)
@@ -235,6 +246,10 @@ class MilestoneCollector(Collector):
             "linked_cameras": linked_cameras,
             "storage_used_gb": round(sum(r["storage_used_gb"] or 0 for r in rs_rows), 1),
             "storage_total_gb": round(sum(r["storage_total_gb"] or 0 for r in rs_rows), 1),
+            # Which enrichments failed this cycle. Without this a 0 GB storage
+            # roll-up is indistinguishable from "the endpoint 400s", and the UI
+            # would render an outright absence of data as "nothing used".
+            "degraded": degraded,
         }, self.name)
         return written
 

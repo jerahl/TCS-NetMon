@@ -23,9 +23,21 @@ from netmon.state import write_state
 
 log = logging.getLogger("netmon.collectors.rconfig")
 
-# last-backup timestamp field aliases (exact name validated at deploy).
-_TS_KEYS = ("last_backup", "lastBackup", "last_success", "last_run", "last_change",
-            "updated_at", "last_backup_date", "lastSuccessfulBackup")
+# last-backup timestamp field aliases, MOST specific first — _last_backup takes
+# the first key present, so ordering is the contract.
+#
+# `last_backup_at` is what the live API actually returns (confirmed 2026-07-28 by
+# scripts/validate_payloads.py) and was missing here, while `updated_at` sat in
+# the list. The result: freshness was measured off the row's *modification* time,
+# so a device whose backup had not run in weeks still looked fresh whenever
+# anything else about the row changed. `updated_at` is now last and marked as the
+# weak fallback it is — it is not a backup timestamp.
+_TS_KEYS = ("last_backup_at", "last_backup", "lastBackup", "lastSuccessfulBackup",
+            "last_success", "last_backup_date", "last_run", "last_change",
+            # Weak fallback only: row mtime, NOT a backup time. Kept so an older
+            # rConfig that exposes nothing better still yields something, but it
+            # must never win over a real backup field.
+            "updated_at")
 
 
 def _parse_ts(value: Any) -> datetime | None:

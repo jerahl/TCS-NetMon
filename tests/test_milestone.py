@@ -171,3 +171,41 @@ def test_milestone_unreachable_keeps_inventory_stale(tmp_path):
     assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM cameras")["n"] == 1
     h = db.fetch_one(engine, "SELECT * FROM collector_health WHERE name='milestone'")
     assert h["consecutive_failures"] == 1
+
+
+def test_degraded_enrichment_is_reported_not_silent(tmp_path):
+    """A 0 GB storage roll-up must be distinguishable from a broken endpoint.
+
+    /storages answers HTTP 400 on the live deployment and the collector caught
+    it at log.info, so the roll-up was empty while the cycle reported success —
+    the exact invisible degradation §4.5 exists to prevent.
+    """
+    import json
+
+    from netmon.collectors.milestone_client import MilestoneError
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.servers = [{"id": "RS1", "running": True}]
+    fake.cameras_data = [{"id": "CAM1", "recordingEnabled": True}]
+    fake.storage_fail = MilestoneError("Milestone HTTP 400 on /storages")
+    asyncio.run(MilestoneCollector(engine, fake).run_once())
+
+    row = db.fetch_one(engine, "SELECT payload FROM snapshot_cache WHERE `key`='milestone.overview'")
+    payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
+    assert payload["degraded"] == ["storage"]
+    # Still fail-soft: the cycle completed and the rest of the inventory landed.
+    assert payload["recording_servers"] == 1
+
+
+def test_healthy_cycle_reports_nothing_degraded(tmp_path):
+    import json
+
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.servers = [{"id": "RS1", "running": True}]
+    fake.cameras_data = [{"id": "CAM1", "recordingEnabled": True}]
+    asyncio.run(MilestoneCollector(engine, fake).run_once())
+
+    row = db.fetch_one(engine, "SELECT payload FROM snapshot_cache WHERE `key`='milestone.overview'")
+    payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
+    assert payload["degraded"] == []
