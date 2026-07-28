@@ -118,7 +118,7 @@ conventions / the standing new-dependency & charter checkpoints).
 | D4 | Operator write actions (PoE cycle via rConfig, XIQ AP reboot, PF reevaluate-access / restart-switchport) behind operator/admin role + audit log + per-action config flag (default off) | Approve as post-cutover phase (11.x), default-disabled; until then disabled buttons with "managed in <source>" tooltips | ✅ **approved 2026-07-28** — design signed off (operator/admin role + audit log + per-action flag, default off); **build in 11.x, post-cutover**. Read-only-first holds through Phase 8; disabled buttons with "managed in <source>" tooltips until then |
 | D5 | `websockets` dependency for the Milestone Events/State live path (`collectors/ws.py` is built + tested, unwired) | **Approve** — standing spec-05/spec-10 blocker for live camera state + VMS alarms | ✅ **approved 2026-07-28** — `websockets` pinned and `collectors/ws.py` wired to a live **read-only subscribe**; unblocks live camera state + the stubbed Alarms pane |
 | D6 | `snmpbulkwalk` charter amendment (spec 10 Q2) | **Approve — now core scope** (§5.1). Still subprocess, still read-only | ✅ **approved 2026-07-15** (§10 Q2); **built as Phase 10.1, 2026-07-15/16** — migrations `006`/`009` + `netmon/poller/snmp_inventory.py`, still subprocess `snmpbulkwalk`, read-only, per-sweep disableable |
-| D7 | Camera JPEG snapshot proxy (ZCD `tcs.camera.snapshot`): credentialed GET to `https://<camera>/snap.jpg` streamed through NetMon; `[surveillance] cam_user/cam_pass` config | Approve — read-only GET, low effort, high UI value | ✅ **approved 2026-07-28, prerequisite first** — all 2,659 cameras carry **no `mgmt_ip`** (Milestone federates by hardware id), so populate camera addresses before the proxy. Proxy MUST resolve only registered camera addresses — a caller-supplied URL would be an SSRF hole |
+| D7 | Camera JPEG snapshot proxy (ZCD `tcs.camera.snapshot`): credentialed GET to `https://<camera>/snap.jpg` streamed through NetMon; `[surveillance] cam_user/cam_pass` config | Approve — read-only GET, low effort, high UI value | ✅ **approved 2026-07-28, prerequisite first** — all 2,659 cameras carry **no `mgmt_ip`** (Milestone federates by hardware id), so populate camera addresses before the proxy. Proxy MUST resolve only registered camera addresses — a caller-supplied URL would be an SSRF hole **Design corrections 2026-07-28** (from `docs/milestone-camera-addressing.md`): Milestone stores hardware as **`http://`** for 100% of records, so the assumed `https://` is wrong — derive the scheme from `hardwareDriverSettings.httpSEnabled`/`httpSPort` rather than hardcoding; 5 devices use a non-default port that must be preserved; and for the 241 cameras that are channels on a shared encoder a bare `/snap.jpg` returns the WRONG imager — `camera.channel` has to enter the per-vendor snapshot path. |
 | D8 | XDR page | Drop — it was never wired in ZCD; revisit only if a Cortex API integration becomes real | adopted |
 | D9 | Registry seeding without Zabbix (today `sites` assignment needs a Zabbix `Site/` export) | Make `sites` + the topology file the durable source of truth; `netmon-seed` gains `--sites-from-db`; schedule in 10.0 | adopted |
 | D10 | **Direct camera monitoring** (spec 13): read-only SNMP (`snmpget`/`snmpbulkwalk`, no new dependency — same net-snmp path as D6) against the cameras Milestone already gives us, for host health Milestone can't supply — CPU, kernel-uptime reboot, filesystem, interface up/down + bandwidth, encoder bitrate, VCA motion. Bosch profile first (owner's Zabbix template, `reference/zabbix/milestone/template_milestone_camera_bosch.yaml`), vendor-extensible; alerts shadow-first; `[camera_snmp]` default-off | Approve as **post-parity 11.x**, gated + default-disabled — beyond ZCD parity and a direct-re-poll charter point, so plan now / build after cutover-critical work. Depends on the (approved) D6 SNMP amendment | ✅ **approved 2026-07-28** — build in **11.x**, `[camera_snmp]` default-off, alerts shadow-first. Two prerequisites recorded 2026-07-28: cameras have **no `mgmt_ip`/`snmp_capable`** today, and ~2,659 SNMP targets is ~17× the switch fleet, so it needs a load assessment and the contested-address guard (`netmon.state.native_trustworthy`) |
@@ -148,6 +148,28 @@ identity) and 10.4 (camera→switch-port) reuse, and it is the highest-risk item
 operator can do everything they did in ZCD *for the in-scope domains* without
 opening Zabbix — same pages, same drill-downs, honest staleness — and the
 shadow-alert diff has run clean for the agreed window.
+
+**Added 2026-07-28 — `scripts/validate_payloads.py` must pass as a cutover
+gate, and be re-run after any collector or source-version change.** It is not a
+one-off. Its first run found **five** places where NetMon rendered nothing, or
+something wrong, while every collector reported success:
+
+| Finding | Effect before the fix |
+|---|---|
+| XIQ `radio_type` is an int enum | `wireless_clients.band` NULL for all 3,874 rows |
+| rConfig `_TS_KEYS` lacked `last_backup_at` | `config_backup` freshness measured off row mtime |
+| Milestone `/storages` answers HTTP 400 | storage roll-up empty, caught at `log.info` |
+| `/cameras` has no `hardwareId` | `cameras.ip` NULL for all 2,659 cameras |
+| radios moved to `/devices/radio-information` | `ap_radios` empty; AP Detail radio table blank |
+
+Every one traces to a payload shape inferred from `reference/` and never checked
+against the live source — the risk §7 already listed as top-priority. The
+operative lesson is narrower than "we had bugs": **"the collector reports
+success" stopped being evidence that a page is correct.** A green
+`collector_health` row says a cycle completed, not that it wrote true data, so
+parity cannot be asserted from collector health alone. Fixture tests do not
+close this gap either — several of those fixtures encoded the *assumed* shape,
+so the tests passed against a fiction.
 
 ## 8. Housekeeping this revision implies
 
