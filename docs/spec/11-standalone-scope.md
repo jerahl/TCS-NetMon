@@ -1,7 +1,7 @@
 # Spec 11 — Standalone-scope revision (mission: standalone ZabbixCustomDashboard)
 
 **Status:** ADOPTED as plan of record (owner-directed, 2026-07-15). Individual
-gate decisions D1–D9 below carry recommendations; the ⛔-marked ones still
+gate decisions D1–D10 below carry recommendations; the ⛔-marked ones still
 require explicit owner sign-off at implementation time, per §4 conventions.
 **Supersedes:** the "federated monitoring platform" framing of CLAUDE.md v1.0 /
 project plan v0.2. CLAUDE.md v2.0 is rewritten from this spec in the same
@@ -103,20 +103,20 @@ addition.
    (⛔ D4): ZCD shipped four operator write actions a "standalone ZCD"
    arguably includes.
 
-## 6. Decisions D1–D9 (recommendations recorded 2026-07-15)
+## 6. Decisions D1–D10 (recommendations recorded 2026-07-15; D10 added 2026-07-17)
 
 ⛔ = requires explicit owner sign-off before the gated code lands (per §4
 conventions / the standing new-dependency & charter checkpoints).
 
 | # | Decision | Recommendation | Sign-off |
 |---|---|---|---|
-| D1 | FortiGate page: build an SNMP sweep collector + page, or keep in Zabbix? | Defer to post-parity (11.x); deep-link meanwhile. The 10.1 sweep pattern makes it cheap later | open |
+| D1 | FortiGate page: build an SNMP sweep collector + page, or keep in Zabbix? | Defer to post-parity (11.x); deep-link meanwhile. The 10.1 sweep pattern makes it cheap later | adopted — **deferred to 11.x**; the interim Zabbix deep-link shipped in Phase 10.0 (2026-07-16) |
 | D2 | Servers + Zabbix Status pages | Retire both. Servers stay Zabbix; "Zabbix Status" becomes **NetMon Status** (`collector_health`, poller sweeps, engine shadow log, DB/session stats) | adopted |
 | D3 | Bounded history ring buffer (spec 10 Q3): fixed-window 24h `state_samples` table, auto-pruned, to power port-traffic charts / fleet timelines / VoIP calls / sparklines | **Approve, bounded** — full visual parity is impossible without it; hard 24h pruning honors the no-long-term-series rule's intent. If declined, chart slots render "—" | ✅ **approved 2026-07-15** (§10 Q3); **built as Phase 10.6, 2026-07-17** — migration `019` + `netmon.history` sampler, retention hard-capped at 24h |
 | D4 | Operator write actions (PoE cycle via rConfig, XIQ AP reboot, PF reevaluate-access / restart-switchport) behind operator/admin role + audit log + per-action config flag (default off) | Approve as post-cutover phase (11.x), default-disabled; until then disabled buttons with "managed in <source>" tooltips | ⛔ open |
 | D5 | `websockets` dependency for the Milestone Events/State live path (`collectors/ws.py` is built + tested, unwired) | **Approve** — standing spec-05/spec-10 blocker for live camera state + VMS alarms | ⛔ open |
-| D6 | `snmpbulkwalk` charter amendment (spec 10 Q2) | **Approve — now core scope** (§5.1). Still subprocess, still read-only | ⛔ open |
-| D7 | Camera JPEG snapshot proxy (ZCD `tcs.camera.snapshot`): credentialed GET to `https://<camera>/snap.jpg` streamed through NetMon; `[surveillance] cam_user/cam_pass` config | Approve — read-only GET, low effort, high UI value | open |
+| D6 | `snmpbulkwalk` charter amendment (spec 10 Q2) | **Approve — now core scope** (§5.1). Still subprocess, still read-only | ✅ **approved 2026-07-15** (§10 Q2); **built as Phase 10.1, 2026-07-15/16** — migrations `006`/`009` + `netmon/poller/snmp_inventory.py`, still subprocess `snmpbulkwalk`, read-only, per-sweep disableable |
+| D7 | Camera JPEG snapshot proxy (ZCD `tcs.camera.snapshot`): credentialed GET to `https://<camera>/snap.jpg` streamed through NetMon; `[surveillance] cam_user/cam_pass` config | Approve — read-only GET, low effort, high UI value | ⛔ open |
 | D8 | XDR page | Drop — it was never wired in ZCD; revisit only if a Cortex API integration becomes real | adopted |
 | D9 | Registry seeding without Zabbix (today `sites` assignment needs a Zabbix `Site/` export) | Make `sites` + the topology file the durable source of truth; `netmon-seed` gains `--sites-from-db`; schedule in 10.0 | adopted |
 | D10 | **Direct camera monitoring** (spec 13): read-only SNMP (`snmpget`/`snmpbulkwalk`, no new dependency — same net-snmp path as D6) against the cameras Milestone already gives us, for host health Milestone can't supply — CPU, kernel-uptime reboot, filesystem, interface up/down + bandwidth, encoder bitrate, VCA motion. Bosch profile first (owner's Zabbix template, `reference/zabbix/milestone/template_milestone_camera_bosch.yaml`), vendor-extensible; alerts shadow-first; `[camera_snmp]` default-off | Approve as **post-parity 11.x**, gated + default-disabled — beyond ZCD parity and a direct-re-poll charter point, so plan now / build after cutover-critical work. Depends on the (approved) D6 SNMP amendment | ⛔ open |
@@ -130,12 +130,12 @@ with amendments:
 | Phase | Contents | Delta vs. spec 10 |
 |---|---|---|
 | **10.0 Foundations** | Fix `/api/status` missing dimensions; `/api/events` filters + `/api/collector-health`; `snapshot_cache` + `assigned_to` migration; port design shell/nav/primitives; Events + Problems consoles; **NetMon Status page (D2)**; **seed `--sites-from-db` (D9)**; nav disposition for Servers/ZbxStatus/XDR/FortiGate (D1/D2/D8) | + NetMon Status, + D9, + nav disposition |
-| **10.1 Switching** | ⛔ D6 gate → `snmp_inventory` sweeps (ports/FDB/LLDP/VLAN/stack) + tables; switch API; the 8-tab Switches page incl. FDB⋈PF port-detail pane | unchanged (core of the program) |
+| **10.1 Switching** | ✅ D6 (approved 2026-07-15) → `snmp_inventory` sweeps (ports/FDB/LLDP/VLAN/stack) + tables; switch API; the 8-tab Switches page incl. FDB⋈PF port-detail pane | unchanged (core of the program) |
 | **10.2 Wireless** | XIQ detail/clients/SSID cycles (rate budget ≈1.3–1.6k calls/h, ~4× headroom); wireless API; XIQ page + AP Detail | unchanged |
 | **10.3 Identity (PF)** | `pf_nodes` persistence (replaces in-memory snapshot), snapshot fetchers, five PF pages | unchanged |
 | **10.4 Surveillance + VoIP** | Cameras/RS/storage persistence + `milestone.overview`; **ESS WebSocket wiring (⛔ D5)**; **camera snapshot proxy (D7)**; trunks/extensions persistence + wire the existing dead `system_status()` | + D5, + D7 explicit |
 | **10.5 Global + Search + polish** | `/api/summary`, `/api/sites` cards, `/api/search` + ⌘K, Global page, staleness badging everywhere | unchanged |
-| **10.6 History ring buffer (⛔ D3)** | `state_samples` (24h, pruned) + writers (port rates, fleet counts, VoIP calls) + chart slots across pages | new; can interleave after 10.1 |
+| **10.6 History ring buffer (✅ D3)** | `state_samples` (24h, pruned) + writers (port rates, fleet counts, VoIP calls) + chart slots across pages | new; can interleave after 10.1 |
 | **11.x Post-parity** | FortiGate collector + page (D1); operator write actions with audit log (⛔ D4); **direct camera SNMP monitoring (⛔ D10 — spec 13)**; EAPS/SFP-DOM switch extras | new bucket |
 | **8 (unchanged)** | Parallel run & cutover — shadow-vs-Zabbix diff, owner flips `shadow=false`, Zabbix hosts for these domains disabled | after 10.4 |
 
@@ -224,11 +224,11 @@ shadow-alert diff has run clean for the agreed window.
   deep-links via `[web] zabbix_url` + `/api/meta`, XDR dropped, NetMon Status
   in a System section — D1/D2/D8), and the §8 housekeeping/debt items.
   Details in spec 10's progress log (2026-07-16 entry).
-- Owner: sign off (or veto) the ⛔ gates — D3, D4, D5, D6 — they gate 10.1,
-  10.4, 10.6, and 11.x scope. (Note: spec 10 Q2/Q3 record owner approval of
-  the D6 sweeps and D3 ring buffer on 2026-07-15, and the 10.1 sweep code is
-  already on main under that amendment — reconcile this table's "open" marks
-  with those resolutions when signing.)
+- Owner: sign off (or veto) the still-open ⛔ gates — **D4, D5, D7, D10** —
+  they gate 10.4's live-alarm and video pieces and the 11.x post-parity bucket.
+  (D3 and D6 are resolved: spec 10 Q3/Q2 record owner approval on 2026-07-15
+  and both shipped — D6 as Phase 10.1, D3 as Phase 10.6. The §6 table now
+  reflects that.)
 - **Web registry management added 2026-07-16** (owner-requested, out of phase
   order): admin `#/registry` page + `/api/registry/*` — add/edit/delete
   `sites` (rename cascades to the `devices.site` join key; delete refuses to
