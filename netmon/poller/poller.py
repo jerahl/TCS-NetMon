@@ -27,6 +27,27 @@ PING = "ping"
 SNMP = "snmp"
 
 
+class SweepBlindError(RuntimeError):
+    """A prober returned no verdicts at all for a non-empty target list.
+
+    Distinct from "every target is down": a down target still produces a
+    verdict. Zero verdicts means the probe never ran — a missing capability
+    (fping needs CAP_NET_RAW; a sandboxed unit with an empty
+    CapabilityBoundingSet silently strips it), a blocked binary, or a
+    misbuilt command line. That is a blind sweep, and CLAUDE.md §4.5 says
+    blind must never record as healthy.
+    """
+
+
+def _require_verdicts(dimension: str, targets: list[str], results: dict[str, bool]) -> None:
+    """Raise if a non-empty sweep produced nothing. No targets is legitimate."""
+    if targets and not results:
+        raise SweepBlindError(
+            f"{dimension} sweep returned 0 verdicts for {len(targets)} target(s) — "
+            f"the probe did not run (check the binary and, for fping, CAP_NET_RAW)"
+        )
+
+
 def _severity(dimension: str, settled: str) -> str:
     if settled == "up":
         return "ok"
@@ -84,6 +105,7 @@ class Poller:
         devices = self._devices(PING)
         ips = [d["mgmt_ip"] for d in devices]
         results = await self._ping_sweep(ips, self.cfg)
+        _require_verdicts(PING, ips, results)
         return self._apply(devices, PING, results)
 
     async def sweep_snmp(self) -> int:
@@ -94,6 +116,7 @@ class Poller:
         devices = self._devices(SNMP)
         ips = [d["mgmt_ip"] for d in devices]
         results = await self._snmp_sweep(ips, self.cfg)
+        _require_verdicts(SNMP, ips, results)
         return self._apply(devices, SNMP, results)
 
     def _apply(self, devices: list[dict[str, Any]], dimension: str, results: dict[str, bool]) -> int:
