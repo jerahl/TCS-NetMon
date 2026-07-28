@@ -52,18 +52,30 @@ class FakeXiq:
 
     def __init__(self):
         self.rows: list[dict] = []
+        self.radio_entities: list[dict] = []
         self.client_rows: list[dict] = []
         self.policies: list[dict] = []
         self.policy_ssids: dict[int, list[dict]] = {}
         self.exc: Exception | None = None
+        self.radio_exc: Exception | None = None
         self.rate_limit_remaining = None
         self.device_views: list[str] = []
+        self.radio_id_batches: list[list[int]] = []
 
     async def get_devices(self, view: str = "BASIC") -> list[dict]:
         if self.exc is not None:
             raise self.exc
         self.device_views.append(view)
         return self.rows
+
+    async def get_radio_information(self, device_ids, batch: int = 50) -> list[dict]:
+        ids = [int(i) for i in device_ids]
+        self.radio_id_batches.append(ids)
+        if self.radio_exc is not None:
+            raise self.radio_exc
+        if not ids:
+            return []
+        return [e for e in self.radio_entities if int(e["device_id"]) in set(ids)]
 
     async def get_active_clients(self) -> list[dict]:
         return self.client_rows
@@ -205,6 +217,7 @@ def _load_fixture(name):
 def _fake_with_fixtures():
     fake = FakeXiq()
     fake.rows = _load_fixture("xiq_devices_full.json")["data"]
+    fake.radio_entities = _load_fixture("xiq_radio_information.json")["data"]
     fake.client_rows = _load_fixture("xiq_clients_active.json")["data"]
     ssids = _load_fixture("xiq_ssids.json")
     fake.policies = ssids["policies"]["data"]
@@ -232,19 +245,33 @@ def test_xiq_detail_clients_ssid_cycles(tmp_path):
 
     details = {r["device_id"]: r for r in db.fetch_all(engine, "SELECT * FROM ap_details")}
     assert len(details) == 2
-    assert all(r["model"] == "AP305C" for r in details.values())
+    assert all(r["model"] == "AP_305C" for r in details.values())
     bhs = db.fetch_one(engine, "SELECT * FROM ap_details WHERE clients_total = 23")
     assert bhs["fw_version"] == "10.6.4.0" and bhs["network_policy"] == "TCS-Schools"
     assert bhs["mgmt_mac"] == "f0ab0000aa01"
     assert bhs["uptime_s"] and bhs["uptime_s"] > 0
 
-    # Radios: band comes from the radio's own frequency field — the CHS AP
-    # runs dual-5G (both radios band 5), never inferred from the index.
+    # Radios come from /devices/radio-information, not the device payload —
+    # the radios cycle asked for exactly the registry's AP ids.
+    assert fake.radio_id_batches == [[100001, 100003]]
+
+    # Band comes from the radio's own `frequency` field — the BHS AP runs
+    # dual-5G (wifi0 AND wifi1 at 5 GHz), never inferred from the index.
     radios = db.fetch_all(engine, "SELECT * FROM ap_radios ORDER BY device_id, radio")
-    assert len(radios) == 4
-    chs = [r for r in radios if r["band"] == "5" and r["width_mhz"] == 40]
-    assert len(chs) == 2
-    assert {r["radio"] for r in chs} == {"wifi0", "wifi1"}
+    assert len(radios) == 5           # 3 on the BHS AP, 2 on the CHS AP
+    bhs_id = db.fetch_one(engine, "SELECT id FROM devices WHERE xiq_device_id='100001'")["id"]
+    bhs_r = {r["radio"]: r for r in radios if r["device_id"] == bhs_id}
+    assert [bhs_r[n]["band"] for n in ("wifi0", "wifi1", "wifi2")] == ["5", "5", "2.4"]
+    # channel_number, not channel; MHZ_20, not "20MHz".
+    assert bhs_r["wifi0"]["channel"] == 40 and bhs_r["wifi1"]["channel"] == 161
+    assert all(bhs_r[n]["width_mhz"] == 20 for n in bhs_r)
+    assert bhs_r["wifi0"]["tx_power_dbm"] == 13
+    # clients stays NULL: radio["clients"] is an SSID list, not a client count.
+    assert all(r["clients"] is None for r in radios)
+    chs_id = db.fetch_one(engine, "SELECT id FROM devices WHERE xiq_device_id='100003'")["id"]
+    chs_r = {r["radio"]: r for r in radios if r["device_id"] == chs_id}
+    assert chs_r["wifi0"]["width_mhz"] == 80    # another published enum member
+    assert chs_r["wifi0"]["tx_power_dbm"] == 0  # a real radio state, not "missing"
 
     clients = {r["mac"]: r for r in db.fetch_all(engine, "SELECT * FROM wireless_clients")}
     assert len(clients) == 3
@@ -302,11 +329,18 @@ def test_switch_never_gets_ap_detail_even_when_xiq_calls_it_an_ap(tmp_path):
     engine = _db(tmp_path)   # 100001 = ap, 100002 = switch
     fake = FakeXiq()
     fake.rows = [
-        {"id": 100001, "connected": True, "device_function": "AP", "product_type": "AP305C",
-         "radios": [{"name": "wifi0", "frequency": "5G", "channel": 36}]},
-        # XIQ mislabels this switch as an AP and even ships radios — must be ignored.
-        {"id": 100002, "connected": True, "device_function": "AP", "product_type": "X440",
-         "radios": [{"name": "wifi0", "frequency": "5G", "channel": 44}]},
+        {"id": 100001, "connected": True, "device_function": "AP", "product_type": "AP_305C"},
+        # XIQ mislabels this switch as an AP — must still be ignored by the AP path.
+        {"id": 100002, "connected": True, "device_function": "AP", "product_type": "X440"},
+    ]
+    # …and it answers radio-information for the switch too. Also ignored.
+    fake.radio_entities = [
+        {"device_id": 100001,
+         "radios": [{"name": "wifi0", "frequency": "5GHz", "channel_number": 36,
+                     "channel_width": "MHZ_20", "power": 13}]},
+        {"device_id": 100002,
+         "radios": [{"name": "wifi0", "frequency": "5GHz", "channel_number": 44,
+                     "channel_width": "MHZ_20", "power": 13}]},
     ]
     collector = XiqCollector(engine, fake)
     asyncio.run(collector.run_once())
@@ -318,6 +352,10 @@ def test_switch_never_gets_ap_detail_even_when_xiq_calls_it_an_ap(tmp_path):
     assert sw_id not in details
     assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM ap_radios WHERE device_id=:d",
                         {"d": sw_id})["n"] == 0
+    assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM ap_radios WHERE device_id=:d",
+                        {"d": ap_id})["n"] == 1
+    # The switch's id was never even asked for.
+    assert fake.radio_id_batches == [[100001]]
     # …but the switch still gets up/down source_status from the fleet list.
     st = _status(engine)
     assert st["100002"]["value"] == "up"
@@ -343,6 +381,159 @@ def test_xiq_cycles_are_interval_gated_and_disableable(tmp_path):
     asyncio.run(c2.run_once())
     assert db.fetch_one(engine2, "SELECT COUNT(*) AS n FROM wireless_clients")["n"] == 0
     assert db.fetch_one(engine2, "SELECT COUNT(*) AS n FROM ap_details")["n"] >= 1
+
+    # radios cycle disabled: no radio fetch at all, and ap_radios stays empty —
+    # the extra ~16 calls/cycle must be switchable off (§4.3).
+    d3 = Path(str(tmp_path)) / "third"
+    d3.mkdir(exist_ok=True)
+    engine3 = _db(d3)
+    f3 = _fake_with_fixtures()
+    c3 = XiqCollector(engine3, f3, radios_enabled=False)
+    asyncio.run(c3.run_once())
+    assert f3.radio_id_batches == []
+    assert db.fetch_one(engine3, "SELECT COUNT(*) AS n FROM ap_radios")["n"] == 0
+    assert db.fetch_one(engine3, "SELECT COUNT(*) AS n FROM ap_details")["n"] >= 1
+
+    # The radios cycle is interval-gated like the others: due once, then not.
+    f4 = _fake_with_fixtures()
+    c4 = XiqCollector(engine3, f4)
+    asyncio.run(c4.run_once())
+    asyncio.run(c4.run_once())
+    assert len(f4.radio_id_batches) == 1
+
+
+# ---- ap_radios: the radio-information endpoint (task #18) -------------------
+
+def test_width_mhz_parses_the_MHZ_20_enum_and_flags_junk():
+    """``XiqRadio.channel_width`` is the enum MHZ_20|MHZ_40|MHZ_80|MHZ_160|MHZ_320
+    — digits at the END. The old leading-anchored regex returned None for every
+    one of them, and the live fleet is 100% MHZ_20, so the column would have been
+    entirely NULL. Both spellings must parse."""
+    from collections import Counter
+
+    from netmon.collectors.xiq import _width_mhz
+
+    assert _width_mhz("MHZ_20") == 20
+    assert _width_mhz("MHZ_40") == 40
+    assert _width_mhz("MHZ_80") == 80
+    assert _width_mhz("MHZ_160") == 160
+    assert _width_mhz("MHZ_320") == 320
+    # …and the shapes the collector already accepted.
+    assert _width_mhz("20") == 20
+    assert _width_mhz("20MHz") == 20
+    assert _width_mhz(40) == 40
+    assert _width_mhz("mhz_80") == 80
+
+    # Absent is not an error: XIQ said nothing.
+    tally: Counter = Counter()
+    assert _width_mhz(None, tally) is None
+    assert _width_mhz("", tally) is None
+    assert _width_mhz("   ", tally) is None
+    assert tally == Counter()
+
+    # Present but unparseable must be LOUD, not a silent NULL (§4.5).
+    assert _width_mhz("WIDE", tally) is None
+    assert tally == Counter({"radios[].channel_width='WIDE'": 1})
+
+
+def test_build_radio_rows_uses_the_real_radio_information_shape():
+    """Field-for-field against the sanitized live payload: channel_number (not
+    channel), MHZ_20 (not "20MHz"), frequency for the band, and clients left
+    NULL because radio["clients"] is an SSID list, not a client count."""
+    from datetime import datetime, timezone
+
+    from netmon.collectors.xiq import build_radio_rows
+
+    ents = _load_fixture("xiq_radio_information.json")["data"]
+    now = datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc)
+    # 100001 → device 1 (ap), 100003 → device 3 (ap), 100002 → device 2 (switch)
+    xiq_to_dev = {"100001": 1, "100002": 2, "100003": 3}
+
+    rows = build_radio_rows(ents, xiq_to_dev, now, ap_ids={1, 3})
+    assert len(rows) == 5
+    by_key = {(r["device_id"], r["radio"]): r for r in rows}
+    assert set(by_key) == {(1, "wifi0"), (1, "wifi1"), (1, "wifi2"),
+                           (3, "wifi0"), (3, "wifi1")}
+
+    w0 = by_key[(1, "wifi0")]
+    assert w0["band"] == "5"            # from frequency "5GHz"
+    assert w0["channel"] == 40          # from channel_number
+    assert w0["width_mhz"] == 20        # from "MHZ_20"
+    assert w0["tx_power_dbm"] == 13
+    assert w0["clients"] is None
+    assert w0["updated_at"] == now
+
+    # Dual-5G is the norm on this fleet: band never comes from the radio index.
+    assert by_key[(1, "wifi0")]["band"] == by_key[(1, "wifi1")]["band"] == "5"
+    assert by_key[(1, "wifi2")]["band"] == "2.4"
+    assert by_key[(3, "wifi0")]["width_mhz"] == 80
+
+    # A radio with an empty clients[] is still a real radio.
+    assert by_key[(1, "wifi2")]["channel"] == 11
+
+    # The switch answered too, and is excluded by registry device_type.
+    assert not any(r["device_id"] == 2 for r in rows)
+
+    # Without ap_ids nothing is filtered (legacy behaviour), but an unknown XIQ
+    # id is still dropped — we never invent a device_id.
+    assert len(build_radio_rows(ents, xiq_to_dev, now)) == 6
+    assert build_radio_rows(ents, {}, now) == []
+
+
+def test_radio_clients_array_is_never_counted_as_clients():
+    """The trap this task had to avoid. ``XiqRadio.clients`` is an array of
+    ``XiqWirelessClient`` — network_policy_name/ssid/ssid_status/
+    ssid_security_type, no client identity at all. Live: its ssid set matched
+    ``wlans[]`` on 1,574/1,574 radios and the per-AP total was only ever 3 or 6,
+    while XIQ's own active_clients for those APs ran 1..30+. len() would stamp a
+    fabricated "3" on every radio in the fleet (§4.5)."""
+    from datetime import datetime, timezone
+
+    from netmon.collectors.xiq import build_radio_rows
+
+    ssid_descriptor = {"network_policy_name": "TCS-Schools", "ssid": "TCS-Student",
+                       "ssid_status": "OPEN", "ssid_security_type": "TYPE_802DOT1X"}
+    ents = [{"device_id": 100001, "radios": [{
+        "name": "wifi0", "frequency": "5GHz", "channel_number": 36,
+        "channel_width": "MHZ_20", "power": 13,
+        # three SSIDs, and there is no client anywhere in sight
+        "clients": [dict(ssid_descriptor, ssid=s) for s in ("A", "B", "C")],
+    }]}]
+    rows = build_radio_rows(ents, {"100001": 1}, datetime.now(timezone.utc))
+    assert len(rows) == 1
+    assert rows[0]["clients"] is None, "an SSID list must never become a client count"
+
+
+def test_radios_cycle_populates_ap_radios_and_keeps_stale_rows_on_failure(tmp_path):
+    """The actual production bug: ap_radios had 0 rows because build_ap_rows read
+    a `radios` key that GET /devices?views=FULL does not have. Radios now come
+    from their own endpoint — and if that fetch fails, the previous rows stay
+    visible-and-stale rather than being wiped (§4.5)."""
+    engine = _db_with_chs(tmp_path)
+    fake = _fake_with_fixtures()
+
+    # The device payload no longer pretends to carry radios…
+    assert all("radios" not in r for r in fake.rows)
+    # …yet ap_radios fills anyway.
+    asyncio.run(XiqCollector(engine, fake).run_once())
+    assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM ap_radios")["n"] == 5
+    bands = {r["band"]: r["c"] for r in db.fetch_all(
+        engine, "SELECT band, COUNT(*) AS c FROM ap_radios GROUP BY band")}
+    assert bands == {"5": 4, "2.4": 1}
+    assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM ap_radios "
+                                "WHERE width_mhz IS NULL")["n"] == 0
+
+    # A later cycle whose radio fetch fails must raise (so collector_health
+    # records it) and must NOT leave ap_radios empty.
+    f2 = _fake_with_fixtures()
+    f2.radio_exc = XiqRateLimitError("XIQ 429 — rate limit exceeded")
+    c2 = XiqCollector(engine, f2)
+    try:
+        asyncio.run(c2.run_once())
+        raise AssertionError("a failed radio fetch must not pass silently")
+    except XiqRateLimitError:
+        pass
+    assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM ap_radios")["n"] == 5
 
 
 # ---- client radio_type: the integer band enum (task #15) ---------------------

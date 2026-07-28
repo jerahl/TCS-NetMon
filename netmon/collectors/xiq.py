@@ -1,19 +1,24 @@
 """XIQ collector — federate ExtremeCloud IQ into NetMon.
 
 Cycles inside one supervised task (each independently intervalled and
-disableable — spec 10 §5; ≈1,300–1,600 calls/h total at fleet scale, ≤ ~25%
-of the 7,500/h tenant quota):
+disableable — spec 10 §5; ≈1,500–1,800 calls/h total at fleet scale, ≤ ~25%
+of the 7,500/h tenant quota shared with every other integration):
 
   * status (base interval, 180 s): fleet list → ``source_status`` up/down, but
     only for devices XIQ actually manages — a non-MANAGED ``device_admin_state``
     is always ``connected: false`` and maps to ``unknown``, never crit
     (``source_state``). Unreachable XIQ (401/transport/5xx) marks all XIQ
     devices ``blind``; a 429 is a throttle, not blind.
-  * detail (5 min): ``views=FULL`` fleet sweep → ``ap_details`` + ``ap_radios``
-    (when due, the same fetch also serves the status cycle — no extra calls).
-    Only devices the registry types as ``ap`` get AP-detail rows; switches
-    federated from XIQ get up/down ``source_status`` only — their port/PoE/FDB
-    detail comes from the SNMP inventory sweep, never the AP endpoints.
+  * detail (5 min): ``views=FULL`` fleet sweep → ``ap_details`` (when due, the
+    same fetch also serves the status cycle — no extra calls). Only devices the
+    registry types as ``ap`` get AP-detail rows; switches federated from XIQ get
+    up/down ``source_status`` only — their port/PoE/FDB detail comes from the
+    SNMP inventory sweep, never the AP endpoints.
+  * radios (5 min): ``/devices/radio-information`` → ``ap_radios``. Radios are
+    NOT on the device payload (``XiqDevice`` has no ``radios`` property), so
+    this needs its own fetch — ~16 extra calls per cycle for 783 APs, batched 50
+    ids at a time because ``deviceIds`` is required and ``limit`` caps at 50.
+    Disable with ``[xiq] radios_enabled = false``.
   * clients (10 min): ``/clients/active?views=FULL`` → ``wireless_clients``.
     Carries usernames/MACs (PII — spec 10 Q8): disable with
     ``[xiq] clients_enabled = false``. ``radio_type`` is an **integer** enum
@@ -120,8 +125,8 @@ def _note_unmapped(field: str, raw: Any, tally: Counter | None) -> None:
     if last is None or (now - last) >= UNMAPPED_WARN_INTERVAL_S:
         _unmapped_last_warn[key] = now
         log.warning(
-            "XIQ %s: unmapped value %r — band left NULL. The source enum likely "
-            "changed (or a new band shipped); update the map in "
+            "XIQ %s: unmapped value %r — column left NULL. The source enum likely "
+            "changed (or a new value shipped); update the mapping in "
             "netmon/collectors/xiq.py.", field, raw,
         )
 
@@ -156,9 +161,27 @@ def _client_band(raw: Any, tally: Counter | None = None) -> str | None:
     return band
 
 
-def _width_mhz(raw: Any):
-    m = re.match(r"(\d+)", str(raw or ""))
-    return int(m.group(1)) if m else None
+def _width_mhz(raw: Any, tally: Counter | None = None):
+    """Channel width in MHz from ``XiqRadio.channel_width``.
+
+    The published enum puts the digits at the **end**:
+    ``MHZ_20|MHZ_40|MHZ_80|MHZ_160|MHZ_320``. This used to anchor the match at
+    the start (``re.match``), so every real radio parsed to None — and every
+    live radio on this fleet is ``MHZ_20`` (1,574/1,574 on 2026-07-28), so the
+    column would have been 100% NULL the moment radios started arriving. A
+    plain ``"20"`` / ``"20MHz"`` / ``20`` is still accepted for any view or
+    tenant that spells it that way.
+
+    Absent/blank → None (XIQ said nothing). Present but unparseable →
+    :func:`_note_unmapped`, never a silent None (§4.5).
+    """
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    m = re.search(r"(\d+)", str(raw))
+    if m is None:
+        _note_unmapped("radios[].channel_width", raw, tally)
+        return None
+    return int(m.group(1))
 
 
 def _to_int(v: Any):
@@ -185,18 +208,21 @@ def _uptime_s(raw: Any, now_s: float):
 
 def build_ap_rows(
     raw: list[dict], xiq_to_dev: dict[str, int], now_s: float, now: datetime,
-    ap_ids: set[int] | None = None, tally: Counter | None = None,
-) -> tuple[list[dict], list[dict]]:
-    """FULL fleet rows → (ap_details rows, ap_radios rows) for registry APs.
+    ap_ids: set[int] | None = None,
+) -> list[dict]:
+    """FULL fleet rows → ``ap_details`` rows for registry APs.
 
     NetMon's own registry ``device_type`` is authoritative — ``ap_ids`` is the
     set of device ids NetMon classifies as APs. A device the operator has
     typed as a ``switch`` never gets AP-detail rows even when XIQ still reports
     its ``device_function`` as "AP" (switch port/PoE/FDB detail comes from the
     SNMP inventory sweep, not the AP path). When ``ap_ids`` is None we fall
-    back to the XIQ payload's ``device_function`` (legacy behaviour)."""
+    back to the XIQ payload's ``device_function`` (legacy behaviour).
+
+    Radios are **not** here: see :func:`build_radio_rows`. Nothing on this path
+    maps a source enum any more, so it takes no unmapped-value ``tally``.
+    """
     details: list[dict] = []
-    radios: list[dict] = []
     for r in raw:
         dev_id = xiq_to_dev.get(str(r.get("id")))
         if dev_id is None:
@@ -219,21 +245,64 @@ def build_ap_rows(
             "clients_total": _to_int(r.get("active_clients")),
             "updated_at": now,
         })
-        for radio in r.get("radios") or []:
+    return details
+
+
+def build_radio_rows(
+    entities: list[dict], xiq_to_dev: dict[str, int], now: datetime,
+    ap_ids: set[int] | None = None, tally: Counter | None = None,
+) -> list[dict]:
+    """``GET /devices/radio-information`` entities → ``ap_radios`` rows.
+
+    One ``XiqRadioEntity`` per device (``{"device_id", "radios": [XiqRadio…]}``).
+    Field names are *not* the ones the fleet payload was assumed to carry —
+    ``channel_number``, not ``channel``; ``channel_width`` as ``"MHZ_20"``, not
+    ``"20MHz"``. Band still comes from the radio's own ``frequency`` (a genuine
+    string enum, ``2.4GHz|5GHz|6GHz``) and never from the radio index, because
+    dual-5G APs are the norm on this fleet — 783 of 783 APs run wifi0 *and*
+    wifi1 at 5 GHz (spec 00 G10).
+
+    ``ap_ids`` (registry ``device_type == 'ap'``) is authoritative, as in
+    :func:`build_ap_rows`: a device NetMon types as a switch gets no radio rows
+    even if XIQ answers for it.
+    """
+    out: dict[tuple[int, str], dict] = {}
+    for ent in entities:
+        dev_id = xiq_to_dev.get(str(ent.get("device_id")))
+        if dev_id is None or (ap_ids is not None and dev_id not in ap_ids):
+            continue
+        for radio in ent.get("radios") or []:
             name = str(radio.get("name") or "").strip()
             if not name:
                 continue
-            radios.append({
+            out[(dev_id, name)] = {
                 "device_id": dev_id,
                 "radio": name,
                 "band": _band(radio.get("frequency"), tally),
-                "channel": _to_int(radio.get("channel")),
-                "width_mhz": _width_mhz(radio.get("channel_width")),
+                "channel": _to_int(radio.get("channel_number")),
+                "width_mhz": _width_mhz(radio.get("channel_width"), tally),
                 "tx_power_dbm": _to_int(radio.get("power")),
-                "clients": _to_int(radio.get("clients")),
+                # Deliberately NULL, and NOT len(radio["clients"]).
+                # ``XiqRadio.clients`` is an array of ``XiqWirelessClient``,
+                # whose only fields are network_policy_name / ssid /
+                # ssid_status / ssid_security_type — SSID descriptors, with no
+                # client identity in them at all. It is a per-WLAN list, not a
+                # client list: across 1,574 live radios (2026-07-28) its ssid
+                # set was identical to ``wlans[]``'s on 1,574/1,574, no radio
+                # ever repeated an ssid, and the per-AP total took just two
+                # values (3 or 6 = SSIDs × radios) while XIQ's own
+                # ``active_clients`` for those same APs ranged 1..30+ and
+                # agreed with it on 1 of 783. len() would stamp the same "3"
+                # onto every radio in the fleet — a plausible-looking
+                # fabrication, which §4.5 forbids far more than an empty
+                # column. The AP Detail page renders NULL as "—" honestly.
+                # A real per-radio count is derivable from /clients/active's
+                # ``interface_name`` ("wifi0.1"); that is a follow-up, not a
+                # guess to ship here.
+                "clients": None,
                 "updated_at": now,
-            })
-    return details, radios
+            }
+    return list(out.values())
 
 
 def build_client_rows(
@@ -294,6 +363,8 @@ class XiqCollector(Collector):
         *,
         detail_enabled: bool = True,
         detail_interval_s: float = 300.0,
+        radios_enabled: bool = True,
+        radios_interval_s: float = 300.0,
         clients_enabled: bool = True,
         clients_interval_s: float = 600.0,
         ssids_enabled: bool = True,
@@ -307,6 +378,8 @@ class XiqCollector(Collector):
         self.timeout_s = max(300.0, interval_s)
         self.detail_enabled = detail_enabled
         self.detail_interval_s = detail_interval_s
+        self.radios_enabled = radios_enabled
+        self.radios_interval_s = radios_interval_s
         self.clients_enabled = clients_enabled
         self.clients_interval_s = clients_interval_s
         self.ssids_enabled = ssids_enabled
@@ -329,6 +402,8 @@ class XiqCollector(Collector):
             interval_s=int(settings.get("status_interval_s") or 180),
             detail_enabled=_b("detail_enabled", True),
             detail_interval_s=int(settings.get("detail_interval_s") or 300),
+            radios_enabled=_b("radios_enabled", True),
+            radios_interval_s=int(settings.get("radios_interval_s") or 300),
             clients_enabled=_b("clients_enabled", True),
             clients_interval_s=int(settings.get("clients_interval_s") or 600),
             ssids_enabled=_b("ssids_enabled", True),
@@ -405,6 +480,12 @@ class XiqCollector(Collector):
         # the AP-detail path; switches only get source_status (up/down) here —
         # their detail comes from the SNMP inventory sweep, never the AP API.
         ap_ids = {int(r["id"]) for r in registry if r.get("device_type") == "ap"}
+        # XIQ's own ids for those APs — what /devices/radio-information takes.
+        ap_xiq_ids = sorted({
+            i for i in (_to_int(r.get("xiq_device_id")) for r in registry
+                        if r.get("device_type") == "ap")
+            if i is not None
+        })
         now = datetime.now(timezone.utc)
         # Enum values the band maps don't cover, counted per cycle and published
         # so an upstream enum change is visible, not a silent NULL (§4.5).
@@ -412,12 +493,25 @@ class XiqCollector(Collector):
         band_cycle_ran = False
 
         if detail_due:
-            details, radios = build_ap_rows(raw, xiq_to_dev, time.time(), now, ap_ids, tally)
+            details = build_ap_rows(raw, xiq_to_dev, time.time(), now, ap_ids)
             written += db.replace_rows(self.engine, "ap_details", ["device_id"], details)
-            written += db.replace_rows(self.engine, "ap_radios", ["device_id", "radio"], radios)
             self._last_cycle["detail"] = mono
+            log.info("xiq detail cycle: %d AP(s)", len(details))
+
+        if self.radios_enabled and self._due("radios", self.radios_interval_s, mono):
+            # Radios need their own fetch: they are absent from the device
+            # payload entirely (see build_radio_rows), which is why ap_radios
+            # sat at 0 rows while this collector reported clean successes.
+            # A failed fetch raises before replace_rows, so the previous radio
+            # rows stay visible-and-stale rather than being wiped (§4.5).
+            entities = await self.client.get_radio_information(ap_xiq_ids)
+            radios = build_radio_rows(entities, xiq_to_dev, now, ap_ids, tally)
+            written += db.replace_rows(self.engine, "ap_radios", ["device_id", "radio"], radios)
+            self._last_cycle["radios"] = mono
             band_cycle_ran = True
-            log.info("xiq detail cycle: %d AP(s), %d radio row(s)", len(details), len(radios))
+            by_band = Counter(r["band"] or "unknown" for r in radios)
+            log.info("xiq radios cycle: %d radio row(s) on %d AP(s); by band: %s",
+                     len(radios), len(entities), dict(sorted(by_band.items())))
 
         if self.clients_enabled and self._due("clients", self.clients_interval_s, mono):
             raw_clients = await self.client.get_active_clients()

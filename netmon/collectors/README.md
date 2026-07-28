@@ -32,8 +32,8 @@ Ported from `reference/lib/XIQFleetClient.php`.
   `up`/`down` — the rest map to `unknown`, never crit. Reading `connected`
   alone flagged 13 switches down district-wide while 11 of them were answering
   SNMP (2026-07-27). A missing `device_admin_state` is treated as managed.
-- **AP-detail cycles (10.2):** the `detail`/`clients`/`ssids` cycles persist
-  `ap_details`/`ap_radios`/`wireless_clients`/`ssids`. **NetMon's registry
+- **AP-detail cycles (10.2):** the `detail`/`radios`/`clients`/`ssids` cycles
+  persist `ap_details`/`ap_radios`/`wireless_clients`/`ssids`. **NetMon's registry
   `device_type` is authoritative** — only devices typed `ap` flow through the
   AP-detail path. Switches federated from XIQ get up/down `source_status`
   only; their port/PoE/FDB detail comes from the SNMP inventory sweep, never
@@ -42,6 +42,27 @@ Ported from `reference/lib/XIQFleetClient.php`.
   the type override is insert-only in the seed/import upsert, so it survives
   re-imports. (XIQ's switch-specific wired-client grid is a **POST** — a
   non-GET source call, owner-gated per CLAUDE.md §2/§4.1 — not implemented.)
+- **Radios are NOT on the device payload.** `XiqDevice` has no `radios`
+  property in the published schema and 0 of 1,364 live `views=FULL` rows carried
+  one, so `ap_radios` sat at **0 rows** while the collector logged clean
+  successes and the AP Detail radio table rendered blank (fixed 2026-07-28 —
+  `docs/xiq-ap-radios.md`). They come from **`GET /devices/radio-information`**
+  (`XiqRadioEntity` → `XiqRadio`), whose field names differ from what the old
+  code assumed: **`channel_number`** (not `channel`) and **`channel_width` as
+  the enum `MHZ_20|MHZ_40|MHZ_80|MHZ_160|MHZ_320`** (not `"20MHz"` — the width
+  parser is anchored accordingly, or every real radio parses to NULL). `band`
+  still comes from `frequency`, a genuine string enum (`2.4GHz`/`5GHz`/`6GHz`),
+  never from the radio index: 783 of 783 APs here run wifi0 *and* wifi1 at 5 GHz.
+- **`ap_radios.clients` is deliberately NULL.** `XiqRadio.clients` is an array
+  of `XiqWirelessClient`, and those objects hold no client identity —
+  `network_policy_name`/`ssid`/`ssid_status`/`ssid_security_type`. It is the
+  radio's SSID list, not its clients: across 1,574 live radios its ssid set was
+  identical to `wlans[]`'s on 1,574/1,574, no radio ever repeated an ssid, and
+  the per-AP total took only two values (3 or 6) while XIQ's own
+  `active_clients` for those APs ran 1..30+. `len()` would write the same "3"
+  onto every radio in the fleet, so the column stays empty and the page renders
+  "—" (§4.5). A real per-radio count is derivable from `/clients/active`'s
+  `interface_name` (`wifi0.1`) — a follow-up, not a guess.
 - **Client band is an INTEGER enum.** `/clients/active` returns `radio_type`
   as an int, not a band string: **1 = 2.4G, 2 = 5G, 3 = WIRED, 4 = 6G,
   5 = THREAD** (verbatim from the tenant's own `GET /openapi`, ExtremeCloud IQ
@@ -52,8 +73,9 @@ Ported from `reference/lib/XIQFleetClient.php`.
   `/clients/active` also returns **wired switch clients** (≈85% of rows on this
   fleet), which is why `wired` is a real band label here.
 - **Unmapped enum values are loud, not NULL (§4.5).** Any `radio_type` /
-  `frequency` value the maps don't cover logs a WARNING (rate-limited to one per
-  distinct value per 5 min) and is counted into `snapshot_cache` key
+  `frequency` / `channel_width` value the maps don't cover logs a WARNING
+  (rate-limited to one per distinct value per 5 min) and is counted into
+  `snapshot_cache` key
   `xiq.unmapped_enums` — `ok=1, total=0` on a clean cycle, `ok=0` plus
   `{value: count}` when something is unmapped. The clients cycle also logs its
   per-band histogram, so an all-`unknown` cycle is obvious. Query it with:
@@ -61,7 +83,12 @@ Ported from `reference/lib/XIQFleetClient.php`.
 - **Interval:** `[xiq] status_interval_s` (default 180s).
 - **Rate limits:** 7,500 req/hr per VIQ, **shared across all integrations**
   (Zabbix, SolarWinds, NetMon). `RateLimit-Remaining`/`-Reset` tracked; a low-
-  quota warning logs under 500 remaining.
+  quota warning logs under 500 remaining. The `radios` cycle adds
+  `ceil(APs / 50)` calls per run — `deviceIds` is a required parameter and
+  `limit` caps at 50, so there is no cheaper fleet-wide form: **16 calls per
+  cycle for 783 APs, ≈192/h at the 300 s default**, taking the collector from
+  ≈1.3–1.6k to ≈1.5–1.8k calls/h (~24% of quota). `radios_interval_s` /
+  `radios_enabled` throttle or disable it.
 - **Failure modes:**
   - 401 / transport / 5xx → **blind**: every XIQ device's `source_status` set
     to `blind`, error recorded, raised loud. Never stale-as-fresh.
@@ -69,8 +96,13 @@ Ported from `reference/lib/XIQFleetClient.php`.
     recorded, back off.
   - A device in the registry but absent from a successful fleet fetch → prior
     state left untouched (not fabricated).
+  - A failed `radios` fetch raises before `replace_rows`, so the previous
+    `ap_radios` rows stay visible-and-stale (badged by `updated_at`) instead of
+    being wiped.
 - **Config:** `[xiq] enabled`, `api_token` (secret), `base_url`,
-  `status_interval_s`.
+  `status_interval_s`, `detail_enabled`/`detail_interval_s`,
+  `radios_enabled`/`radios_interval_s`, `clients_enabled`/`clients_interval_s`,
+  `ssids_enabled`/`ssids_interval_s`.
 
 A misconfigured enabled source (e.g. empty token) is logged and skipped at
 startup — it does not crash the app.

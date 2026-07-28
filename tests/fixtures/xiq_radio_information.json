@@ -1,0 +1,107 @@
+{
+  "_note": "SANITIZED sample of GET /devices/radio-information?deviceIds=…, structure copied verbatim from a live drain of all 783 registry APs on ExtremeCloud IQ API 25.11.1-3 (2026-07-28); only identifiers are replaced (fake MACs/BSSIDs, generic SSIDs, small device ids). This is the endpoint that actually carries radios — GET /devices?views=FULL has no 'radios' key at all. Field names per the published XiqRadio schema: channel_number (NOT channel), channel_width as the enum MHZ_20|MHZ_40|MHZ_80|MHZ_160|MHZ_320 (NOT '20MHz'), power in dBm, frequency as the string enum 2.4GHz|5GHz|6GHz, mode as _11ax_5g etc. 'clients' is an array of XiqWirelessClient, and those objects carry NO client identity — network_policy_name/ssid/ssid_status/ssid_security_type only. It is the radio's SSID list (identical ssid set to wlans[] on 1,574/1,574 live radios), so len() is NOT a client count and ap_radios.clients stays NULL. Live fleet is 100% MHZ_20; the MHZ_80 radio below is included to exercise another published enum member. wifi2 has no wlans key, exactly as the 8 live tri-radio APs report it. Device 100002 is a switch in the test registry: it must be ignored even though XIQ answers for it.",
+  "data": [
+    {
+      "device_id": 100001,
+      "radios": [
+        {
+          "name": "wifi0",
+          "channel_number": 40,
+          "channel_width": "MHZ_20",
+          "mode": "_11ax_5g",
+          "mac_address": "F0AB0000AA10",
+          "power": 13,
+          "frequency": "5GHz",
+          "clients": [
+            {"network_policy_name": "TCS-Schools", "ssid": "TCS-Student", "ssid_status": "OPEN", "ssid_security_type": "TYPE_802DOT1X"},
+            {"network_policy_name": "TCS-Schools", "ssid": "TCS-Staff", "ssid_status": "OPEN", "ssid_security_type": "TYPE_802DOT1X"},
+            {"network_policy_name": "TCS-Schools", "ssid": "TCS-IoT", "ssid_status": "OPEN", "ssid_security_type": "PPSK"}
+          ],
+          "wlans": [
+            {"network_policy_name": "TCS-Schools", "ssid": "TCS-Student", "ssid_status": "OPEN", "ssid_security_type": "TYPE_802DOT1X", "bssid": "F0AB0000AA11"},
+            {"network_policy_name": "TCS-Schools", "ssid": "TCS-Staff", "ssid_status": "OPEN", "ssid_security_type": "TYPE_802DOT1X", "bssid": "F0AB0000AA12"},
+            {"network_policy_name": "TCS-Schools", "ssid": "TCS-IoT", "ssid_status": "OPEN", "ssid_security_type": "PPSK", "bssid": "F0AB0000AA13"}
+          ]
+        },
+        {
+          "name": "wifi1",
+          "channel_number": 161,
+          "channel_width": "MHZ_20",
+          "mode": "_11ax_5g",
+          "mac_address": "F0AB0000AA18",
+          "power": 13,
+          "frequency": "5GHz",
+          "clients": [
+            {"network_policy_name": "TCS-Schools", "ssid": "TCS-Student", "ssid_status": "OPEN", "ssid_security_type": "TYPE_802DOT1X"},
+            {"network_policy_name": "TCS-Schools", "ssid": "TCS-Staff", "ssid_status": "OPEN", "ssid_security_type": "TYPE_802DOT1X"},
+            {"network_policy_name": "TCS-Schools", "ssid": "TCS-IoT", "ssid_status": "OPEN", "ssid_security_type": "PPSK"}
+          ],
+          "wlans": [
+            {"network_policy_name": "TCS-Schools", "ssid": "TCS-Student", "ssid_status": "OPEN", "ssid_security_type": "TYPE_802DOT1X", "bssid": "F0AB0000AA19"},
+            {"network_policy_name": "TCS-Schools", "ssid": "TCS-Staff", "ssid_status": "OPEN", "ssid_security_type": "TYPE_802DOT1X", "bssid": "F0AB0000AA1A"},
+            {"network_policy_name": "TCS-Schools", "ssid": "TCS-IoT", "ssid_status": "OPEN", "ssid_security_type": "PPSK", "bssid": "F0AB0000AA1B"}
+          ]
+        },
+        {
+          "name": "wifi2",
+          "channel_number": 11,
+          "channel_width": "MHZ_20",
+          "mode": "_11ax_2g",
+          "mac_address": "F0AB0000AA1C",
+          "power": 20,
+          "frequency": "2.4GHz",
+          "clients": []
+        }
+      ]
+    },
+    {
+      "device_id": 100003,
+      "radios": [
+        {
+          "name": "wifi0",
+          "channel_number": 36,
+          "channel_width": "MHZ_80",
+          "mode": "_11ax_5g",
+          "mac_address": "F0AB0000AA30",
+          "power": 0,
+          "frequency": "5GHz",
+          "clients": []
+        },
+        {
+          "name": "wifi1",
+          "channel_number": 149,
+          "channel_width": "MHZ_20",
+          "mode": "_11ax_5g",
+          "mac_address": "F0AB0000AA38",
+          "power": 16,
+          "frequency": "5GHz",
+          "clients": [
+            {"network_policy_name": "TCS-Schools", "ssid": "TCS-Student", "ssid_status": "OPEN", "ssid_security_type": "TYPE_802DOT1X"}
+          ],
+          "wlans": [
+            {"network_policy_name": "TCS-Schools", "ssid": "TCS-Student", "ssid_status": "OPEN", "ssid_security_type": "TYPE_802DOT1X", "bssid": "F0AB0000AA39"}
+          ]
+        }
+      ]
+    },
+    {
+      "device_id": 100002,
+      "radios": [
+        {
+          "name": "wifi0",
+          "channel_number": 44,
+          "channel_width": "MHZ_20",
+          "mode": "_11ax_5g",
+          "mac_address": "F0AB0000AA20",
+          "power": 13,
+          "frequency": "5GHz",
+          "clients": []
+        }
+      ]
+    }
+  ],
+  "page": 1,
+  "count": 3,
+  "total_pages": 1,
+  "total_count": 3
+}

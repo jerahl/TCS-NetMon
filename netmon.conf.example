@@ -179,6 +179,12 @@ base_url = https://api.extremecloudiq.com
 # status_interval_s = 180
 detail_enabled = true
 detail_interval_s = 300
+# Radios come from their own endpoint (/devices/radio-information) — they are
+# NOT on the device payload. deviceIds is required and limit caps at 50, so this
+# costs ceil(APs / 50) calls per cycle: ~16 for 783 APs, ~192/h at 300 s. Raise
+# the interval or flip it off if the shared tenant quota gets tight.
+radios_enabled = true
+radios_interval_s = 300
 # The clients cycle stores usernames + MACs (PII — spec 10 Q8); flip off to
 # stop persisting them (the XIQ page then shows counts from AP rows only).
 clients_enabled = true
