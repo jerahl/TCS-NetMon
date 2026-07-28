@@ -1,6 +1,6 @@
 import React from "react";
 import { getJSON } from "../api.js";
-import { Card, Loading, ErrorMsg, SourceBadge, sevColor } from "../primitives.jsx";
+import { Card, Dot, Loading, ErrorMsg, SourceBadge, sevColor } from "../primitives.jsx";
 import { SshButton } from "../ssh.jsx";
 import { ageOf } from "../format.js";
 import { macMatches } from "../macmatch.js";
@@ -15,6 +15,85 @@ import { HistoryChart } from "../history.jsx";
 // PoE sweep lands (spec 10 progress log) and render "—", never fabricated.
 
 const REFRESH_MS = 30000;
+
+// ───────── navigator: collapsible site groups ─────────
+
+// A switch's own reachability, not its port counts. `status` comes from
+// /api/switches, derived from the same predicates the site roll-up uses
+// (netmon.state) — so a switch reading down here reads down on the site card.
+const STATUS_SEV = { up: "ok", down: "crit", unknown: "unknown" };
+
+function statusSev(status) {
+  return STATUS_SEV[status] || "unknown";
+}
+
+function statusTitle(sw) {
+  const src = sw.status_source
+    ? ` (per ${sw.status_source === "source" ? "source platform" : sw.status_source})`
+    : "";
+  if (sw.status === "up") return `Up${src}`;
+  if (sw.status === "down") return `Down${src}`;
+  return "Unknown — no reachability reading yet; not the same as up";
+}
+
+const NAV_COLLAPSE_KEY = "netmon.switches.collapsedSites";
+
+function loadCollapsed() {
+  try {
+    const raw = localStorage.getItem(NAV_COLLAPSE_KEY);
+    return raw ? new Set(JSON.parse(raw)) : null;
+  } catch {
+    return null;  // private mode / corrupt value — fall back to defaults
+  }
+}
+
+function saveCollapsed(set) {
+  try {
+    localStorage.setItem(NAV_COLLAPSE_KEY, JSON.stringify([...set]));
+  } catch {
+    /* non-fatal: collapse state is a convenience, not data */
+  }
+}
+
+function SiteGroup({ site, rows, activeId, collapsed, onToggle }) {
+  // A collapsed group must still confess a problem, or hiding a site would
+  // hide an outage (CLAUDE.md §4.5). Down count and worst severity ride on
+  // the header either way.
+  const down = rows.filter((s) => s.status === "down").length;
+  const unknown = rows.filter((s) => s.status !== "up" && s.status !== "down").length;
+  const worst = down ? "crit" : unknown === rows.length ? "unknown" : unknown ? "warn" : "ok";
+  const holdsActive = rows.some((s) => s.id === activeId);
+
+  return (
+    <div className="sw-nav-site">
+      <button type="button"
+              className={"sw-nav-site-head" + (collapsed ? " collapsed" : "")}
+              aria-expanded={!collapsed}
+              onClick={() => onToggle(site)}
+              title={`${rows.length} switch(es)${down ? ` · ${down} down` : ""}`}>
+        <span className="sw-nav-caret" aria-hidden="true">{collapsed ? "▸" : "▾"}</span>
+        <span className="sw-nav-site-name">{site}</span>
+        {down > 0 && <span className="sw-nav-site-down">{down} down</span>}
+        <span className="sw-nav-site-count">
+          <Dot severity={worst} />{rows.length}
+        </span>
+      </button>
+      {!collapsed && rows.map((sw) => (
+        <a key={sw.id}
+           className={"sw-nav-row" + (sw.id === activeId ? " active" : "")}
+           href={`#/switches/${sw.id}`} title={sw.mgmt_ip || sw.name}>
+          <span className="sw-nav-status" title={statusTitle(sw)}>
+            <Dot severity={statusSev(sw.status)} />
+          </span>
+          <span className="sw-nav-name">{sw.name}</span>
+        </a>
+      ))}
+      {collapsed && holdsActive && (
+        <div className="sw-nav-hint">contains the selected switch</div>
+      )}
+    </div>
+  );
+}
 
 const TABS = [
   { id: "ports", label: "Ports" },
@@ -537,6 +616,8 @@ export function SwitchesPage({ id, query }) {
   const [detail, setDetail] = React.useState(null);   // /api/switches/{id} (stack)
   const [ports, setPorts] = React.useState(null);
   const [selectedPort, setSelectedPort] = React.useState(null);
+  const [collapsed, setCollapsed] = React.useState(() => loadCollapsed() || new Set());
+  const [primed, setPrimed] = React.useState(loadCollapsed() !== null);
 
   const activeId = id ? parseInt(id, 10) : null;
   const macFilter = query?.mac || "";
@@ -564,6 +645,35 @@ export function SwitchesPage({ id, query }) {
       location.hash = `#/switches/${fleet[0].id}`;
     }
   }, [fleet, activeId]);
+
+  // First visit with no saved preference: collapse every site except the one
+  // holding the selected switch, so a district-sized fleet opens navigable.
+  // Runs once — after that the user's own collapse state is authoritative and
+  // must not be re-primed on every fleet refresh.
+  React.useEffect(() => {
+    if (primed || !fleet || fleet.length === 0) return;
+    const activeSite = fleet.find((s) => s.id === activeId)?.site || null;
+    const all = new Set(fleet.map((s) => s.site || "Unassigned"));
+    all.delete(activeSite || "Unassigned");
+    setCollapsed(all);
+    setPrimed(true);
+  }, [fleet, activeId, primed]);
+
+  const toggleSite = React.useCallback((site) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      next.has(site) ? next.delete(site) : next.add(site);
+      saveCollapsed(next);
+      return next;
+    });
+  }, []);
+
+  const setAllCollapsed = React.useCallback((siteNames, value) => {
+    const next = value ? new Set(siteNames) : new Set();
+    saveCollapsed(next);
+    setCollapsed(next);
+    setPrimed(true);
+  }, []);
 
   // Per-switch data (stack + ports) on the cache cadence.
   React.useEffect(() => {
@@ -595,6 +705,14 @@ export function SwitchesPage({ id, query }) {
 
   const sites = {};
   for (const sw of fleet) (sites[sw.site || "Unassigned"] ||= []).push(sw);
+  // /api/switches already orders by site, name — keep that order, but float
+  // sites with a down switch to the top so an outage is never a scroll away.
+  const siteNames = Object.keys(sites).sort((a, b) => {
+    const downA = sites[a].some((s) => s.status === "down") ? 0 : 1;
+    const downB = sites[b].some((s) => s.status === "down") ? 0 : 1;
+    return downA - downB || a.localeCompare(b);
+  });
+  const allCollapsed = siteNames.length > 0 && siteNames.every((s) => collapsed.has(s));
   const current = fleet.find((s) => s.id === activeId) || null;
   const stack = detail?.stack || [];
   const portName = (ifindex) => {
@@ -631,20 +749,18 @@ export function SwitchesPage({ id, query }) {
 
       <div className="sw-layout">
         <div className="sw-nav">
-          {Object.entries(sites).map(([site, rows]) => (
-            <div key={site} className="sw-nav-site">
-              <div className="sw-nav-site-name">{site}</div>
-              {rows.map((sw) => (
-                <a key={sw.id}
-                   className={"sw-nav-row" + (sw.id === activeId ? " active" : "")}
-                   href={`#/switches/${sw.id}`} title={sw.mgmt_ip || sw.name}>
-                  <span className="sw-nav-name">{sw.name}</span>
-                  <span className="sw-nav-ports mono">
-                    {sw.ports_total ? `${sw.ports_up}/${sw.ports_total}` : "—"}
-                  </span>
-                </a>
-              ))}
-            </div>
+          <div className="sw-nav-tools">
+            <span>{fleet.length} switches · {siteNames.length} sites</span>
+            <button type="button" className="linkish"
+                    onClick={() => setAllCollapsed(siteNames, allCollapsed ? false : true)}>
+              {allCollapsed ? "Expand all" : "Collapse all"}
+            </button>
+          </div>
+          {siteNames.map((site) => (
+            <SiteGroup key={site} site={site} rows={sites[site]}
+                       activeId={activeId}
+                       collapsed={collapsed.has(site)}
+                       onToggle={toggleSite} />
           ))}
         </div>
 
