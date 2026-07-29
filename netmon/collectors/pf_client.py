@@ -11,6 +11,8 @@ import logging
 
 import httpx
 
+from urllib.parse import quote
+
 log = logging.getLogger("netmon.collectors.packetfence")
 
 TIMEOUT = 30.0
@@ -126,6 +128,37 @@ class PfClient:
         }
         async with await self._client() as client:
             return await self._search_all(client, "/api/v1/locationlogs/search", body)
+
+    async def node_action(self, mac: str, op: str) -> tuple[str, int]:
+        """POST /api/v1/node/<mac>/<op> — reevaluate_access or restart_switchport.
+
+        Spec 11 D4 (approved 2026-07-28); the only non-GET-shaped *write* this
+        client makes (the /search calls are POST-as-query, not writes). `op` is
+        checked against a closed set here as well as at the API layer: this
+        function must not become a way to POST an arbitrary PF path.
+
+        Returns (message, http_status). Not retried — PF may have acted even if
+        the response never arrived, and re-bouncing a port is worse than an
+        uncertain result the operator can re-check.
+        """
+        allowed = {"reevaluate_access", "restart_switchport"}
+        if op not in allowed:
+            raise PfError(f"node_action refuses {op!r}; allowed: {sorted(allowed)}")
+        mac = (mac or "").strip().lower()
+        if not mac:
+            raise PfError("node_action requires a MAC")
+        # PF exposes actions under the singular /node/<mac>/<op>; that is the
+        # documented action form (reference/lib/PFClient.php::nodeAction).
+        path = f"/api/v1/node/{quote(mac, safe='')}/{op}"
+        async with await self._client() as client:
+            data = await self._call(client, "POST", path, None)
+        msg = str(data.get("message") or data.get("status_msg") or "")
+        if not msg:
+            errs = data.get("errors")
+            if isinstance(errs, list) and errs and isinstance(errs[0], dict):
+                msg = str(errs[0].get("message") or "")
+        return (msg or "ok", 200)
+
 
     async def get_json(self, path: str) -> dict:
         """One read-only GET (snapshot_cache fetchers — cluster/services/

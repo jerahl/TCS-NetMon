@@ -2,6 +2,7 @@ import React from "react";
 import { getJSON } from "../api.js";
 import { Card, Badge, Loading, ErrorMsg, sevColor } from "../primitives.jsx";
 import { SshButton } from "../ssh.jsx";
+import { ActionButton, ActionAudit } from "../actions.jsx";
 
 // Device detail (AP / switch / any): registry fields + live state; APs get
 // the Phase 10.2 wireless sections (detail KV, radios, clients) from
@@ -49,6 +50,12 @@ export function ApDetailPage({ id }) {
       <div className="detail-head">
         <h1>{device.name}</h1>
         <SshButton host={device.mgmt_ip} name={device.name} />
+        {/* Reboot AP (spec 11 D4) — XIQ only, so it self-hides on a switch,
+            and the server independently refuses a non-AP device_type. */}
+        {device.device_type === "ap" && (
+          <ActionButton actionKey="ap_reboot" path="ap-reboot"
+                        body={{ device_id: device.id }} />
+        )}
       </div>
       <div className="subtitle mono">{device.mgmt_ip || "no mgmt IP"} · {device.device_type} · {device.site || "unknown site"}</div>
 

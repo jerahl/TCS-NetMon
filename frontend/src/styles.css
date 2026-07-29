@@ -522,3 +522,23 @@ table.grid.kv td:first-child { color: var(--dim); width: 160px; }
 .hchart-last { font-size: 14px; font-weight: 700; }
 .spark { display: block; width: 100%; height: 32px; }
 .spark-empty { font-size: 12px; height: 32px; display: flex; align-items: center; }
+
+/* ── Operator write actions (spec 11 D4) ───────────────────────────────────── */
+.act-wrap { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.act-confirm { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* The effect sentence is the whole point of the confirm step — "Cycle PoE"
+   doesn't tell an operator the phone on that port is about to reboot. */
+.act-effect { font-size: 11px; color: var(--text); max-width: 46ch; }
+.btn-warn { border-color: #e8a415; color: #e8a415; }
+.btn-warn:hover { background: rgba(232, 164, 21, .12); }
+.btn-danger { border-color: #e5484d; color: #e5484d; font-weight: 600; }
+.btn-danger:hover { background: rgba(229, 72, 77, .14); }
+.act-result { font-size: 11px; }
+.act-result.ok { color: #1fb75a; }
+.act-result.warn { color: #e8a415; }   /* outcome genuinely unknown */
+.act-result.err { color: #e5484d; }
+.act-hint { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+.act-outcome.ok { color: #1fb75a; }
+.act-outcome.failed, .act-outcome.refused { color: #e5484d; }
+.act-outcome.pending { color: #e8a415; }   /* never settled — itself a finding */
+.pd-actions .pd-mid { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
