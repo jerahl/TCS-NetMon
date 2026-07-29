@@ -27,7 +27,7 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 from netmon import __version__, db, migrate
 from netmon import settings as settings_engine
 from netmon.api import (
-    alerts, auth_routes, devices, events, health, history as history_api, nac,
+    actions, alerts, auth_routes, devices, events, health, history as history_api, nac,
     registry, search, settings, sites, status, summary, surveillance, switches,
     voip, wireless,
 )
@@ -241,6 +241,7 @@ def create_app(
     app.include_router(nac.router)
     app.include_router(alerts.router)
     app.include_router(settings.router)
+    app.include_router(actions.router)
 
     # Static React UI (Phase 4), if built. Guarded so the app still boots when
     # the bundle is absent (fresh clone / API-only dev). Build with

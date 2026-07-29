@@ -467,6 +467,26 @@ CREATE TABLE extensions (
 """
 
 
+ACTION_AUDIT_DDL_SQLITE = """
+CREATE TABLE action_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    requested_at TIMESTAMP NOT NULL,
+    completed_at TIMESTAMP,
+    actor TEXT NOT NULL,
+    actor_role TEXT NOT NULL,
+    action TEXT NOT NULL,
+    source TEXT NOT NULL,
+    device_id INTEGER,
+    target TEXT,
+    params TEXT,
+    outcome TEXT NOT NULL DEFAULT 'pending',
+    http_status INTEGER,
+    message TEXT,
+    duration_ms INTEGER
+)
+"""
+
+
 STATE_SAMPLES_DDL_SQLITE = """
 CREATE TABLE state_samples (
     series TEXT NOT NULL,
@@ -513,6 +533,7 @@ def create_core_tables(engine) -> None:
             APP_SETTINGS_DDL_SQLITE,
             SETTINGS_AUDIT_DDL_SQLITE,
             STATE_SAMPLES_DDL_SQLITE,
+            ACTION_AUDIT_DDL_SQLITE,
         ):
             conn.execute(text(ddl))
 

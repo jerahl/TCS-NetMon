@@ -82,6 +82,44 @@ class XiqClient:
             raise XiqError("XIQ returned non-object JSON")
         return data
 
+    async def reboot_device(self, xiq_device_id: int) -> tuple[str, int]:
+        """POST /devices/:reboot — the ONLY non-GET this client makes.
+
+        Spec 11 D4 (approved 2026-07-28). Kept deliberately narrow: it takes an
+        integer device id and builds the path itself, so there is no way to turn
+        it into a general-purpose POST. XIQ's endpoint is a bulk action taking a
+        list; a single id is sent because the UI acts on one AP at a time.
+
+        Never cached and never retried — a state-changing call that times out
+        may well have landed, so a blind retry could reboot an AP twice.
+
+        Returns (message, http_status). Raises XiqError on transport/HTTP error.
+        """
+        if not isinstance(xiq_device_id, int) or isinstance(xiq_device_id, bool) or xiq_device_id <= 0:
+            raise XiqError(f"reboot_device needs a positive int device id, got {xiq_device_id!r}")
+        body = {"ids": [xiq_device_id]}
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout) as client:
+            try:
+                resp = await client.post("/devices/:reboot", json=body, headers=self._headers())
+            except httpx.HTTPError as exc:
+                raise XiqError(f"XIQ transport error on /devices/:reboot: {exc}") from exc
+        self._track_rate_limit(resp)
+        if resp.status_code == 401:
+            raise XiqAuthError("XIQ 401 — token revoked or invalid")
+        if resp.status_code == 429:
+            raise XiqRateLimitError("XIQ 429 — rate limit exceeded")
+        if not (200 <= resp.status_code < 300):
+            raise XiqError(f"XIQ HTTP {resp.status_code} on /devices/:reboot: {resp.text[:240]}")
+        msg = ""
+        try:
+            data = resp.json()
+            if isinstance(data, dict):
+                msg = str(data.get("message") or data.get("status") or "")
+        except ValueError:
+            pass
+        return (msg or "reboot accepted", resp.status_code)
+
+
     async def _get_paged(self, path: str, params: dict) -> list[dict]:
         """Drain a paged list endpoint sequentially.
 

@@ -270,3 +270,27 @@ retention_hours = 24
 # Or username/password (a session token is fetched via user.login):
 # user = monitoring-ro
 # password = REPLACE
+
+[actions]
+# Operator write actions — the ONLY non-GET calls NetMon makes to a source
+# (spec 11 D4, owner-approved 2026-07-28). Every attempt is recorded in
+# `action_audit` before the call leaves, so a timeout still leaves evidence.
+#
+# Owner decision 2026-07-29: these ship ENABLED ("live on merge"). D4's signed
+# design specified default-off with a dry-run first; the flags remain so any one
+# action can be switched off without a deploy (§4.3). Restart the service or
+# Apply in the settings UI after changing them.
+enabled = true
+# Per-action switches. PacketFence:
+reevaluate_access = true
+restart_port = true
+# rConfig (runs a stored snippet on the switch) and XIQ:
+poe_cycle = true
+ap_reboot = true
+# The stored rConfig snippet that bounces PoE on a port. NetMon never sends CLI
+# text — only this id plus `port`/`member` substitutions — so the commands stay
+# reviewable in rConfig. Confirmed as id 4 ("Cycle POE") on this deployment.
+poe_snippet_id = 4
+# Minimum role: operator or admin. `viewer` is refused at startup — a read-only
+# role must never be able to reboot an AP.
+min_role = operator

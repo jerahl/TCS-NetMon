@@ -171,6 +171,34 @@ class EngineConfig:
 
 
 @dataclass(frozen=True)
+class ActionsConfig:
+    """Operator write actions (spec 11 D4, approved 2026-07-28).
+
+    The only place NetMon issues a non-GET to a source. Each action has its own
+    flag so any one can be switched off without a deploy (§4.3 per-step
+    reversibility) — that property is why the flags exist even though the owner
+    chose to ship them enabled.
+
+    **Owner deviation, 2026-07-29:** D4's signed design specified default-off
+    with a dry-run first (§4.2). The owner chose "live on merge", so these
+    default true. `enabled` is the master switch: false disables all four
+    regardless of the individual flags.
+    """
+    enabled: bool = True
+    reevaluate_access: bool = True
+    restart_port: bool = True
+    poe_cycle: bool = True
+    ap_reboot: bool = True
+    # rConfig snippet that performs the PoE bounce. Confirmed live as id 4
+    # ("Cycle POE") on this deployment. NetMon never sends CLI text — only this
+    # id plus variable substitutions — so the commands stay reviewable in
+    # rConfig and the blast radius is whatever the snippet does.
+    poe_snippet_id: int = 4
+    # Minimum role. viewer < operator < admin; the owner chose operator.
+    min_role: str = "operator"
+
+
+@dataclass(frozen=True)
 class HistoryConfig:
     """Bounded 24 h history ring buffer (spec 10.6; CLAUDE.md §2 exception,
     owner-approved 2026-07-15 as spec 10 §10 Q3 / spec 11 D3).
@@ -210,6 +238,7 @@ class Config:
     snmp_inventory: SnmpInventoryConfig
     engine: EngineConfig
     history: HistoryConfig
+    actions: ActionsConfig
     sources: dict[str, SourceToggle]
     path: str
 
@@ -426,6 +455,30 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         # config typo turn the ring buffer into long-term series storage.
         raise ConfigError("[history] retention_hours must be between 1 and 24")
 
+    # --- [actions] operator write actions (spec 11 D4) ---
+    def _abool(key: str, default: bool = True) -> bool:
+        return _as_bool(parser.get("actions", key, fallback="true" if default else "false"))
+
+    actions = ActionsConfig(
+        enabled=_abool("enabled"),
+        reevaluate_access=_abool("reevaluate_access"),
+        restart_port=_abool("restart_port"),
+        poe_cycle=_abool("poe_cycle"),
+        ap_reboot=_abool("ap_reboot"),
+        poe_snippet_id=parser.getint("actions", "poe_snippet_id", fallback=4),
+        min_role=parser.get("actions", "min_role", fallback="operator").strip().lower(),
+    )
+    if actions.min_role not in ROLES:
+        raise ConfigError(f"[actions] min_role must be one of {ROLES}, got {actions.min_role!r}")
+    if actions.min_role == "viewer":
+        # A read-only role must never be able to reboot an AP. Refuse rather
+        # than silently harden, so a typo is visible at boot.
+        raise ConfigError("[actions] min_role = viewer would let read-only users "
+                          "issue write actions; use operator or admin")
+    if actions.enabled and actions.poe_cycle and actions.poe_snippet_id <= 0:
+        raise ConfigError("[actions] poe_cycle needs a positive poe_snippet_id "
+                          "(the stored rConfig 'Cycle POE' snippet)")
+
     # --- per-source toggles ---
     sources: dict[str, SourceToggle] = {}
     for name in ("xiq", "packetfence", "milestone", "threecx", "rconfig"):
@@ -440,4 +493,5 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
 
     return Config(db=db, web=web, auth=auth, security=security, poller=poller,
                   snmp_inventory=snmp_inventory, engine=engine, history=history,
+                  actions=actions,
                   sources=sources, path=conf_path)
