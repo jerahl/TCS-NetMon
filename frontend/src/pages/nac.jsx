@@ -1,6 +1,7 @@
 import React from "react";
 import { getJSON, qs } from "../api.js";
 import { Card, Loading, ErrorMsg, SourceBadge, sevColor } from "../primitives.jsx";
+import { ActionButton } from "../actions.jsx";
 import { ageOf } from "../format.js";
 
 // NAC (PacketFence) — Phase 10.3: five ZCD PF views as tabs over pf_nodes +
@@ -245,7 +246,16 @@ function QuarantineTab() {
     <React.Fragment>
       <Card kicker={`${(data.nodes || []).length} non-registered node(s)`}>
         <NodeTable rows={data.nodes} />
-        <div className="dim pd-note">Release / re-evaluate actions are managed in PacketFence (write actions are D4-gated).</div>
+        <div className="pd-note">
+          {/* Reevaluate Access (spec 11 D4). Acts on the first listed node;
+              per-row buttons would mean one capability fetch per row. */}
+          {(data.nodes || []).length > 0 && (
+            <ActionButton actionKey="reevaluate_access" path="reevaluate-access"
+                          body={{ mac: data.nodes[0].mac }}
+                          label={`Reevaluate ${data.nodes[0].mac}`} compact />
+          )}
+          <span className="dim"> · release is still managed in PacketFence.</span>
+        </div>
       </Card>
       <SnapshotCard title="Violation catalog (security events)" snap={data.violations}
                     render={(p) => <GenericSnapshot payload={p} />} />

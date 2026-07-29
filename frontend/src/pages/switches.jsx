@@ -2,6 +2,7 @@ import React from "react";
 import { getJSON } from "../api.js";
 import { Card, Dot, Loading, ErrorMsg, SourceBadge, sevColor } from "../primitives.jsx";
 import { SshButton } from "../ssh.jsx";
+import { ActionButton, ActionAudit } from "../actions.jsx";
 import { ageOf } from "../format.js";
 import { macMatches } from "../macmatch.js";
 import { HistoryChart } from "../history.jsx";
@@ -260,6 +261,23 @@ function PortDetail({ switchId, ifindex }) {
             {p.err_in_delta ?? "—"} in / {p.err_out_delta ?? "—"} out</span>)}
           {row("Discards (Δ)", `${p.disc_in_delta ?? "—"} in / ${p.disc_out_delta ?? "—"} out`)}
           {row("PoE", p.poe_delivering ? `delivering${p.poe_watts ? ` · ${p.poe_watts} W` : ""}` : (p.poe_admin === null ? "—" : "off"))}
+          {/* Operator write actions (spec 11 D4). Cycle PoE runs rConfig's
+              stored snippet against this port; Restart Port is PacketFence
+              bouncing the port the selected endpoint sits on, so it needs a
+              MAC and only appears when the FDB knows one. */}
+          <div className="pd-row pd-actions">
+            <div className="pd-lbl">Actions</div>
+            <div className="pd-mid">
+              <ActionButton actionKey="poe_cycle" path="poe-cycle"
+                            body={{ device_id: switchId, port: p.name || String(p.ifindex),
+                                    member: p.member || 1 }} />
+              {detail.macs && detail.macs.length > 0 && (
+                <ActionButton actionKey="restart_port" path="restart-port"
+                              body={{ mac: detail.macs[0].mac, device_id: switchId }} />
+              )}
+            </div>
+            <div className="pd-val" />
+          </div>
         </div>
         <div>
           <div className="pd-devices-head">

@@ -52,7 +52,22 @@ export async function postJSON(path, body) {
     window.location.assign("/login");
     throw new AuthError("redirecting to sign in");
   }
-  if (!resp.ok) throw new Error(`API HTTP ${resp.status}`);
+  if (!resp.ok) {
+    // Surface the API's `detail` and the status code, the way sendJSON does.
+    // Write actions depend on it: a 409 carries an operator-facing refusal
+    // reason ("port 9:99 is not a known port"), and a 502 means the source
+    // rejected or never answered — which the UI must distinguish, because a
+    // timed-out write may still have landed.
+    let detail = `API HTTP ${resp.status}`;
+    try {
+      const data = await resp.json();
+      if (data && data.detail) detail = String(data.detail);
+    } catch { /* keep the status text */ }
+    const err = new Error(detail);
+    err.status = resp.status;
+    err.detail = detail;
+    throw err;
+  }
   return resp.status === 204 ? null : resp.json();
 }
 
