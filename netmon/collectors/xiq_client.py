@@ -13,6 +13,7 @@ endpoints (clients, wifi stats, alarms) are added when the UI live-reads them
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 
 import httpx
 
@@ -22,6 +23,11 @@ BASE_URL = "https://api.extremecloudiq.com"
 PAGE_LIMIT = 100
 MAX_PAGES = 200  # runaway-pagination backstop
 HTTP_TIMEOUT = 30.0
+#: ``GET /devices/radio-information`` caps ``limit`` at 50 (published schema:
+#: "Number of Records, min = 1, max = 50"), unlike the 100 the other list
+#: endpoints accept. It is also the id-batch size, since ``deviceIds`` is a
+#: required parameter and one page carries one entity per device.
+RADIO_PAGE_LIMIT = 50
 
 
 class XiqError(Exception):
@@ -115,6 +121,51 @@ class XiqClient:
         """Paged fleet device list. ``view="FULL"`` adds the detail fields the
         10.2 cycles persist (heavier pages — 5 min cadence, not 180 s)."""
         return await self._get_paged("/devices", {"views": view})
+
+    async def get_radio_information(
+        self, device_ids: Sequence[int], batch: int = RADIO_PAGE_LIMIT
+    ) -> list[dict]:
+        """Radios of the given devices (`GET /devices/radio-information`).
+
+        Radios are **not** on the device payload — ``XiqDevice`` has no
+        ``radios`` property in the published schema, and 0 of 1,364 live
+        ``views=FULL`` rows carried one (2026-07-28). They come from here, as
+        ``XiqRadioEntity`` rows: ``{"device_id": int, "radios": [XiqRadio…]}``.
+
+        ``deviceIds`` is a **required** repeated query parameter — there is no
+        fleet-wide form — and ``limit`` caps at 50, so the ids are batched 50 at
+        a time and any pages within a batch are drained. Sequential on one
+        connection, like :meth:`_get_paged`: the tenant quota is shared with
+        every other integration, so we never fan out in parallel.
+
+        Radios XIQ reports as *disabled* are omitted (``includeDisabledRadio``
+        defaults to false and is left there deliberately): ``XiqRadio`` has no
+        enabled flag, so a disabled radio would be indistinguishable from one on
+        the air. On this fleet 2.4 GHz is disabled almost everywhere, and
+        listing those radios with a channel and a power level would read as
+        "broadcasting" — a fabrication (§4.5). Absent is the honest answer.
+        """
+        ids = [int(i) for i in device_ids]
+        if not ids:
+            return []
+        batch = max(1, min(int(batch), RADIO_PAGE_LIMIT))
+        rows: list[dict] = []
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout) as client:
+            for start in range(0, len(ids), batch):
+                chunk = ids[start:start + batch]
+                page = 1
+                while page <= MAX_PAGES:
+                    resp = await self._get(
+                        client, "/devices/radio-information",
+                        {"deviceIds": chunk, "page": page, "limit": batch},
+                    )
+                    more = resp.get("data") if isinstance(resp.get("data"), list) else []
+                    rows.extend(more)
+                    total_pages = int(resp.get("total_pages") or 1)
+                    if not more or page >= total_pages:
+                        break
+                    page += 1
+        return rows
 
     async def get_active_clients(self) -> list[dict]:
         """Paged fleet client list (`GET /clients/active?views=FULL`).

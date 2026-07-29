@@ -1,45 +1,46 @@
 {
-  "_note": "SANITIZED sample of GET /devices?views=FULL (2 pages collapsed). Field names per reference/lib/XIQClient.php normaliseDevice + XIQ docs; RFC 5737 IPs, fake MACs/serials. Replace with a captured export (scripts/xiq_export.py --view FULL) to confirm radio field coverage — spec 10 §3 note.",
+  "_note": "SANITIZED sample of GET /devices?views=FULL; key set verified against 1,364 live rows on ExtremeCloud IQ API 25.11.1-3 (2026-07-28). RFC 5737 IPs, fake MACs/serials, invented hostnames. There is deliberately NO 'radios' key: XiqDevice has no such property in the published schema and 0 of 1,364 live rows carried one — radios come from GET /devices/radio-information (see xiq_radio_information.json). An earlier version of this fixture invented a radios[] array ('5G', 'channel', '80MHz', 'clients: 5'), so the radio tests passed against a shape XIQ never sends while ap_radios sat at 0 rows in production. active_clients is present on only ~1/3 of live rows (432 of 1,364), so ap_details.clients_total is legitimately NULL for many APs — the CHS AP below omits it on purpose.",
   "data": [
     {
       "id": 100001,
       "hostname": "BHS-56-Hallway",
       "device_function": "AP",
-      "product_type": "AP305C",
+      "product_type": "AP_305C",
       "serial_number": "00000000000001",
       "mac_address": "F0AB0000AA01",
       "ip_address": "192.0.2.11",
       "software_version": "10.6.4.0",
       "connected": true,
+      "device_admin_state": "MANAGED",
       "system_up_time": 1721000000000,
       "network_policy_id": 7001,
       "network_policy_name": "TCS-Schools",
       "active_clients": 23,
+      "country_code": "US",
       "locations": [{"name": "BHS"}],
-      "radios": [
-        {"name": "wifi0", "frequency": "2.4G", "channel": 6, "channel_width": "20MHz", "power": 14, "clients": 5},
-        {"name": "wifi1", "frequency": "5G", "channel": 149, "channel_width": "80MHz", "power": 17, "clients": 18}
-      ]
+      "managed_by": "XIQ",
+      "simulated": false,
+      "visible": true
     },
     {
       "id": 100003,
       "hostname": "CHS-12-Room",
       "device_function": "AP",
-      "product_type": "AP305C",
+      "product_type": "AP_305C",
       "serial_number": "00000000000003",
       "mac_address": "F0AB0000AA03",
       "ip_address": "192.0.2.30",
       "software_version": "10.5.9.1",
       "connected": false,
+      "device_admin_state": "MANAGED",
       "system_up_time": 0,
       "network_policy_id": 7001,
       "network_policy_name": "TCS-Schools",
-      "active_clients": 0,
+      "country_code": "US",
       "locations": [{"name": "CHS"}],
-      "radios": [
-        {"name": "wifi0", "frequency": "5G", "channel": 40, "channel_width": "40MHz", "power": 16, "clients": 0},
-        {"name": "wifi1", "frequency": "5G", "channel": 149, "channel_width": "40MHz", "power": 16, "clients": 0}
-      ]
+      "managed_by": "XIQ",
+      "simulated": false,
+      "visible": true
     }
   ],
   "total_pages": 1

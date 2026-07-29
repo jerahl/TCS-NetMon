@@ -73,8 +73,15 @@ export function XiqPage() {
             <div className="stat-label">Blind (XIQ unreachable)</div></div>)}
         <div className="stat"><div className="stat-value">{summary.clients_total}</div>
           <div className="stat-label">Clients</div></div>
+        {/* `wired` is included on purpose. XIQ reports radio_type = 3 (WIRED)
+            for switch-attached clients, and they are ~85% of the rows — listing
+            only the Wi-Fi bands would show a number 6× smaller than the client
+            count directly beside it. Whether wired clients belong in
+            wireless_clients at all is an owner question; until it is answered
+            the tile must at least agree with the table. */}
         <div className="stat"><div className="stat-value">
-          {["2.4", "5", "6"].filter((b) => bands[b]).map((b) => `${b}: ${bands[b]}`).join(" · ") || "—"}</div>
+          {["2.4", "5", "6", "wired"].filter((b) => bands[b])
+            .map((b) => `${b}: ${bands[b]}`).join(" · ") || "—"}</div>
           <div className="stat-label">Clients by band</div></div>
         <div className="stat"><div className="stat-value">{fwCompliant !== null ? `${fwCompliant}%` : "—"}</div>
           <div className="stat-label">On {fwTop ? fwTop.fw_version : "top firmware"}</div></div>
