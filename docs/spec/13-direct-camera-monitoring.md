@@ -50,12 +50,38 @@ CLAUDE.md §4.1 is satisfied without a carve-out.
 
 ## 2. Scope — which cameras, and what we read
 
-**Target set:** rows in `devices` where `device_type = 'camera'` **and**
-`snmp_capable = 1` **and** `enabled = 1` **and** `mgmt_ip` is set. The mgmt IP
-comes for free from the Milestone Config API (`cameras.ip`, written by the
-milestone collector) — "cameras pulled from Milestone" *is* the discovery
-mechanism; this phase adds no camera-discovery of its own. A camera with no IP,
-or with `snmp_capable = 0`, is simply skipped (rendered "SNMP not enabled").
+**Target set — corrected 2026-07-28. The sweep unit is the HARDWARE HOST, not
+the camera.** Host health (CPU, kernel uptime, filesystems, wired interface) is
+a property of the physical device; several cameras can be *channels* on one.
+Polling per camera would issue eleven identical walks against an eleven-imager
+encoder and count it eleven times in the budget. Per-imager reads
+(`camera_imagers`: encoder bitrate, VCA motion) *are* per channel — that is
+what `camera.channel` is for.
+
+Measured on the live VMS (`docs/milestone-camera-addressing.md`): **2,489
+hardware records for 2,662 cameras — 2,480 sweepable targets, not ~2,659.**
+2,418 cameras are the sole camera on their host; **241 cameras share 62
+encoder addresses** (51 four-channel, one eleven-channel).
+
+**Addressing is available but does not live where this spec assumed.** The
+address is on the **parent hardware** (`GET /hardware` → `address`,
+URL-shaped `http://10.x.x.x/`), joined via `camera.relations.parent`;
+`/cameras` carries no `address`, `ip`, `mac` **or `hardwareId`** at all. The
+milestone collector now writes `cameras.ip` from that join (2026-07-28) — so
+"cameras pulled from Milestone" is still the discovery mechanism, but through
+hardware.
+
+⚠️ **`devices.mgmt_ip` for cameras is an OPEN OWNER DECISION and this spec must
+not assume it.** Writing one shared encoder address onto N camera rows makes
+them *contested* under `netmon.state.native_trustworthy`, so the poller refuses
+any verdict for them and they read `unknown` forever — correct behaviour,
+useless outcome. Three candidate representations are recorded in
+`docs/milestone-camera-addressing.md` (populate only the 2,418 sole-claimant
+cameras; add a separate `hardware_ip` column so SNMP/JPEG have a target while
+the poller's IP-keyed guard is untouched; or register the 62 encoders as their
+own device rows). **Until that is decided, this phase has no target column** —
+resolve it before any `camera_snmp` code lands. A camera whose host has no
+address, or with `snmp_capable = 0`, is skipped (rendered "SNMP not enabled").
 
 **In scope (v1 = Bosch):** the Bosch template's item set —
 
@@ -218,11 +244,19 @@ surface as alerts, not as a new state dimension, unless the owner wants otherwis
 
 ## 8. Load / budget sanity (validate before enabling — Phase 0 rule)
 
-- Fleet is far larger than the switch fleet. Health poll at 5m with concurrency
-  16 is comfortable (a handful of `snmpget`+small walks per camera). The **1-minute
-  motion poll is the risk** — hence default-off and per-site opt-in; measure a
-  real sweep (`--once` timing) at fleet scale before enabling broadly, exactly as
-  10.1 required for the switch sweeps.
+- Fleet is far larger than the switch fleet: **2,480 hardware targets vs 160
+  switches — ~15×** (count corrected 2026-07-28; the earlier ~2,659 figure
+  counted cameras rather than hosts, over-stating the load by ~7% and, worse,
+  implying eleven walks against one eleven-imager encoder). Health poll at 5m
+  with concurrency 16 is comfortable (a handful of `snmpget`+small walks per
+  **host**). The **1-minute motion poll is the risk** — hence default-off and
+  per-site opt-in; measure a real sweep (`--once` timing) at fleet scale before
+  enabling broadly, exactly as 10.1 required for the switch sweeps.
+- **Deduplicate by host before sweeping.** A naive per-camera loop would poll
+  the 62 shared encoder addresses 241 times instead of 62 — and the sweep must
+  refuse to attribute a host-level reading to a camera row in a way that
+  fabricates per-camera state, the same trap `native_trustworthy` guards for
+  ping/snmp.
 - FS/interface/imager **discovery** walks are the expensive part → slow
   sub-interval (default 1h), gated by elapsed time inside the task.
 - Capture sanitized `snmpbulkwalk`/`snmpget` fixtures from one lab Bosch camera
