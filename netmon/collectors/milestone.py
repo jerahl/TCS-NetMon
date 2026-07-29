@@ -23,6 +23,7 @@ import logging
 import sys
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlsplit
 
 from sqlalchemy.engine import Engine
 
@@ -66,6 +67,55 @@ def _first(d: dict, *keys: str):
     return None
 
 
+def _hardware_key(cam: dict) -> str:
+    """Resolve a camera's parent-hardware id.
+
+    ``/cameras`` does **not** return ``hardwareId`` on this XProtect (confirmed
+    live 2026-07-28) — the link is ``relations.parent = {type: "hardware", id}``.
+    The previous lookup keyed on ``hardwareId``, so the key was always ``""``,
+    the hardware dict was always empty, and ``cameras.ip`` was unconditionally
+    NULL even though the fallback to hardware was written. The camera-level
+    aliases are kept last for XProtect versions that do expose them.
+    """
+    rel = cam.get("relations")
+    if isinstance(rel, dict):
+        candidates: list[Any] = []
+        parent = rel.get("parent")
+        candidates.extend(parent if isinstance(parent, list) else [parent])
+        for extra in ("related", "children", "parents"):
+            v = rel.get(extra)
+            if isinstance(v, list):
+                candidates.extend(v)
+        for cand in candidates:
+            if not isinstance(cand, dict):
+                continue
+            if str(cand.get("type") or "").strip().lower() != "hardware":
+                continue
+            hid = _first(cand, "id", "guid")
+            if hid:
+                return str(hid)
+    return str(_first(cam, "hardwareId", "hardware") or "")
+
+
+def _host_from_address(raw: Any) -> str | None:
+    """Bare host from Milestone's URL-shaped hardware address.
+
+    Hardware carries ``http://10.x.x.x/`` (100% http, 100% RFC1918, a handful on
+    a non-default port). ``cameras.ip`` wants the host alone. The port and scheme
+    matter to the D7 snapshot proxy, which must re-derive them from hardware
+    rather than assume https — see docs/milestone-camera-addressing.md.
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    if "://" not in s:
+        s = "//" + s          # bare host/host:port — give urlsplit an authority
+    try:
+        return urlsplit(s).hostname or None
+    except ValueError:
+        return None
+
+
 def build_recording_servers(servers: list[dict], reg: dict[str, dict],
                             storage_by_rs: dict[str, dict], now: datetime) -> list[dict]:
     rows: list[dict] = []
@@ -96,7 +146,7 @@ def build_cameras(cameras: list[dict], reg: dict[str, dict],
         r = reg.get(str(cam.get("id")))
         if r is None:
             continue
-        hw = hw_by_id.get(str(_first(cam, "hardwareId", "hardware") or ""), {})
+        hw = hw_by_id.get(_hardware_key(cam), {})
         mac = canon_mac(str(_first(cam, "mac", "macAddress") or _first(hw, "mac", "macAddress") or ""))
         rs_id = str(_first(cam, "recordingServerId", "recordingServer") or "")
         rows.append({
@@ -108,7 +158,7 @@ def build_cameras(cameras: list[dict], reg: dict[str, dict],
             "bitrate_mode": _first(cam, "bitrateMode"),
             "recording_mode": _first(cam, "recordingMode", "recordingType"),
             "state_msg": _first(cam, "stateMessage", "state"),
-            "ip": _first(cam, "address", "ip") or _first(hw, "address", "ip"),
+            "ip": _first(cam, "address", "ip") or _host_from_address(_first(hw, "address", "ip")),
             "mac": mac or None,
             "recording_server_device_id": rs_devid.get(rs_id),
             "enabled": 1 if _truthy(cam.get("enabled"), cam.get("recordingEnabled")) else 0,
@@ -196,7 +246,14 @@ class MilestoneCollector(Collector):
                 len(servers), len(cameras),
             )
 
-        # Optional enrichment — fail-soft (older XProtect lacks these endpoints).
+        # Optional enrichment — fail-soft (older XProtect lacks these
+        # endpoints), but NOT silent. A degradation nobody can see is the
+        # failure mode §4.5 exists to prevent: /storages has been answering
+        # HTTP 400 on this deployment and the storage roll-up was empty while
+        # the collector reported success (found 2026-07-28 by
+        # scripts/validate_payloads.py). Record which enrichments degraded so
+        # the NetMon Status page and the overview blob can say so.
+        degraded: list[str] = []
         storage_by_rs: dict[str, dict] = {}
         try:
             for s in await self.client.storage():
@@ -209,12 +266,16 @@ class MilestoneCollector(Collector):
                     agg["total_gb"] += total / 1_000_000_000 if total > 1_000_000 else total
                 agg["retention_days"] = _num(s.get("retentionDays")) or agg["retention_days"]
         except MilestoneError as exc:
-            log.info("milestone storage endpoint unavailable: %s", exc)
+            degraded.append("storage")
+            log.warning("milestone storage endpoint unavailable — storage roll-up "
+                        "will be empty, not zero: %s", exc)
         hw_by_id: dict[str, dict] = {}
         try:
             hw_by_id = {str(h.get("id")): h for h in await self.client.hardware()}
         except MilestoneError as exc:
-            log.info("milestone hardware endpoint unavailable: %s", exc)
+            degraded.append("hardware")
+            log.warning("milestone hardware endpoint unavailable — camera hardware "
+                        "enrichment missing: %s", exc)
 
         rs_rows = build_recording_servers(servers, registry, storage_by_rs, now)
         cam_rows = build_cameras(cameras, registry, hw_by_id, rs_devid, now)
@@ -235,6 +296,10 @@ class MilestoneCollector(Collector):
             "linked_cameras": linked_cameras,
             "storage_used_gb": round(sum(r["storage_used_gb"] or 0 for r in rs_rows), 1),
             "storage_total_gb": round(sum(r["storage_total_gb"] or 0 for r in rs_rows), 1),
+            # Which enrichments failed this cycle. Without this a 0 GB storage
+            # roll-up is indistinguishable from "the endpoint 400s", and the UI
+            # would render an outright absence of data as "nothing used".
+            "degraded": degraded,
         }, self.name)
         return written
 

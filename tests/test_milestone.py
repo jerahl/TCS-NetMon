@@ -171,3 +171,100 @@ def test_milestone_unreachable_keeps_inventory_stale(tmp_path):
     assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM cameras")["n"] == 1
     h = db.fetch_one(engine, "SELECT * FROM collector_health WHERE name='milestone'")
     assert h["consecutive_failures"] == 1
+
+
+def test_degraded_enrichment_is_reported_not_silent(tmp_path):
+    """A 0 GB storage roll-up must be distinguishable from a broken endpoint.
+
+    /storages answers HTTP 400 on the live deployment and the collector caught
+    it at log.info, so the roll-up was empty while the cycle reported success —
+    the exact invisible degradation §4.5 exists to prevent.
+    """
+    import json
+
+    from netmon.collectors.milestone_client import MilestoneError
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.servers = [{"id": "RS1", "running": True}]
+    fake.cameras_data = [{"id": "CAM1", "recordingEnabled": True}]
+    fake.storage_fail = MilestoneError("Milestone HTTP 400 on /storages")
+    asyncio.run(MilestoneCollector(engine, fake).run_once())
+
+    row = db.fetch_one(engine, "SELECT payload FROM snapshot_cache WHERE `key`='milestone.overview'")
+    payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
+    assert payload["degraded"] == ["storage"]
+    # Still fail-soft: the cycle completed and the rest of the inventory landed.
+    assert payload["recording_servers"] == 1
+
+
+def test_healthy_cycle_reports_nothing_degraded(tmp_path):
+    import json
+
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.servers = [{"id": "RS1", "running": True}]
+    fake.cameras_data = [{"id": "CAM1", "recordingEnabled": True}]
+    asyncio.run(MilestoneCollector(engine, fake).run_once())
+
+    row = db.fetch_one(engine, "SELECT payload FROM snapshot_cache WHERE `key`='milestone.overview'")
+    payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
+    assert payload["degraded"] == []
+
+
+def test_camera_hardware_resolves_via_relations_parent():
+    """/cameras has no hardwareId — the link is relations.parent.
+
+    Regression (2026-07-28): build_cameras keyed hw_by_id on
+    _first(cam, "hardwareId", "hardware"), a field this XProtect never returns.
+    The key was always "", the hardware dict always empty, and cameras.ip
+    unconditionally NULL — even though the fallback to hardware was written.
+    """
+    from datetime import datetime, timezone
+
+    from netmon.collectors.milestone import build_cameras
+
+    reg = {"CAM1": {"id": 1}}
+    cams = [{
+        "id": "CAM1",
+        "relations": {"parent": {"type": "hardware", "id": "HW-GUID-1"}},
+        "recordingEnabled": True,
+    }]
+    hw = {"HW-GUID-1": {"address": "http://192.0.2.10/", "model": "FAKE-CAM",
+                        "mac": "00:00:5E:00:53:01"}}
+    rows = build_cameras(cams, reg, hw, {}, datetime.now(timezone.utc))
+
+    assert len(rows) == 1
+    assert rows[0]["ip"] == "192.0.2.10", "URL-shaped address must reduce to a bare host"
+    assert rows[0]["model"] == "FAKE-CAM"
+    assert rows[0]["mac"] is not None, "hardware MAC is the only MAC source"
+
+
+def test_camera_hardware_link_tolerates_other_shapes():
+    """Other XProtect versions expose the link differently — keep working."""
+    from netmon.collectors.milestone import _hardware_key
+
+    assert _hardware_key({"relations": {"parent": {"type": "hardware", "id": "H1"}}}) == "H1"
+    # parent as a list, and relations carrying unrelated entries first
+    assert _hardware_key({"relations": {"parent": [
+        {"type": "recordingServer", "id": "RS1"},
+        {"type": "Hardware", "id": "H2"},
+    ]}}) == "H2"
+    assert _hardware_key({"relations": {"related": [{"type": "hardware", "guid": "H3"}]}}) == "H3"
+    # Legacy flat field still honoured.
+    assert _hardware_key({"hardwareId": "H4"}) == "H4"
+    # Nothing resolvable → empty, and build_cameras degrades to NULL ip.
+    assert _hardware_key({"relations": {"parent": {"type": "recordingServer", "id": "RS"}}}) == ""
+    assert _hardware_key({}) == ""
+
+
+def test_host_from_address_handles_ports_and_bare_hosts():
+    """5 devices carry a non-default port; the host alone belongs in cameras.ip."""
+    from netmon.collectors.milestone import _host_from_address
+
+    assert _host_from_address("http://192.0.2.10/") == "192.0.2.10"
+    assert _host_from_address("http://192.0.2.10:8080/") == "192.0.2.10"
+    assert _host_from_address("192.0.2.10") == "192.0.2.10"
+    assert _host_from_address("192.0.2.10:8080") == "192.0.2.10"
+    assert _host_from_address("https://cam.example.invalid/snap") == "cam.example.invalid"
+    assert _host_from_address(None) is None
+    assert _host_from_address("") is None

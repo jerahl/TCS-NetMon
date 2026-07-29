@@ -75,3 +75,33 @@ def test_rconfig_blind_on_unreachable(tmp_path):
     assert st["1"]["value"] == "blind"
     h = db.fetch_one(engine, "SELECT * FROM collector_health WHERE name='rconfig'")
     assert h["consecutive_failures"] == 1
+
+
+def test_last_backup_prefers_a_real_backup_field_over_row_mtime():
+    """Ordering in _TS_KEYS is the contract — most specific first.
+
+    Live payloads (confirmed 2026-07-28) carry `last_backup_at`, which was
+    missing from the alias list while `updated_at` was present. Because
+    _last_backup returns the FIRST key it finds, freshness was measured off the
+    row's modification time: a device whose backup had not run in weeks looked
+    fresh whenever anything else about the row changed.
+    """
+    from datetime import timezone
+
+    dev = {
+        "updated_at": "2026-07-28T12:00:00Z",     # row mtime — today
+        "last_backup_at": "2026-07-01T00:00:00Z",  # actual backup — weeks old
+    }
+    got = _last_backup(dev)
+    assert got is not None
+    assert (got.year, got.month, got.day) == (2026, 7, 1), \
+        "must report the real backup time, not the row mtime"
+    assert got.tzinfo is not None
+
+    # updated_at is still honoured when it is genuinely all that exists.
+    only_mtime = _last_backup({"updated_at": "2026-07-28T12:00:00Z"})
+    assert only_mtime is not None and only_mtime.day == 28
+
+    # And a real backup field wins regardless of dict insertion order.
+    reordered = {"last_backup_at": "2026-07-01T00:00:00Z", "updated_at": "2026-07-28T12:00:00Z"}
+    assert _last_backup(reordered).day == 1
