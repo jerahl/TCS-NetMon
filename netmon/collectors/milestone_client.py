@@ -66,6 +66,29 @@ class MilestoneClient:
             raise MilestoneAuthError("Milestone IDP returned no access_token")
         self._token = tok
 
+    async def bearer_token(self) -> str:
+        """Fetch a bearer token for a caller that is not using ``_get``.
+
+        The Events/State WebSocket authenticates with the same OAuth grant but
+        cannot go through ``_get`` — it needs the raw token for a connection
+        header. Kept here so the credential handling lives in exactly one place
+        and ``ws_milestone`` never touches the password.
+        """
+        async with await self._mkclient() as client:
+            await self._get_token(client)
+        if not self._token:  # pragma: no cover — _get_token raises instead
+            raise MilestoneAuthError("Milestone IDP returned no access_token")
+        return self._token
+
+    @property
+    def base_url(self) -> str:
+        """``scheme://host`` — the WebSocket URL is derived from this."""
+        return self._base
+
+    @property
+    def verify_ssl(self) -> bool:
+        return self._verify
+
     async def _get(self, client: httpx.AsyncClient, path: str) -> dict:
         if self._token is None:
             await self._get_token(client)

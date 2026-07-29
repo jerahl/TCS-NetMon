@@ -29,6 +29,7 @@ class ResilientWebSocket:
         connect: ConnectFactory,
         handle: Handler,
         *,
+        on_connect: Handler | None = None,
         watchdog_s: float = 60.0,
         base_backoff: float = 1.0,
         max_backoff: float = 30.0,
@@ -36,6 +37,13 @@ class ResilientWebSocket:
         self.name = name
         self._connect = connect
         self._handle = handle
+        # Called with the fresh connection before pumping, and again after every
+        # reconnect. Milestone's ESS is request/response: the stream does not
+        # exist until startSession/addSubscription are sent, so a receive-only
+        # client would sit silent until the watchdog killed it. A handshake that
+        # raises is treated as a failed connection — backoff and retry, rather
+        # than pump a socket that was never subscribed.
+        self._on_connect = on_connect
         self.watchdog_s = watchdog_s
         self.base_backoff = base_backoff
         self.max_backoff = max_backoff
@@ -54,6 +62,11 @@ class ResilientWebSocket:
         while not self._stop.is_set():
             try:
                 async with self._connect() as conn:
+                    if self._on_connect is not None:
+                        # Before `connected`/backoff-reset: a socket that opens
+                        # but fails its handshake is not a working connection,
+                        # and must not reset the backoff into a hot retry loop.
+                        await self._on_connect(conn)
                     self.connected = True
                     backoff = self.base_backoff  # reset on a successful connect
                     log.info("ws %s connected", self.name)
