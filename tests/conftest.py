@@ -359,6 +359,7 @@ WIRELESS_CLIENTS_DDL_SQLITE = """
 CREATE TABLE wireless_clients (
     mac TEXT PRIMARY KEY,
     device_id INTEGER,
+    radio TEXT,
     ssid TEXT,
     band TEXT,
     rssi_dbm INTEGER,

@@ -7,7 +7,10 @@ import { ActionButton, ActionAudit } from "../actions.jsx";
 // Device detail (AP / switch / any): registry fields + live state; APs get
 // the Phase 10.2 wireless sections (detail KV, radios, clients) from
 // /api/wireless/aps/{id} — NetMon's own tables, zero XIQ calls at render.
-export function ApDetailPage({ id }) {
+// ``embedded`` renders the same content inside the Wireless navigator's right
+// pane: the outer <div className="page"> and the "← Back" link belong to the
+// standalone #/ap/:id route and would nest a page inside a page otherwise.
+export function ApDetailPage({ id, embedded = false }) {
   const [device, setDevice] = React.useState(null);
   const [status, setStatus] = React.useState(null);
   const [wireless, setWireless] = React.useState(null);
@@ -45,8 +48,10 @@ export function ApDetailPage({ id }) {
   ].filter(([, v]) => v);
 
   return (
-    <div className="page">
-      <a className="back" href={device.device_type === "switch" ? "#/switches" : "#/"}>← Back</a>
+    <div className={embedded ? "" : "page"}>
+      {!embedded && (
+        <a className="back" href={device.device_type === "switch" ? "#/switches" : "#/wireless"}>← Back</a>
+      )}
       <div className="detail-head">
         <h1>{device.name}</h1>
         <SshButton host={device.mgmt_ip} name={device.name} />

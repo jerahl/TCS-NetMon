@@ -101,10 +101,20 @@ def ap_detail(
     detail = db.fetch_one(
         engine, "SELECT * FROM ap_details WHERE device_id = :d", {"d": device_id})
     out["detail"] = dict(detail) if detail else None
+    # ``clients`` is derived here, not read from ``ap_radios.clients`` — that
+    # column is NULL on every row by design, because XIQ's radio payload
+    # carries SSID descriptors rather than clients (see build_radio_rows). The
+    # association lives on the client side, in ``interface_name``, so the count
+    # is rolled up at read time the way ``ssids`` already does it. NULL still
+    # renders "—": a radio with no clients reports 0, and a fleet where the
+    # clients cycle has never run reports nothing rather than a false 0.
     out["radios"] = [dict(r) for r in db.fetch_all(
         engine,
-        "SELECT radio, band, channel, width_mhz, tx_power_dbm, util_pct, noise_dbm, "
-        "clients, updated_at FROM ap_radios WHERE device_id = :d ORDER BY radio",
+        "SELECT r.radio, r.band, r.channel, r.width_mhz, r.tx_power_dbm, "
+        "       r.util_pct, r.noise_dbm, r.updated_at, "
+        "       (SELECT COUNT(*) FROM wireless_clients w "
+        "         WHERE w.device_id = r.device_id AND w.radio = r.radio) AS clients "
+        "FROM ap_radios r WHERE r.device_id = :d ORDER BY r.radio",
         {"d": device_id},
     )]
     out["clients"] = [dict(r) for r in db.fetch_all(

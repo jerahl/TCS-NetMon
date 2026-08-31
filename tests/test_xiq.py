@@ -620,3 +620,38 @@ def test_client_bands_persist_and_unmapped_values_reach_snapshot_cache(tmp_path)
     assert snap2["ok"] is False
     assert snap2["payload"]["total"] == len(rows)
     assert snap2["payload"]["counts"] == {"clients.radio_type=42": len(rows)}
+
+
+def test_radio_name_parses_only_radio_interfaces():
+    """``interface_name`` names a radio *or* a switch port; only one is a radio.
+
+    Live shapes (7,423 active clients, 2026-08-31): every wireless client is
+    ``wifi0.N``/``wifi1.N`` and every wired one is slot:port. Coercing the
+    switch form into a radio would repeat the mistake build_radio_rows exists
+    to avoid — inventing an association the payload never asserted.
+    """
+    from netmon.collectors.xiq import _radio_name
+
+    assert _radio_name("wifi0.3") == "wifi0"
+    assert _radio_name("wifi1.1") == "wifi1"
+    assert _radio_name("WIFI0.2") == "wifi0"        # case-folded
+    assert _radio_name("1:51") is None              # switch slot:port
+    assert _radio_name("5:6") is None
+    assert _radio_name("") is None
+    assert _radio_name(None) is None
+    assert _radio_name("eth0") is None              # not a radio interface
+
+
+def test_clients_cycle_records_the_radio_and_leaves_wired_null(tmp_path):
+    """The per-radio count is derivable only if the association is stored."""
+    engine = _db_with_chs(tmp_path)
+    fake = _fake_with_fixtures()
+    asyncio.run(XiqCollector(engine, fake).run_once())
+
+    rows = db.fetch_all(engine, "SELECT mac, band, radio FROM wireless_clients")
+    assert rows, "fixture should produce clients"
+    for r in rows:
+        if r["band"] == "wired":
+            assert r["radio"] is None, "a wired client is not on a radio"
+        else:
+            assert r["radio"] in ("wifi0", "wifi1")

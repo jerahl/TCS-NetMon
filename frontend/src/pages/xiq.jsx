@@ -17,12 +17,86 @@ function fmtUptime(s) {
 
 const STATUS_COLOR = { up: "ok", down: "crit", blind: "warn" };
 
+// ───────── APs by site ─────────
+//
+// ZCD's APs-by-site grid, which spec 15 §2 listed as missing. It was not
+// buildable until 2026-08-31: 782 of 783 APs read site "Unassigned" because
+// the seed let Zabbix's "Site/Wireless APs" catch-all outrank the real
+// Site/Wireless/<school>/<floor> group (spec 17). With attribution fixed the
+// grid is a pure client-side roll-up of /api/wireless/aps — no new endpoint.
+//
+// Tiles are tinted by worst status and are click-to-filter, so "which school
+// is unhappy" and "show me its APs" are one gesture rather than two.
+function SiteGrid({ aps, filter, onFilter, onPick, picked }) {
+  const sites = {};
+  for (const a of aps) (sites[a.site || "Unassigned"] ||= []).push(a);
+
+  const rows = Object.entries(sites).map(([name, list]) => {
+    const down = list.filter((a) => a.status === "down").length;
+    const blind = list.filter((a) => a.status === "blind").length;
+    const unknown = list.filter((a) => !a.status).length;
+    // "unknown" is never folded into "ok" — no reading is not a good reading.
+    const worst = down ? "crit" : (blind || unknown) ? "warn" : "ok";
+    const clients = list.reduce((n, a) => n + (a.clients_total || 0), 0);
+    return { name, total: list.length, down, blind, unknown, worst, clients };
+  });
+  rows.sort((a, b) => b.down - a.down || a.name.localeCompare(b.name));
+
+  const issues = rows.filter((r) => r.worst !== "ok");
+  const shown = filter === "issues" ? issues
+    : filter === "ok" ? rows.filter((r) => r.worst === "ok") : rows;
+
+  return (
+    <Card kicker={`${rows.length} site(s) · ${issues.length} needing attention`}>
+      <div className="evt-filters" style={{ marginTop: 0 }}>
+        {[["all", `All ${rows.length}`], ["issues", `Issues ${issues.length}`],
+          ["ok", `Healthy ${rows.length - issues.length}`]].map(([k, label]) => (
+          <button key={k} type="button"
+                  className={"linkish" + (filter === k ? " active" : "")}
+                  onClick={() => onFilter(k)}>{label}</button>
+        ))}
+        {picked && (
+          <button type="button" className="linkish" onClick={() => onPick(picked)}>
+            clear “{picked}” filter
+          </button>
+        )}
+      </div>
+      <div className="site-grid">
+        {shown.map((r) => (
+          <button key={r.name} type="button"
+                  className={"site-tile" + (picked === r.name ? " active" : "")}
+                  style={{ borderLeftColor: sevColor(r.worst) }}
+                  onClick={() => onPick(r.name)}
+                  title={`${r.total} AP(s)${r.down ? ` · ${r.down} down` : ""}` +
+                         `${r.blind ? ` · ${r.blind} blind` : ""}` +
+                         `${r.unknown ? ` · ${r.unknown} unknown` : ""}`}>
+            <div className="site-tile-name">{r.name}</div>
+            <div className="site-tile-sub mono">{r.total} AP · {r.clients} cl</div>
+            {r.down > 0 && (
+              <div className="site-tile-prob" style={{ color: sevColor("crit") }}>
+                {r.down} down
+              </div>
+            )}
+            {r.down === 0 && (r.blind || r.unknown) > 0 && (
+              <div className="site-tile-prob" style={{ color: sevColor("warn") }}>
+                {r.blind ? `${r.blind} blind` : `${r.unknown} unknown`}
+              </div>
+            )}
+          </button>
+        ))}
+        {shown.length === 0 && <div className="msg">No sites in this filter.</div>}
+      </div>
+    </Card>
+  );
+}
+
 export function XiqPage() {
   const [summary, setSummary] = React.useState(null);
   const [aps, setAps] = React.useState(null);
   const [ssids, setSsids] = React.useState(null);
   const [error, setError] = React.useState(null);
   const [site, setSite] = React.useState("");
+  const [siteFilter, setSiteFilter] = React.useState("all");
   const [q, setQ] = React.useState("");
 
   React.useEffect(() => {
@@ -59,6 +133,7 @@ export function XiqPage() {
       <h1>XIQ · Wireless</h1>
       <div className="subtitle">
         ExtremeCloud IQ cycles · <SourceBadge source="xiq" /> · refreshes every {REFRESH_MS / 1000}s
+        {" · "}<a href="#/wireless">AP navigator →</a>
         {detailAge && <span> · detail cache {detailAge} old</span>}
         {!summary.details_updated_at && <span style={{ color: sevColor("warn") }}> · no detail sweep yet</span>}
       </div>
@@ -86,6 +161,9 @@ export function XiqPage() {
         <div className="stat"><div className="stat-value">{fwCompliant !== null ? `${fwCompliant}%` : "—"}</div>
           <div className="stat-label">On {fwTop ? fwTop.fw_version : "top firmware"}</div></div>
       </div>
+
+      <SiteGrid aps={aps} filter={siteFilter} onFilter={setSiteFilter}
+                onPick={(s) => setSite(s === site ? "" : s)} picked={site} />
 
       <div className="evt-filters">
         <label className="evt-filter">
@@ -115,7 +193,7 @@ export function XiqPage() {
               {shown.map((a) => (
                 <tr key={a.id}>
                   <td><Dot severity={STATUS_COLOR[a.status] || "unknown"} /></td>
-                  <td><a href={`#/ap/${a.id}`}>{a.name}</a></td>
+                  <td><a href={`#/wireless/${a.id}`}>{a.name}</a></td>
                   <td>{a.site || "—"}</td>
                   <td className="dim">{a.model || "—"}</td>
                   <td className="mono dim">{a.ip || a.mgmt_ip || "—"}</td>

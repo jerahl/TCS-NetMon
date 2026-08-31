@@ -475,6 +475,17 @@ table.grid.kv td:first-child { color: var(--dim); width: 160px; }
 .site-tile-meta { font-size: 11px; margin-top: 2px; }
 .site-tile-switch { font-size: 11px; font-weight: 700; margin-top: 3px; }
 .site-tile-prob { font-size: 11px; font-weight: 700; margin-top: 3px; }
+/* The XIQ APs-by-site grid renders tiles as <button> (click-to-filter) rather
+   than <a>; without these they inherit the UA button look and the grid breaks. */
+button.site-tile { width: 100%; text-align: left; font: inherit; cursor: pointer; }
+button.site-tile.active { border-color: var(--accent); background: var(--panel); }
+.site-tile-sub { font-size: 11px; margin-top: 2px; color: var(--dim); }
+
+/* Filter toggles outside the switch navigator (XIQ site grid, AP navigator). */
+.linkish { background: none; border: none; color: var(--accent); font-size: 11px;
+           cursor: pointer; padding: 0 6px 0 0; }
+.linkish:hover { text-decoration: underline; }
+.linkish.active { font-weight: 700; text-decoration: underline; }
 
 /* ---- ⌘K command palette (phase 10.5) -------------------------------- */
 .cmdk-scrim {

@@ -305,6 +305,25 @@ def build_radio_rows(
     return list(out.values())
 
 
+# ``interface_name`` names what the client is attached to, and its shape says
+# which kind: ``wifi0.3`` is radio ``wifi0``'s third WLAN, while ``1:51`` is a
+# switch slot:port. Only the radio form is a radio, so the switch form must not
+# be coerced into one — that is the same mistake as counting SSID descriptors
+# as clients. Live shapes confirmed 2026-08-31 across 7,423 active clients:
+# wifi0.1-3 / wifi1.1-3 for every wireless client, slot:port for every wired one.
+_RADIO_IFACE = re.compile(r"^(wifi\d+)\.", re.IGNORECASE)
+
+
+def _radio_name(interface_name: Any) -> str | None:
+    """Radio a client is associated to, from its ``interface_name``.
+
+    Returns ``None`` for wired clients and for any shape that isn't a radio
+    interface — NULL means "not on a radio", which is a fact rather than a gap.
+    """
+    m = _RADIO_IFACE.match(str(interface_name or "").strip())
+    return m.group(1).lower() if m else None
+
+
 def build_client_rows(
     raw: list[dict], xiq_to_dev: dict[str, int], now: datetime,
     tally: Counter | None = None,
@@ -321,6 +340,7 @@ def build_client_rows(
         by_mac[mac] = {
             "mac": mac,
             "device_id": xiq_to_dev.get(str(r.get("device_id"))),
+            "radio": _radio_name(r.get("interface_name")),
             "ssid": (r.get("ssid") or None),
             "band": _client_band(r.get("radio_type"), tally),
             "rssi_dbm": _to_int(r.get("rssi")),

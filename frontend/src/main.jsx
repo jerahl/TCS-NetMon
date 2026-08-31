@@ -13,6 +13,7 @@ import { ProblemsPage } from "./pages/problems.jsx";
 import { VoipPage } from "./pages/voip.jsx";
 import { MapPage } from "./pages/map.jsx";
 import { NetmonStatusPage } from "./pages/netmon_status.jsx";
+import { WirelessPage } from "./pages/wireless.jsx";
 import { XiqPage } from "./pages/xiq.jsx";
 import { SettingsPage } from "./pages/settings.jsx";
 import { RegistryPage } from "./pages/registry.jsx";
@@ -37,7 +38,7 @@ function parseRoute() {
   if (parts[0] === "map") return { name: "map", query };
   if (parts[0] === "netmon-status") return { name: "netmon-status", query };
   if (parts[0] === "xiq") return { name: "xiq", query };
-  if (parts[0] === "wireless") return { name: "wireless", query };
+  if (parts[0] === "wireless") return { name: "wireless", id: parts[1] || null, query };
   if (parts[0] === "settings") return { name: "settings", query };
   if (parts[0] === "registry") return { name: "registry", query };
   if (parts[0] === "ap" && parts[1]) return { name: "ap", id: parts[1], query };
@@ -66,7 +67,7 @@ function App() {
   else if (route.name === "map") { page = <MapPage />; active = "map"; }
   else if (route.name === "netmon-status") { page = <NetmonStatusPage />; active = "netmon-status"; }
   else if (route.name === "xiq") { page = <XiqPage />; active = "xiq"; }
-  else if (route.name === "wireless") { page = <XiqPage />; active = "wireless"; }
+  else if (route.name === "wireless") { page = <WirelessPage id={route.id} />; active = "wireless"; }
   else if (route.name === "settings") { page = <SettingsPage />; active = "settings"; }
   else if (route.name === "registry") { page = <RegistryPage />; active = "registry"; }
   else if (route.name === "ap") { page = <ApDetailPage id={route.id} />; active = "wireless"; }
