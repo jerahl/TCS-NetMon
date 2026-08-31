@@ -120,3 +120,61 @@ Migration `021` has a rollback note (`DROP COLUMN radio`); nothing writes
 The page changes are frontend-only and revert with the commit. No collector
 interval, rate budget, or XIQ call count changed — `interface_name` rides on the
 `/clients/active` fetch that already ran every cycle.
+
+---
+
+# Addendum — ZCD design system ported (2026-08-31)
+
+**Owner ask:** *"look in the repo reference/assets and apply the styles and
+layout EXACTLY."*
+
+## Base stylesheet
+
+`reference/assets/styles.css` is now the base of `frontend/src/styles.css`,
+**byte-identical**, between the `PORT BEGINS` / `PORT ENDS` markers — verified
+programmatically (31,945 bytes, exact match), so a future ZCD change can be
+re-applied as a diff rather than re-read. That brings the full token set (4-step
+background ramp, 4 text levels, per-source brand colours, semantic scale, 3
+radii, Inter/JetBrains Mono stacks), the 13px body, the 220px sidebar grid, and
+ZCD's card/tab/badge/topbar rules.
+
+Ordering matters: NetMon's own component CSS follows the port, so anything it
+redefines silently wins. Four selectors did — `.dot`, `.tabs`, `.tab`,
+`.src-badge` — and were removed so the ported rules apply. A comment at the end
+of the file records the hazard for future additions.
+
+## Layout
+
+- `.app` is now ZCD's grid (`220px 1fr`, `56px` collapsed) instead of a flex
+  row. The collapse class sits on `.app`, so the state moved from `Nav` up to
+  `App` — the grid template is an ancestor property.
+- Added the `.main` wrapper and **the topbar NetMon never had**: breadcrumb
+  (`Tuscaloosa City Schools / Operations / <page>`), search, reload.
+- `Card` now emits ZCD's `.card-h > h3` + `.card-b`. This was mandatory, not
+  cosmetic: the ported `.card` puts its padding on `.card-b`, so leaving the old
+  `.card-body` markup would have rendered every card edge-to-edge. The kicker
+  maps onto `.h-meta`, which ZCD already defines for that purpose.
+
+## The one deviation, and why it is not visual
+
+ZCD's PHP views load Inter and JetBrains Mono from `fonts.googleapis.com`
+(`views/*.view.php:27`). NetMon does **not** add that `<link>` — CLAUDE.md §3
+forbids CDN loads in the bundle, and spec 16 C6 rejects putting an internet
+round-trip in front of a NOC dashboard's legibility. The `--sans`/`--mono`
+stacks are ZCD's own, unmodified, so where the faces are installed the rendering
+is identical and elsewhere it falls back exactly as ZCD's stacks specify.
+Self-hosted woff2 is the follow-up that closes the gap completely.
+
+## What is *not* yet ported
+
+The per-page stylesheets — `global.css`, `switches.css` (1,374 lines),
+`events.css`, `problems.css`, `surveillance.css`, `voip.css`, `xiq.css`,
+`packetfence.css` — are untouched, ~5,400 lines. NetMon's pages use their own
+class vocabulary (`cmdk-*`, `hchart-*`, `act-*`, `sw-nav-*`, `evt-*`) with no
+ZCD counterpart, so porting those is a per-page job that changes markup, not a
+stylesheet swap. `.stat`/`table.grid` were rebuilt on the ported tokens rather
+than left on the old palette, since ZCD keeps its equivalents in `global.css`.
+
+**Verify visually before merging.** 458 backend tests pass and the bundle builds
+and serves, but there is no frontend test suite here — nothing in CI can catch a
+layout regression on 13 pages, and this change touches every one of them.
