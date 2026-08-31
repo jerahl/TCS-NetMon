@@ -22,3 +22,18 @@ frontend/node_modules/
 # Secrets — the real config lives at /etc/netmon/netmon.conf, never in the repo
 netmon.conf
 /etc/netmon/
+
+# One-off dumps from debugging against the live fleet. These are real device
+# and endpoint identity — MACs, IPs, hostnames, serial numbers, PF
+# computernames — so they must never be committed (§4.6). Anchored to the repo
+# root so only the working copies are ignored; topology.example.json is the
+# committed template and stays tracked. Every one of these is re-derivable
+# read-only via scripts/ or a snmpbulkwalk, so nothing here is worth keeping.
+/snmp.txt
+/edp_ports.txt
+/poe_*.txt
+/sfp_*.txt
+/pf_nodes.json
+/xiq_devices.json
+/zbx_sites.json
+/topology.json
