@@ -63,7 +63,8 @@ Most-trusted first. Each resolution records its method and evidence.
 | `subnet` | 174 | /16 learned from authoritatively-sited devices |
 | `subnet-2` | 126 | /16 learned with prefix-resolved peers admitted as evidence |
 | `normalise` | 9 | unplaceable, but the stale `Wireless APs` label cleared |
-| — | 69 | **left `Unassigned` — never guessed** |
+| owner | 55 | Alberta Elementary, identified by the owner (§5.1) |
+| — | 14 | **left `Unassigned` — never guessed** |
 
 ### Why inference here is not guessing
 
@@ -94,22 +95,49 @@ answers.** Both "errors" were the resolver disagreeing with the two mis-sited
 
 ## 4. Result
 
-23 sites carrying 79–344 devices each; **69 rows remain `Unassigned`** and no row
-reads `Wireless APs`. Open alerts now attribute to real sites (Bryant High 268,
+24 sites carrying 55–344 devices each; **14 rows remain `Unassigned`** and no
+row reads `Wireless APs`. Open alerts now attribute to real sites (Bryant High 268,
 Northridge High 263, Central High 226, …) where every one previously read
 `Unassigned` or `Wireless APs`.
 
 ## 5. Open items for the owner
 
-**69 unplaceable devices** — each needs one sentence, and the tool will place
-them the moment a rule can:
+**14 unplaceable devices** (was 69 — see §5.1) — each needs one sentence, and
+the tool will place them the moment a rule can:
 
 | Devices | Evidence available |
 |---|---|
-| 55 `FLEXIDOME`/`BOSCH` cameras on **10.84.18.x** | none — no sited device anywhere on 10.84. Which site is it? |
-| 9 APs on 172.16 (`AH-*`, `BPCC-*`, `OLDTCT-*`, `TCT-*`) | shared range; names are not site codes |
-| 2 recording servers (`TRAN-BCD-MS`, `TCT-*`) | `TRAN`/`TCT` look like Transportation/TCTA but no device proves it |
+| 8 APs on 172.16 (`AH-*`, `BPCC-*`, `OLDTCT-*`) | shared range; names are not site codes |
+| 1 recording server (`TRAN-BCD-MS`) | `TRAN` looks like Transportation but no device proves it |
 | `XIQSE`, `192.168.240.14`, `X465-48P`, `Maint-Cam-23` | appliance/model-named one-offs |
+
+### 5.1 Alberta Elementary — resolved 2026-08-31
+
+The 55 `FLEXIDOME`/`BOSCH` cameras on **10.84.18.x** were the largest unplaced
+block and had no evidence at all: no switch, AP or recording server anywhere on
+10.84. The owner identified it as **Alberta Elementary**.
+
+It is genuinely a *new* site, not an existing one under another spelling. Every
+site owns exactly one camera /16, and TASPA — the other Alberta-named campus,
+whose 203 devices are all `ALB-*` — sits entirely on 10.21. So `ALB → TASPA`
+(§3) and `10.84 → Alberta Elementary` are two different places, and merging them
+would have been wrong.
+
+`sites` row 24 created (`tier=elementary`, joining by `name`, `group_key` NULL).
+**Its lat/lon are a deliberate placeholder** — TASPA's coordinates, chosen with
+the owner so the pin is visibly approximate in the right neighbourhood rather
+than plausibly wrong somewhere else. ⚠️ **The marker must be dragged to its real
+position in Site Map → EDIT MAP.** Until then the site card and roll-up are
+correct and only the map position is not.
+
+Nothing was hardcoded to achieve this. Once the 55 cameras carry a real site
+they become authoritative evidence themselves, so the resolver now *learns*
+`10.84 → Alberta Elementary` from the registry: any future camera on that range
+places automatically.
+
+Alberta Elementary has 55 cameras and **no switches or APs** in the registry,
+which is worth a look on its own — either its network gear is absent from XIQ,
+or it is genuinely camera-only.
 
 **3 registry-vs-Zabbix conflicts**, reported but deliberately not changed — the
 never-overwrite rule protects manual Registry assignments:
@@ -133,7 +161,10 @@ always wins.
 
 ## 7. Next session
 
-- Answer the 69 above, re-run `--apply`; expect them to place with no code change.
+- ⚠️ **Drag the Alberta Elementary marker to its real position** (§5.1) — its
+  pin is a placeholder by agreement, and a wrong pin on a NOC map is exactly the
+  kind of confidently-wrong artifact this spec exists to avoid.
+- Answer the 14 above, re-run `--apply`; expect them to place with no code change.
 - Resolve the 3 conflicts by hand in `#/registry`.
 - **Wire the resolver into the import paths** so a newly-discovered camera or AP
   is sited on arrival instead of landing `Unassigned` forever. `seed.assign_sites`
