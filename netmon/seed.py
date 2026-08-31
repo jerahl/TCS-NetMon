@@ -76,24 +76,32 @@ def build_site_index(
     """Map hostname → site from Zabbix ``host.get`` (``selectHostGroups``) rows.
 
     Each row has a ``host`` name and a ``hostgroups`` (or ``groups``) list of
-    ``{"name": ...}``. The first group whose name starts with ``prefix`` wins;
-    the site is that name minus the prefix (reference behaviour). Hosts with no
-    ``Site/`` group are omitted — they resolve to ``UNASSIGNED_SITE`` at apply
-    time.
+    ``{"name": ...}``. Groups are **ranked**, not taken in membership order, and
+    the most specific location wins. Hosts with no location group are omitted —
+    they resolve to ``UNASSIGNED_SITE`` at apply time.
+
+    Ranking matters because Zabbix nests two taxonomies under one prefix: real
+    locations (``Site/Wireless/<school>/<floor>``) and fleet-wide functional
+    groups (``Site/Wireless APs``, ``Site/Servers``). 728 hosts belong to both.
+    This function used to take the first ``Site/`` group and stop, so for 717
+    APs the catch-all won and ``devices.site`` read ``Wireless APs`` — a device
+    *class* standing where a building belongs, which starved every site roll-up
+    in the app while the true location sat unread in the same export.
+
+    Raw names are returned as the export spells them ("Bryant High School");
+    :func:`netmon.siteresolve.canonical_site` maps them onto the registry's
+    own site names.
     """
+    from netmon.siteresolve import site_from_groups
+
     index: dict[str, str] = {}
     for r in rows:
         name = str(r.get("host") or r.get("name") or "").strip()
         if not name:
             continue
-        groups = r.get("hostgroups") or r.get("groups") or []
-        for g in groups:
-            gname = g.get("name") if isinstance(g, dict) else str(g)
-            if gname and gname.startswith(prefix):
-                site = gname[len(prefix):].strip()
-                if site:
-                    index[name] = site
-                break
+        rank, site = site_from_groups(r.get("hostgroups") or r.get("groups") or [], prefix)
+        if rank and site:
+            index[name] = site
     return index
 
 

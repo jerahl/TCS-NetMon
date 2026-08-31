@@ -22,13 +22,40 @@ def test_canon_mac():
     assert canon_mac("") == ""
 
 
-def test_build_site_index_first_site_group_wins():
+def test_build_site_index_picks_the_site_group_among_others():
     idx = build_site_index([
         {"host": "a", "hostgroups": [{"name": "Switches"}, {"name": "Site/BHS"}]},
         {"host": "b", "hostgroups": [{"name": "Site/CHS"}]},
         {"host": "c", "hostgroups": [{"name": "Wireless"}]},  # no Site/ → omitted
     ])
     assert idx == {"a": "BHS", "b": "CHS"}
+
+
+def test_build_site_index_ranks_location_over_functional_group():
+    """Regression: this used to take the first Site/ group and stop.
+
+    788 APs are in ``Site/Wireless APs`` and 725 are also in a real
+    ``Site/Wireless/<school>/<floor>`` group. Taking membership order meant the
+    catch-all won for 717 of them and ``devices.site`` read "Wireless APs" — a
+    device class where a building belongs — which starved every site roll-up in
+    the app while the true location sat unread in the same export.
+    """
+    rows = [{"host": "ap1", "hostgroups": [
+        {"name": "Site/Wireless APs"},
+        {"name": "Site/Wireless/Westlawn Middle School/1st Floor"},
+    ]}]
+    assert build_site_index(rows) == {"ap1": "Westlawn Middle School"}
+    # Order must not matter.
+    rows[0]["hostgroups"].reverse()
+    assert build_site_index(rows) == {"ap1": "Westlawn Middle School"}
+
+
+def test_build_site_index_omits_functional_only_hosts():
+    """A host in only a catch-all has no known location — better unassigned."""
+    assert build_site_index([
+        {"host": "ap9", "hostgroups": [{"name": "Site/Wireless APs"}]},
+        {"host": "srv", "hostgroups": [{"name": "Site/Servers"}]},
+    ]) == {}
 
 
 def test_load_site_index_from_zabbix_export_and_plain_map(tmp_path):
