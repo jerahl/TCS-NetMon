@@ -165,15 +165,59 @@ stacks are ZCD's own, unmodified, so where the faces are installed the rendering
 is identical and elsewhere it falls back exactly as ZCD's stacks specify.
 Self-hosted woff2 is the follow-up that closes the gap completely.
 
-## What is *not* yet ported
+## Per-page stylesheets (2026-08-31, second pass)
 
-The per-page stylesheets — `global.css`, `switches.css` (1,374 lines),
-`events.css`, `problems.css`, `surveillance.css`, `voip.css`, `xiq.css`,
-`packetfence.css` — are untouched, ~5,400 lines. NetMon's pages use their own
-class vocabulary (`cmdk-*`, `hchart-*`, `act-*`, `sw-nav-*`, `evt-*`) with no
-ZCD counterpart, so porting those is a per-page job that changes markup, not a
-stylesheet swap. `.stat`/`table.grid` were rebuilt on the ported tokens rather
-than left on the old palette, since ZCD keeps its equivalents in `global.css`.
+All eight relevant page stylesheets are now ported **verbatim** as well —
+`global.css`, `switches.css`, `events.css`, `problems.css`, `surveillance.css`,
+`voip.css`, `xiq.css`, `packetfence.css` — asserted programmatically (each file's
+full text is present in the bundle). `fortigate.css`, `xdr.css` and `servers.css`
+are deliberately excluded: those pages are deferred (D1), dropped (D8) and
+retired (D2), so their rules would style markup NetMon will never render.
+
+**The measurement that shaped this work:** ZCD's per-page class vocabularies
+overlap NetMon's markup by **0–8%** (global 8%, switches 4%, events 3%,
+problems 2%, surveillance 0%, voip 0%, xiq 0%, packetfence 1%). They share
+almost nothing with each other either — the only class in three or more page
+files is `.app`. So a page does not *look* ported when its CSS lands; it looks
+ported when its JSX is rewritten onto `sev-cell`/`sys-card`/`swport-*`/`evt-*`.
+Shipping the CSS is step one of two, per page.
+
+### SPA bundling vs ZCD's per-page loads
+
+ZCD is a multi-page PHP module: each view loads `styles.css` plus exactly one
+page stylesheet. NetMon ships one bundle, so all of them load everywhere. That
+was checked rather than assumed: every rule is namespaced to its own page's
+vocabulary, and the only selectors touching shared names are
+attribute-qualified — `.app[data-density="dense"]`, `.app[data-pf="1"]`,
+`.body.with-tweaks` — which NetMon never sets, so they are inert until a page
+opts in. (`data-pf="1"` is worth opting into on `#/nac`: it retints the active
+tab and nav marker PacketFence amber.)
+
+### Markup converted so far
+
+| Page | Stylesheet | Markup |
+|---|---|---|
+| Global | ✅ ported | ✅ **converted** — severity strip, system cards, sites heatmap + legend + seg-toggle, hotspots, triggers |
+| XIQ · Status | ✅ ported | ✅ **converted** — 6-cell `xiq-kpi` strip, `sites-grid` AP tiles |
+| Switches | ✅ ported | ⏳ still on NetMon's `sw-*` vocabulary |
+| Events | ✅ ported | ⏳ |
+| Problems | ✅ ported | ⏳ |
+| Surveillance | ✅ ported | ⏳ |
+| VoIP | ✅ ported | ⏳ |
+| NAC (PacketFence) | ✅ ported | ⏳ |
+
+Two ZCD components became buildable only because earlier work landed, and both
+are now on the Global page: the **severity strip** (spec 14 §3 costed it as a
+severity model plus a new endpoint — spec 16 C1 was right that `/api/summary`
+already returned `severity` and `alerts.acked/unacked` and the page simply never
+read them) and **Top Problem Hotspots** (impossible until spec 17, because every
+site's `problems` was 0 while alerts carried `Unassigned`).
+
+Two ZCD elements are deliberately not reproduced: the five-level
+Disaster/High/Warning/Info ladder (NetMon's enum is four values by decision —
+spec 16 C4) and the per-site **SLA %**, which is hardcoded in the reference
+(`ActionGlobalData.php:481` sets it null; the bridge substitutes `target ?? 100`
+— spec 16 C2). The tile shows device counts instead: omitted, not defaulted.
 
 **Verify visually before merging.** 458 backend tests pass and the bundle builds
 and serves, but there is no frontend test suite here — nothing in CI can catch a
