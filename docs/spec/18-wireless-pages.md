@@ -259,3 +259,35 @@ Topology · Stack Health · VLAN · PoE Budget · XIQ · CLI · Config Backups �
 difference is real scope, not styling. NetMon has no per-switch XIQ tab, its CLI
 equivalent is the SSHEASY button, and it adds FDB and Triggers, which ZCD has no
 counterpart for.
+
+### Tab chrome (2026-09-01)
+
+The port left the tab strip on Switches, Surveillance and NAC rendering as raw
+browser buttons — grey face, 2px border, centred text, system font.
+
+Cause: **ZCD renders tabs as `<div className="tab">`** (`switches-app.jsx:161`),
+so its `.tab` rule sets no `background`, `border` or `font` — a div needs none.
+NetMon renders them as `<button>`, for keyboard reach and because a control that
+changes state should be a control. Ported verbatim, the rule left the UA chrome
+showing.
+
+Fixed with a reset scoped to exactly the classes ZCD never puts on a button:
+`.tab`, `.icon-btn`, `.site-tile` (and `text-align`/`font` on the topbar
+`.search`). `.btn`, `.seg-btn` and `.sidebar-toggle` are deliberately excluded —
+ZCD already renders those as buttons and their rules reset themselves.
+
+Specificity was the part to get right: `button.tab` is (0,1,1) and `.tab.active`
+is (0,2,0), so the active underline still wins and the reset restores neutral
+chrome without flattening state. PacketFence's `.app[data-pf="1"] .tab.active`
+amber override survives too, still attribute-scoped.
+
+Second, smaller break: ZCD's `.tabs` carries `padding: 14px 22px 0` because its
+`.main` is unpadded and the strip spans the viewport. NetMon's `.content`
+already pads 22px, so tabs double-indented and the underline stopped short of
+the content edges. `.page .tabs` re-zeroes the horizontal padding; the vertical
+rhythm and the border stay ZCD's.
+
+**The general lesson for the remaining page conversions:** a verbatim CSS port
+is only correct where the markup uses the same element. Every class ZCD styles
+on a `<div>`/`<a>` that NetMon renders as a `<button>` needs this check — the
+audit that found these three is worth re-running per page.

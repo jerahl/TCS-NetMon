@@ -1011,6 +1011,47 @@ body {
   --dim:    var(--muted);
 }
 
+/* ── Buttons wearing ZCD's clothes ────────────────────────────────────────
+ * ZCD renders tabs, tiles and icon affordances as <div>/<a>, so several of its
+ * rules set no background, border or font — a div needs none. NetMon renders
+ * the same affordances as <button>, for keyboard reach and because a control
+ * that changes state should be a control. Without a reset those inherit the
+ * UA button chrome (grey face, 2px border, centred, system font) and the port
+ * looks broken exactly where it is most visible: the tab strip on Switches,
+ * Surveillance and NAC.
+ *
+ * .btn, .seg-btn and .sidebar-toggle are NOT listed: ZCD already renders those
+ * as buttons and their rules reset themselves. Only classes ZCD never puts on a
+ * <button> need this.
+ *
+ * Specificity is deliberate. `button.tab` is (0,1,1) and `.tab.active` is
+ * (0,2,0), so the active underline still wins — the reset restores neutral
+ * chrome without flattening state.
+ */
+button.tab,
+button.icon-btn,
+button.site-tile {
+  font: inherit;
+  color: inherit;
+  background: none;
+  text-align: left;
+  -webkit-appearance: none;
+  appearance: none;
+}
+button.tab { border: 0; border-bottom: 2px solid transparent; }
+button.icon-btn { border: 1px solid transparent; }
+button.site-tile { width: 100%; border: 1px solid; }
+/* The topbar search is a button wrapping a readonly input. */
+button.search { font: inherit; text-align: left; cursor: pointer; }
+
+/* ZCD's .tabs carries `padding: 14px 22px 0` because its .main is unpadded and
+ * the strip spans the viewport. NetMon's .content already pads 22px, so the
+ * inherited value double-indents the tabs and the underline stops short of the
+ * content edges. Re-zero the horizontal padding inside a page; the vertical
+ * rhythm and the border are ZCD's.
+ */
+.page .tabs { padding: 14px 0 0; }
+
 /* ── Shell pieces NetMon has and ZCD does not ─────────────────────────────
  * ZCD's sidebar has no search button (its search lives in the topbar), no
  * external-link entries (it *is* the Zabbix module, so it never links out to
