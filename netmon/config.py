@@ -52,6 +52,13 @@ class WebConfig:
     # NetMon only builds a target URL (host/port); it never handles credentials
     # (ssheasy prompts for them in-terminal) — read-only-first still holds.
     ssheasy_url: str = ""
+    # Base URL of the PacketFence *admin UI*, for deep-linking an endpoint:
+    # <packetfence_url>/admin/#/node/<mac> (the shape ZCD uses —
+    # ActionSearchData.php:287). This is deliberately NOT reused from
+    # [packetfence] url: that one is the REST API base, which on a normal PF
+    # deployment is a different port, and guessing wrong would produce links
+    # that 404 for every operator. Empty → the affordance is hidden.
+    packetfence_url: str = ""
 
 
 @dataclass(frozen=True)

@@ -121,3 +121,106 @@ def test_ap_radio_client_counts_are_derived_not_stored(tmp_path):
         assert radios["wifi1"]["clients"] == 0   # real zero, not a null
         # The stored column stays untouched and unused.
         assert "util_pct" in radios["wifi0"]
+
+
+def test_ap_uplink_prefers_the_access_port_not_a_trunk(tmp_path):
+    """The failure this guards against is destructive, not cosmetic.
+
+    An AP's MAC is learned on every port in its path — on the live fleet a
+    median of 5 and up to 14 — and all but one are uplink trunks. Taking any
+    FDB row would point Cycle PoE at a 10G uplink carrying 168 MACs, bouncing a
+    whole switch's worth of devices instead of one AP.
+    """
+    from netmon.api.wireless import _ap_uplink
+    from sqlalchemy import text
+    url = f"sqlite:///{tmp_path/'w.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    with engine.begin() as c:
+        # Two switches learn the AP: its access port (1 MAC, PoE copper) and a
+        # trunk (3 MACs, SFP). Note the unpunctuated ap_details MAC vs the
+        # colon form in fdb_entries — the join must normalise or it finds none.
+        c.execute(text("INSERT INTO devices (id,name,site,device_type,enabled) "
+                       "VALUES (10,'EDGE-SW','S','switch',1),(11,'CORE-SW','S','switch',1)"))
+        c.execute(text("UPDATE ap_details SET mgmt_mac='aabbcc001122' WHERE device_id=1"))
+        c.execute(text("INSERT INTO fdb_entries (device_id,mac,ifindex,updated_at) VALUES "
+                       "(10,'aa:bb:cc:00:11:22',5,:t),(11,'aa:bb:cc:00:11:22',49,:t),"
+                       "(11,'aa:bb:cc:00:99:01',49,:t),(11,'aa:bb:cc:00:99:02',49,:t)"),
+                  {"t": "2026-09-01 00:00:00"})
+        c.execute(text("INSERT INTO switch_ports (device_id,ifindex,name,poe_delivering,is_sfp,speed_mbps) "
+                       "VALUES (10,5,'1:5',1,0,1000),(11,49,'1:49',NULL,1,10000)"))
+    engine.dispose()
+
+    engine = db.make_engine(url)
+    u = _ap_uplink(engine, {"mgmt_mac": "aabbcc001122"})
+    assert u["switch_name"] == "EDGE-SW"      # not the 3-MAC SFP trunk
+    assert u["port"] == "1:5"
+    assert u["macs_on_port"] == 1
+    assert u["candidates"] == 2
+    assert u["poe_cycle_safe"] is True
+
+
+def test_ap_uplink_refuses_to_confirm_an_unpoed_port(tmp_path):
+    """No PoE and/or SFP means it is probably an uplink — show it, don't act."""
+    from netmon.api.wireless import _ap_uplink
+    from sqlalchemy import text
+    url = f"sqlite:///{tmp_path/'w.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO devices (id,name,site,device_type,enabled) "
+                       "VALUES (11,'CORE-SW','S','switch',1)"))
+        c.execute(text("UPDATE ap_details SET mgmt_mac='aabbcc001122' WHERE device_id=1"))
+        c.execute(text("INSERT INTO fdb_entries (device_id,mac,ifindex,updated_at) "
+                       "VALUES (11,'aa:bb:cc:00:11:22',49,:t)"), {"t": "2026-09-01 00:00:00"})
+        c.execute(text("INSERT INTO switch_ports (device_id,ifindex,name,poe_delivering,is_sfp,speed_mbps) "
+                       "VALUES (11,49,'1:49',NULL,1,10000)"))
+    engine.dispose()
+
+    u = _ap_uplink(db.make_engine(url), {"mgmt_mac": "aabbcc001122"})
+    assert u["port"] == "1:49"                 # still shown
+    assert u["poe_cycle_safe"] is False        # but never actioned
+    assert "uplink" in u["why"]
+
+
+def test_ap_uplink_blocks_when_packetfence_disagrees(tmp_path):
+    """PF's last_port is an independent source; a conflict must veto the action.
+
+    PF spells an Extreme stacked port "5035" where SNMP spells it "5:35", so
+    the comparison normalises before concluding anything.
+    """
+    from netmon.api.wireless import _ap_uplink
+    from sqlalchemy import text
+    url = f"sqlite:///{tmp_path/'w.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO devices (id,name,site,device_type,enabled) "
+                       "VALUES (10,'EDGE-SW','S','switch',1)"))
+        c.execute(text("UPDATE ap_details SET mgmt_mac='aabbcc001122' WHERE device_id=1"))
+        c.execute(text("INSERT INTO fdb_entries (device_id,mac,ifindex,updated_at) "
+                       "VALUES (10,'aa:bb:cc:00:11:22',35,:t)"), {"t": "2026-09-01 00:00:00"})
+        c.execute(text("INSERT INTO switch_ports (device_id,ifindex,name,poe_delivering,is_sfp,speed_mbps) "
+                       "VALUES (10,35,'5:35',1,0,1000)"))
+    engine.dispose()
+    engine = db.make_engine(url)
+
+    agree = _ap_uplink(engine, {"mgmt_mac": "aabbcc001122"}, {"last_port": "5035"})
+    assert agree["pf_agrees"] is True and agree["poe_cycle_safe"] is True
+
+    clash = _ap_uplink(engine, {"mgmt_mac": "aabbcc001122"}, {"last_port": "5036"})
+    assert clash["pf_agrees"] is False
+    assert clash["poe_cycle_safe"] is False    # corroborated port, vetoed anyway
+
+    silent = _ap_uplink(engine, {"mgmt_mac": "aabbcc001122"}, {"last_port": None})
+    assert silent["pf_agrees"] is None and silent["poe_cycle_safe"] is True
+
+
+def test_ap_uplink_none_when_mac_unknown(tmp_path):
+    from netmon.api.wireless import _ap_uplink
+    url = f"sqlite:///{tmp_path/'w.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    assert _ap_uplink(engine, {"mgmt_mac": None}) is None
+    assert _ap_uplink(engine, {"mgmt_mac": "nonsense"}) is None
+    assert _ap_uplink(engine, {"mgmt_mac": "aabbcc001122"}) is None   # no FDB rows

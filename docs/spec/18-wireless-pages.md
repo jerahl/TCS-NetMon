@@ -291,3 +291,65 @@ rhythm and the border stay ZCD's.
 is only correct where the markup uses the same element. Every class ZCD styles
 on a `<div>`/`<a>` that NetMon renders as a `<button>` needs this check — the
 audit that found these three is worth re-running per page.
+
+## AP Detail actions and uplink resolution (2026-09-01)
+
+AP Detail offered only **Reboot AP**. The other three D4 actions existed
+server-side but had no path to an AP, because each needs a target the page did
+not know: PacketFence acts on an endpoint MAC, and Cycle PoE acts on a switch
+port. Both are now resolved by `/api/wireless/aps/{id}`.
+
+### Two joins that were failing silently
+
+`ap_details.mgmt_mac` arrives from XIQ unpunctuated (`bcf310163600`) while
+`fdb_entries` and `pf_nodes` store the colon form. The raw join matched **0 of
+783** APs. Normalised it matches **741** in the FDB and **745** in PacketFence —
+so the data for all three actions was there the whole time, behind a format
+mismatch.
+
+### Picking the access port is a safety problem, not a lookup
+
+A MAC is learned on *every* port in its path. On this fleet an AP's MAC appears
+on a median of 5 ports and up to 14, and **only one AP of 741 resolves to a
+single port**. All the others are uplink trunks. Taking any FDB row would point
+Cycle PoE at a 10G uplink carrying up to 168 MACs — power-cycling a whole
+switch's worth of devices instead of one AP.
+
+Resolution rule, in order:
+
+1. **Fewest MACs on the port.** The access port has one endpoint; a trunk has
+   dozens.
+2. **Corroborate by kind** — the pick must be copper (`is_sfp = 0`) and actually
+   `poe_delivering`. Fleet-wide the fewest-MACs pick satisfies this for 91% and
+   94% respectively.
+3. **Cross-check against PacketFence.** PF records `last_switch`/`last_port` from
+   RADIUS and SNMP traps — evidence independent of the FDB. It agrees with the
+   FDB pick on **485** APs and disagrees on **32**. (PF spells an Extreme stacked
+   port `5035` where SNMP spells it `5:35`; the comparison normalises first.)
+
+`poe_cycle_safe` is all three together, and it gates the **action**, not the
+display: an unconfirmed uplink is still shown, with its candidate count and the
+reason it was rejected, so an operator can see what the button would have hit.
+
+Measured on the live fleet: of the 32 APs where FDB and PF disagree, **zero** are
+marked safe. The gate has never been the only thing standing between an operator
+and the wrong port — the PoE/copper test already caught all of them — and the PF
+check is there so that stays true when the fleet changes.
+
+### What AP Detail now carries
+
+* **Reevaluate Access** and **Restart Port** — shown when PF knows the AP.
+* **Cycle PoE** — labelled with the switch and port it will bounce, and rendered
+  disabled with the reason when the port is not confirmed.
+* **View in PacketFence** — `<packetfence_url>/admin/#/node/<mac>`, the shape ZCD
+  uses (`ActionSearchData.php:287`). New `[web] packetfence_url`; empty hides the
+  affordance. Deliberately **not** reused from `[packetfence] url`, which is the
+  REST API base and a different port on a normal deployment — guessing would
+  produce a link that 404s for every operator.
+* **Uplink card** — switch, port, link speed, PoE draw, MACs on port, PF
+  agreement, and a plain sentence saying whether Cycle PoE is available and why.
+* **PacketFence card** — the AP as an endpoint: role, registration, VLAN, last
+  switch/port, connection method.
+
+Still absent, and unchanged by this: the ZCD tabs (§3 — four of the nine have no
+data source), and per-radio CCA/utilisation, which XIQ does not expose.

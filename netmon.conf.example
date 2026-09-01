@@ -41,6 +41,11 @@ session_ttl = 43200
 # only builds a host/port target — credentials are entered in the terminal,
 # never handled here. Leave empty to hide the affordance.
 # ssheasy_url = https://ssheasy.example.internal
+# Base URL of the PacketFence ADMIN UI (not the REST API base in [packetfence]
+# — on a normal deployment those are different ports). Used to deep-link an
+# endpoint as <packetfence_url>/admin/#/node/<mac> from AP and port detail.
+# Empty → the "View in PacketFence" affordance is hidden.
+# packetfence_url = https://packetfence.example.internal
 
 [auth]
 # Single sign-on: NetMon is a SAML 2.0 Service Provider; ClassLink is the IdP.
