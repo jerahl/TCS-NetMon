@@ -93,3 +93,43 @@ def test_switches_require_auth(tmp_path):
     with TestClient(_app(conf)) as client:
         assert client.get("/api/switches").status_code == 401
         assert client.get("/api/switches/1/ports").status_code == 401
+
+
+def test_poe_cycle_advice_refuses_ports_that_carry_no_poe():
+    """Cycling PoE on a port with none is at best a no-op and at worst an
+    unexplained config push, since the rConfig snippet still runs."""
+    from netmon.api.switches import _poe_cycle_advice
+
+    sfp = _poe_cycle_advice({"is_sfp": 1, "poe_admin": None, "poe_delivering": None}, 2)
+    assert sfp["available"] is False and "SFP" in sfp["reason"]
+
+    no_poe = _poe_cycle_advice({"is_sfp": 0, "poe_admin": 0, "poe_delivering": 0}, 1)
+    assert no_poe["available"] is False
+    assert "not configured for PoE" in no_poe["reason"]
+
+
+def test_poe_cycle_advice_warns_when_the_port_looks_like_an_uplink():
+    """Warns rather than blocks: the operator picked this port off the
+    faceplate, and occasionally bouncing an uplink is what you want — but they
+    should not learn it from the outage."""
+    from netmon.api.switches import _poe_cycle_advice, UPLINK_MAC_HINT
+
+    port = {"is_sfp": 0, "poe_admin": 1, "poe_delivering": 1}
+    access = _poe_cycle_advice(port, 2)
+    assert access["available"] is True and access["warn"] is None
+
+    trunk = _poe_cycle_advice(port, UPLINK_MAC_HINT + 40)
+    assert trunk["available"] is True          # not blocked
+    assert "uplink" in trunk["warn"]           # but said out loud
+    assert str(UPLINK_MAC_HINT + 40) in trunk["warn"]
+
+
+def test_poe_cycle_advice_flags_an_unswept_port_without_refusing_it():
+    """No PoE reading is not the same as no PoE — say so, don't invent either."""
+    from netmon.api.switches import _poe_cycle_advice
+
+    a = _poe_cycle_advice({"is_sfp": 0, "poe_admin": None, "poe_delivering": None}, 1)
+    assert a["available"] is True and a["unverified"] is True
+
+    b = _poe_cycle_advice({"is_sfp": 0, "poe_admin": 1, "poe_delivering": 1}, 1)
+    assert b["unverified"] is False

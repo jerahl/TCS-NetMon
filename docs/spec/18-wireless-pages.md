@@ -353,3 +353,49 @@ check is there so that stays true when the fleet changes.
 
 Still absent, and unchanged by this: the ZCD tabs (§3 — four of the nine have no
 data source), and per-radio CCA/utilisation, which XIQ does not expose.
+
+## Switch port detail pane (2026-09-01)
+
+The same pass over the pane that owns the other half of these actions.
+
+### The target bug
+
+Restart Port was bound to `detail.macs[0].mac` — whichever MAC sorted first on
+the port. A port routinely carries several endpoints (a PC behind a phone, or
+everything behind an AP), so the action bounced an arbitrary one. **Restart
+Access and Reevaluate Access are now per-row**, in the Devices table, on the
+endpoint the operator actually picked. Same class of defect as the AP uplink:
+acting on a target nobody chose.
+
+A MAC PacketFence has never seen gets no buttons at all rather than a call PF
+would reject — `reg_status` is the test, since it is only non-null on a real PF
+node.
+
+### Cycle PoE: advise, don't resolve
+
+The distinction from AP Detail matters. There, NetMon *infers* which port to
+bounce and must refuse when it cannot corroborate. Here the operator picks the
+port off the faceplate, so the server's job is not to guess but to stop two
+specific mistakes (`_poe_cycle_advice`):
+
+* **A port with no PoE** — SFP cages being the common case. The rConfig snippet
+  would still run: at best a no-op, at worst an unexplained config push.
+  **Blocked**, with the reason on the disabled button.
+* **A port that is really an uplink** — flagged past `UPLINK_MAC_HINT` (8)
+  learned MACs. **Warned, not blocked**: nothing forbids power-cycling an
+  uplink and occasionally it is what you want, but an operator should not
+  discover it from the outage.
+
+A port whose PoE state has never been swept reports `unverified` and is allowed
+— no reading is not the same as no PoE, and inventing either would be worse.
+
+### View in PacketFence
+
+Each PF-known MAC in the Devices table links to
+`<packetfence_url>/admin/#/node/<mac>`, the same deep link AP Detail uses.
+
+### Not a problem here
+
+The pane's `fdb_entries ⋈ pf_nodes ON mac` join is raw, not normalised — and
+unlike `ap_details.mgmt_mac` (spec 18, AP actions) that is correct, because both
+tables store the colon form. It resolves 75,955 of 79,033 FDB rows.

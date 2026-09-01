@@ -212,7 +212,15 @@ function RateBar({ kbps, speedMbps, color }) {
 
 function PortDetail({ switchId, ifindex }) {
   const [detail, setDetail] = React.useState(null);
+  const [pfUrl, setPfUrl] = React.useState("");
   const [error, setError] = React.useState(null);
+
+  React.useEffect(() => {
+    let live = true;
+    getJSON("/api/meta").then((m) => live && setPfUrl(m?.packetfence_url || ""))
+      .catch(() => { /* the PF deep-link just stays a plain MAC */ });
+    return () => { live = false; };
+  }, []);
 
   React.useEffect(() => {
     if (!ifindex) return;
@@ -265,19 +273,37 @@ function PortDetail({ switchId, ifindex }) {
               stored snippet against this port; Restart Port is PacketFence
               bouncing the port the selected endpoint sits on, so it needs a
               MAC and only appears when the FDB knows one. */}
+          {/* Operator write actions (spec 11 D4). Cycle PoE runs rConfig's
+              stored snippet against this port. The port is the operator's own
+              choice off the faceplate — not inferred as it is on AP Detail — so
+              the server advises rather than resolves: it refuses ports that
+              carry no PoE (an SFP cage has none to cycle) and warns when the
+              MAC count says uplink. Restart Port and Reevaluate Access act on
+              an *endpoint*, so they live per-row in the Devices table where the
+              operator picks which one. */}
           <div className="pd-row pd-actions">
             <div className="pd-lbl">Actions</div>
             <div className="pd-mid">
-              <ActionButton actionKey="poe_cycle" path="poe-cycle"
-                            body={{ device_id: switchId, port: p.name || String(p.ifindex),
-                                    member: p.member || 1 }} />
-              {detail.macs && detail.macs.length > 0 && (
-                <ActionButton actionKey="restart_port" path="restart-port"
-                              body={{ mac: detail.macs[0].mac, device_id: switchId }} />
+              {detail.poe_cycle?.available ? (
+                <ActionButton actionKey="poe_cycle" path="poe-cycle"
+                              body={{ device_id: switchId, port: p.name || String(p.ifindex),
+                                      member: p.member || 1 }} />
+              ) : (
+                <button type="button" className="btn btn-sm" disabled
+                        title={detail.poe_cycle?.reason || "unavailable"}>Cycle PoE</button>
               )}
             </div>
             <div className="pd-val" />
           </div>
+          {detail.poe_cycle?.warn && (
+            <div className="msg error" style={{ fontSize: 11 }}>⚠ {detail.poe_cycle.warn}</div>
+          )}
+          {detail.poe_cycle?.available && detail.poe_cycle?.unverified && (
+            <div className="msg" style={{ fontSize: 11 }}>
+              PoE state for this port has not been swept, so NetMon cannot confirm
+              it powers anything — the cycle will still be attempted.
+            </div>
+          )}
         </div>
         <div>
           <div className="pd-devices-head">
@@ -289,11 +315,19 @@ function PortDetail({ switchId, ifindex }) {
             <div className="msg">No MAC addresses learned on this port in the last FDB sweep.</div>
           ) : (
             <table className="grid">
-              <thead><tr><th>MAC</th><th>VLAN</th><th>Identity</th><th>Owner</th><th>Role</th><th>Reg</th></tr></thead>
+              <thead><tr><th>MAC</th><th>VLAN</th><th>Identity</th><th>Owner</th><th>Role</th><th>Reg</th><th>Actions</th></tr></thead>
               <tbody>
                 {detail.macs.map((m) => (
                   <tr key={m.mac}>
-                    <td className="mono">{m.mac}</td>
+                    <td className="mono">
+                      {pfUrl && m.reg_status ? (
+                        <a href={`${pfUrl}/admin/#/node/${encodeURIComponent(m.mac)}`}
+                           target="_blank" rel="noopener noreferrer"
+                           title="Open this endpoint in the PacketFence admin UI">
+                          {m.mac} ↗
+                        </a>
+                      ) : m.mac}
+                    </td>
                     <td className="mono dim">{m.vlan_id ?? "—"}</td>
                     <td>{m.computername || <span className="dim">unknown to PF</span>}</td>
                     <td className="dim">{m.owner || m.dot1x_user || "—"}</td>
@@ -302,6 +336,22 @@ function PortDetail({ switchId, ifindex }) {
                       ? <span style={{ color: m.reg_status === "reg" ? sevColor("ok") : sevColor("warn"), fontWeight: 600 }}>
                           {m.reg_status}</span>
                       : "—"}</td>
+                    {/* Per-row, not per-port: these act on one endpoint, and a
+                        port routinely carries several (a PC behind a phone, or
+                        everything behind an AP). Binding them to macs[0] made
+                        the target whichever MAC sorted first. PacketFence only
+                        knows a node it has seen, so a MAC with no reg_status
+                        gets no buttons rather than a call PF would reject. */}
+                    <td className="pf-actions">
+                      {m.reg_status ? (
+                        <React.Fragment>
+                          <ActionButton actionKey="reevaluate_access" path="reevaluate-access"
+                                        body={{ mac: m.mac, device_id: switchId }} compact />
+                          <ActionButton actionKey="restart_port" path="restart-port"
+                                        body={{ mac: m.mac, device_id: switchId }} compact />
+                        </React.Fragment>
+                      ) : <span className="dim">—</span>}
+                    </td>
                   </tr>
                 ))}
               </tbody>

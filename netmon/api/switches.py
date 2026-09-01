@@ -128,6 +128,44 @@ def switch_ports(
     )]
 
 
+# How many learned MACs make a port look like an uplink rather than an access
+# port. An access port carries the endpoint and usually its phone; a trunk
+# carries everything beyond it. Cycling PoE on a trunk is how one click takes
+# out a wiring closet, so past this count the confirm step has to say so.
+UPLINK_MAC_HINT = 8
+
+
+def _poe_cycle_advice(port: dict, mac_count: int) -> dict:
+    """Whether Cycle PoE makes sense on this port, and what to warn about.
+
+    Unlike the AP page — where NetMon *infers* which port to bounce and must
+    refuse when it cannot corroborate (see netmon.api.wireless._ap_uplink) — the
+    operator picks this port explicitly off the faceplate. So the job here is
+    not to guess but to stop two specific mistakes:
+
+    * **A port with no PoE.** The rConfig snippet would run against a port that
+      cannot power anything: at best a no-op, at worst an unexplained config
+      push. SFP cages are the common case.
+    * **A port that is really an uplink.** Nothing forbids power-cycling one,
+      and occasionally it is what you want, so this warns rather than blocks —
+      but an operator should not discover it from the outage.
+    """
+    poe_known = port.get("poe_admin") is not None or port.get("poe_delivering") is not None
+    has_poe = bool(port.get("poe_delivering")) or bool(port.get("poe_admin"))
+    if port.get("is_sfp") == 1:
+        return {"available": False,
+                "reason": "SFP/fiber port — it carries no PoE to cycle"}
+    if poe_known and not has_poe:
+        return {"available": False,
+                "reason": "this port is not configured for PoE, so cycling it would do nothing"}
+    warn = None
+    if mac_count >= UPLINK_MAC_HINT:
+        warn = (f"{mac_count} MACs are learned here — this looks like an uplink, "
+                f"not an access port. Cycling it will drop everything behind it.")
+    return {"available": True, "reason": None, "warn": warn,
+            "unverified": not poe_known}
+
+
 @router.get("/{sid}/ports/{ifindex}")
 def port_detail(
     sid: int,
@@ -158,7 +196,8 @@ def port_detail(
         "WHERE f.device_id = :d AND f.ifindex = :i ORDER BY f.mac",
         {"d": sid, "i": ifindex},
     )]
-    return {"port": dict(port), "macs": macs}
+    return {"port": dict(port), "macs": macs,
+            "poe_cycle": _poe_cycle_advice(dict(port), len(macs))}
 
 
 @router.get("/{sid}/fdb")
