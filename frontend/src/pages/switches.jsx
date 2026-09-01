@@ -66,31 +66,31 @@ function SiteGroup({ site, rows, activeId, collapsed, onToggle }) {
   const holdsActive = rows.some((s) => s.id === activeId);
 
   return (
-    <div className="sw-nav-site">
-      <button type="button"
-              className={"sw-nav-site-head" + (collapsed ? " collapsed" : "")}
-              aria-expanded={!collapsed}
-              onClick={() => onToggle(site)}
-              title={`${rows.length} switch(es)${down ? ` · ${down} down` : ""}`}>
-        <span className="sw-nav-caret" aria-hidden="true">{collapsed ? "▸" : "▾"}</span>
-        <span className="sw-nav-site-name">{site}</span>
-        {down > 0 && <span className="sw-nav-site-down">{down} down</span>}
-        <span className="sw-nav-site-count">
-          <Dot severity={worst} />{rows.length}
-        </span>
-      </button>
-      {!collapsed && rows.map((sw) => (
-        <a key={sw.id}
-           className={"sw-nav-row" + (sw.id === activeId ? " active" : "")}
-           href={`#/switches/${sw.id}`} title={sw.mgmt_ip || sw.name}>
-          <span className="sw-nav-status" title={statusTitle(sw)}>
-            <Dot severity={statusSev(sw.status)} />
-          </span>
-          <span className="sw-nav-name">{sw.name}</span>
-        </a>
-      ))}
+    <div className="host-nav-section">
+      <div className={"host-nav-site" + (collapsed ? " collapsed" : "")}
+           role="button" tabIndex={0}
+           aria-expanded={!collapsed}
+           onClick={() => onToggle(site)}
+           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(site); } }}
+           title={`${rows.length} switch(es)${down ? ` · ${down} down` : ""}`}>
+        <span className="caret" aria-hidden="true">▾</span>
+        <span className="site-name">{site}</span>
+        {down > 0 && <span className="site-prob">{down}</span>}
+        <span className="h-count"><Dot severity={worst} /> {rows.length}</span>
+      </div>
+      <div className={"host-nav-children" + (collapsed ? " hidden" : "")}>
+        {rows.map((sw) => (
+          <a key={sw.id}
+             className={"host-nav-host" + (sw.id === activeId ? " active" : "")}
+             href={`#/switches/${sw.id}`} title={sw.mgmt_ip || sw.name}>
+            <span title={statusTitle(sw)}><Dot severity={statusSev(sw.status)} /></span>
+            <span className="h-id">{sw.name}</span>
+            {sw.status === "down" && <span className="h-prob">down</span>}
+          </a>
+        ))}
+      </div>
       {collapsed && holdsActive && (
-        <div className="sw-nav-hint">contains the selected switch</div>
+        <div className="host-nav-hint">contains the selected switch</div>
       )}
     </div>
   );
@@ -179,7 +179,7 @@ function MemberGrid({ member, ports, selected, onSelect }) {
       <div className="swport-member-head">
         <span className="m-id">MEMBER <span className="m-num">{member ?? "—"}</span></span>
         <span className="m-stats">
-          <span className="m-up">{up} up</span> / <span className="m-down">{ports.length - up} down</span>
+          <span className="up">{up} up</span> / <span className="down">{ports.length - up} down</span>
         </span>
         {poe > 0 && <span className="m-stats">⚡ {poe} PoE on</span>}
         {sfp > 0 && <span className="m-stats" title="fiber / SFP ports">◆ {sfp} SFP</span>}
@@ -239,7 +239,7 @@ function PortDetail({ switchId, ifindex }) {
   );
   return (
     <Card kicker={`Port detail · ${p.name || p.ifindex} · cache ${ageOf(p.updated_at) || "?"} old`}>
-      <div className="pd-cols">
+      <div className="pd-grid">
         <div>
           {row("State", <span style={{ color: p.oper_state === "up" ? sevColor("ok") : sevColor("unknown"), fontWeight: 600 }}>
             {p.oper_state}{p.admin_up === 0 ? " (admin down)" : ""}</span>)}
@@ -765,9 +765,9 @@ export function SwitchesPage({ id, query }) {
         {current && !current.ports_updated_at && <span style={{ color: sevColor("warn") }}> · no sweep data yet</span>}
       </div>
 
-      <div className="sw-layout">
-        <div className="sw-nav">
-          <div className="sw-nav-tools">
+      <div className="switch-layout">
+        <div className="card host-nav">
+          <div className="host-nav-tools">
             <span>{fleet.length} switches · {siteNames.length} sites</span>
             <button type="button" className="linkish"
                     onClick={() => setAllCollapsed(siteNames, allCollapsed ? false : true)}>
@@ -784,14 +784,19 @@ export function SwitchesPage({ id, query }) {
 
         <div className="sw-main">
           {current && (
-            <div className="sw-header">
-              <span className="sw-title">{current.name}</span>
-              {current.mgmt_ip && <span className="pill mono">{current.mgmt_ip}</span>}
-              <span className="pill">{stack.length || "?"} member(s)</span>
-              <span className="pill">{upCount} up · {(ports || []).length - upCount} down · {(ports || []).length} ports</span>
-              <span style={{ marginLeft: "auto" }}>
-                <SshButton host={current.mgmt_ip} name={current.name} />
-              </span>
+            <div className="swport-head">
+              <div className="swport-title">
+                <span className="id">{current.name}</span>
+                <span className="host-meta">
+                  {current.mgmt_ip && <span className="pill"><span className="v">{current.mgmt_ip}</span></span>}
+                  <span className="pill"><span className="lbl">members</span><span className="v">{stack.length || "?"}</span></span>
+                  <span className="pill"><span className="lbl">ports</span>
+                    <span className="v">{upCount}/{(ports || []).length}</span></span>
+                </span>
+                <span style={{ marginLeft: "auto" }}>
+                  <SshButton host={current.mgmt_ip} name={current.name} />
+                </span>
+              </div>
             </div>
           )}
 
@@ -805,20 +810,44 @@ export function SwitchesPage({ id, query }) {
 
           {!current ? <Loading what="switch" /> : tab === "ports" ? (
             <React.Fragment>
-              <div className="stat-row">
-                <div className="stat"><div className="stat-value">{stack.length || "—"}</div><div className="stat-label">Stack members</div></div>
-                <div className="stat"><div className="stat-value">{ports ? `${upCount}/${ports.length}` : "…"}</div><div className="stat-label">Active ports</div></div>
-                <div className="stat">
-                  <div className="stat-value" style={poeAvail && poeUsed / poeAvail >= 0.75 ? { color: sevColor("warn") } : undefined}>
-                    {poeAvail ? `${poeUsed}/${poeAvail} W` : "—"}
+              {/* ZCD's .swstat-strip (switches.css). Three cells still read
+                  "—" on this fleet: PoE draw/budget, CPU and temperature come
+                  from the deferred 10.1 sweeps (ENTITY/PoE/fans), so the strip
+                  is honest about not having swept them rather than showing 0. */}
+              <Card tight>
+                <div className="swstat-strip">
+                  <div className="swstat-cell">
+                    <span className="lbl">Stack members</span>
+                    <span className="val">{stack.length || "—"}</span>
                   </div>
-                  <div className="stat-label">PoE draw / budget</div>
+                  <div className="swstat-cell">
+                    <span className="lbl">Active ports</span>
+                    <span className={"val" + (ports && upCount ? " ok" : "")}>
+                      {ports ? `${upCount}/${ports.length}` : "…"}
+                    </span>
+                  </div>
+                  <div className="swstat-cell">
+                    <span className="lbl">PoE draw / budget</span>
+                    <span className={"val" + (poeAvail && poeUsed / poeAvail >= 0.75 ? " warn" : "")}>
+                      {poeAvail ? `${poeUsed}/${poeAvail} W` : "—"}
+                    </span>
+                  </div>
+                  <div className="swstat-cell">
+                    <span className="lbl">Top port util</span>
+                    <span className="val">{maxUtil ? `${maxUtil}%` : "—"}</span>
+                  </div>
+                  <div className="swstat-cell">
+                    <span className="lbl">Errors (Δ sweep)</span>
+                    <span className={"val" + (errCount ? " warn" : "")}>{errCount}</span>
+                  </div>
+                  <div className="swstat-cell">
+                    <span className="lbl">CPU / temp (max)</span>
+                    <span className="val">
+                      {maxCpu ? `${maxCpu}%` : "—"} / {maxTemp ? `${maxTemp}°C` : "—"}
+                    </span>
+                  </div>
                 </div>
-                <div className="stat"><div className="stat-value">{maxUtil ? `${maxUtil}%` : "—"}</div><div className="stat-label">Top port util</div></div>
-                <div className="stat"><div className="stat-value" style={errCount ? { color: sevColor("warn") } : undefined}>{errCount}</div><div className="stat-label">Errors (Δ sweep)</div></div>
-                <div className="stat"><div className="stat-value">{maxCpu ? `${maxCpu}%` : "—"}</div><div className="stat-label">CPU (max slot)</div></div>
-                <div className="stat"><div className="stat-value">{maxTemp ? `${maxTemp}°C` : "—"}</div><div className="stat-label">Temp (max slot)</div></div>
-              </div>
+              </Card>
 
               <Card title="24-hour trends" kicker="history ring buffer">
                 <div className="hchart-row">
@@ -833,12 +862,12 @@ export function SwitchesPage({ id, query }) {
                 {!ports ? <Loading what="ports" /> : ports.length === 0 ? <EmptySweep what="port" /> : (
                   <React.Fragment>
                     <div className="swport-legend">
-                      <span className="item"><span className="swatch sw-up" /> Up</span>
-                      <span className="item"><span className="swatch sw-down" /> Down</span>
-                      <span className="item"><span className="swatch sw-disabled" /> Disabled</span>
-                      <span className="item"><span className="swatch sw-absent" /> Absent</span>
-                      <span className="item"><span className="dot-led poe-led" /> PoE</span>
-                      <span className="item"><span className="dot-led err-led" /> Errors</span>
+                      <span className="item"><span className="swatch" style={{ background: "var(--ok)" }} /> Up</span>
+                      <span className="item"><span className="swatch" style={{ background: "#0a0d14", border: "1px solid var(--line)" }} /> Down</span>
+                      <span className="item"><span className="swatch" style={{ background: "#1a1e28" }} /> Disabled</span>
+                      <span className="item"><span className="swatch" style={{ background: "transparent", border: "1px dashed var(--line)" }} /> Absent</span>
+                      <span className="item"><span className="dot-led" style={{ background: "var(--warn)", boxShadow: "0 0 4px var(--warn)" }} /> PoE</span>
+                      <span className="item"><span className="dot-led" style={{ background: "var(--err)", boxShadow: "0 0 4px var(--err)" }} /> Errors</span>
                     </div>
                     {memberKeys.map((m) => (
                       <MemberGrid key={m} member={m}

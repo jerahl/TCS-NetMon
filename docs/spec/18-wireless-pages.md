@@ -199,7 +199,8 @@ tab and nav marker PacketFence amber.)
 |---|---|---|
 | Global | ✅ ported | ✅ **converted** — severity strip, system cards, sites heatmap + legend + seg-toggle, hotspots, triggers |
 | XIQ · Status | ✅ ported | ✅ **converted** — 6-cell `xiq-kpi` strip, `sites-grid` AP tiles |
-| Switches | ✅ ported | ⏳ still on NetMon's `sw-*` vocabulary |
+| Wireless APs | (uses switches.css) | ✅ **converted** — same `host-nav` as Switches |
+| Switches | ✅ ported | ✅ **converted** — host navigator, `swstat-strip`, `swport-head`/`-title`/`-legend`, `pd-grid` |
 | Events | ✅ ported | ⏳ |
 | Problems | ✅ ported | ⏳ |
 | Surveillance | ✅ ported | ⏳ |
@@ -222,3 +223,39 @@ spec 16 C4) and the per-site **SLA %**, which is hardcoded in the reference
 **Verify visually before merging.** 458 backend tests pass and the bundle builds
 and serves, but there is no frontend test suite here — nothing in CI can catch a
 layout regression on 13 pages, and this change touches every one of them.
+
+### Switches (2026-09-01)
+
+The largest page, and cheaper than its 1,374 lines of CSS suggested — because
+**phase 10.1 had already built the faceplate against ZCD's own class names**
+(`.port > .pn/.body/.led-link/.led-speed`, `.swport-grid`, `.swport-member`),
+and the port-detail rows already emitted `.pd-lbl`/`.pd-mid`/`.pd-val`. Those
+needed no markup change at all. What they needed was for NetMon's *local* copies
+of those rules to be deleted, since `switches.css` is appended after them and the
+local geometry was quietly winning — the same precedence trap as `.dot`/`.tabs`
+in the base port.
+
+Converted markup:
+
+* **Host navigator** — `sw-nav-*` → `host-nav-section`/`-site`/`-children`/
+  `-host`, with ZCD's `.caret`/`.site-name`/`.site-prob`/`.h-id` children.
+  Collapse is now a class on `.host-nav-children` (ZCD's `.hidden`) rather than
+  conditional rendering, which is what its transition expects. The Wireless AP
+  navigator moved with it — it shared the deleted `sw-nav-*` rules, and two
+  navigators for the same job should not diverge.
+* **KPI strip** — `.stat-row` → ZCD's 6-cell `.swstat-strip`. NetMon had seven
+  values; CPU and temperature share a cell to keep the grid at six. Three cells
+  still read "—" (PoE draw/budget, CPU, temp) because those come from the
+  deferred 10.1 sweeps — the strip says so rather than showing 0.
+* **Header** — `.swport-head` > `.swport-title` > `.id` with `.host-meta` pills.
+* **Legend** — ZCD styles a bare `.swatch`/`.dot-led` and takes the colour from
+  the caller, so NetMon's `sw-up`/`sw-down`/`poe-led`/`err-led` variant classes
+  are gone and the colours are passed inline.
+* **Port detail** — `.pd-cols` → ZCD's `.pd-grid`.
+
+Left alone deliberately: the eight tabs keep NetMon's names (Ports · FDB ·
+Topology · VLANs · Stack · PoE · Triggers · Backups). ZCD's set is Port Status ·
+Topology · Stack Health · VLAN · PoE Budget · XIQ · CLI · Config Backups — the
+difference is real scope, not styling. NetMon has no per-switch XIQ tab, its CLI
+equivalent is the SSHEASY button, and it adds FDB and Triggers, which ZCD has no
+counterpart for.

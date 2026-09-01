@@ -57,32 +57,31 @@ function SiteGroup({ site, rows, activeId, collapsed, onToggle }) {
   const holdsActive = rows.some((a) => a.id === activeId);
 
   return (
-    <div className="sw-nav-site">
-      <button type="button"
-              className={"sw-nav-site-head" + (collapsed ? " collapsed" : "")}
-              aria-expanded={!collapsed}
-              onClick={() => onToggle(site)}
-              title={`${rows.length} AP(s)${down ? ` · ${down} down` : ""}`}>
-        <span className="sw-nav-caret" aria-hidden="true">{collapsed ? "▸" : "▾"}</span>
-        <span className="sw-nav-site-name">{site}</span>
-        {down > 0 && <span className="sw-nav-site-down">{down} down</span>}
-        <span className="sw-nav-site-count"><Dot severity={worst} />{rows.length}</span>
-      </button>
-      {!collapsed && rows.map((ap) => (
-        <a key={ap.id}
-           className={"sw-nav-row" + (ap.id === activeId ? " active" : "")}
-           href={`#/wireless/${ap.id}`} title={ap.ip || ap.mgmt_ip || ap.name}>
-          <span className="sw-nav-status" title={statusTitle(ap)}>
-            <Dot severity={statusSev(ap.status)} />
-          </span>
-          <span className="sw-nav-name">{ap.name}</span>
-          {ap.clients_total > 0 && (
-            <span className="sw-nav-site-count mono">{ap.clients_total}</span>
-          )}
-        </a>
-      ))}
+    <div className="host-nav-section">
+      <div className={"host-nav-site" + (collapsed ? " collapsed" : "")}
+           role="button" tabIndex={0}
+           aria-expanded={!collapsed}
+           onClick={() => onToggle(site)}
+           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(site); } }}
+           title={`${rows.length} AP(s)${down ? ` · ${down} down` : ""}`}>
+        <span className="caret" aria-hidden="true">▾</span>
+        <span className="site-name">{site}</span>
+        {down > 0 && <span className="site-prob">{down}</span>}
+        <span className="h-count"><Dot severity={worst} /> {rows.length}</span>
+      </div>
+      <div className={"host-nav-children" + (collapsed ? " hidden" : "")}>
+        {rows.map((ap) => (
+          <a key={ap.id}
+             className={"host-nav-host" + (ap.id === activeId ? " active" : "")}
+             href={`#/wireless/${ap.id}`} title={ap.ip || ap.mgmt_ip || ap.name}>
+            <span title={statusTitle(ap)}><Dot severity={statusSev(ap.status)} /></span>
+            <span className="h-id">{ap.name}</span>
+            {ap.clients_total > 0 && <span className="h-count">{ap.clients_total}</span>}
+          </a>
+        ))}
+      </div>
       {collapsed && holdsActive && (
-        <div className="sw-nav-hint">contains the selected AP</div>
+        <div className="host-nav-hint">contains the selected AP</div>
       )}
     </div>
   );
@@ -163,28 +162,28 @@ export function WirelessPage({ id }) {
         {" · "}<a href="#/xiq">fleet dashboard →</a>
       </div>
 
-      <div className="sw-layout">
-        <div className="sw-nav">
-          <div className="sw-nav-tools">
+      <div className="switch-layout">
+        <div className="card host-nav">
+          <div className="host-nav-tools">
             <span>{shown.length} of {fleet.length} APs · {siteNames.length} sites</span>
             <button type="button" className="linkish"
                     onClick={() => setAllCollapsed(siteNames, !allCollapsed)}>
               {allCollapsed ? "Expand all" : "Collapse all"}
             </button>
           </div>
-          <div className="sw-nav-tools">
+          <div className="host-nav-tools">
             <button type="button"
                     className={"linkish" + (problemsOnly ? " active" : "")}
                     onClick={() => setProblemsOnly((v) => !v)}>
               {problemsOnly ? "◉" : "○"} Problems only ({problems})
             </button>
           </div>
-          <div className="sw-nav-tools">
+          <div className="host-nav-tools">
             <input type="text" placeholder="filter APs…" value={q}
                    onChange={(e) => setQ(e.target.value)} style={{ width: "100%" }} />
           </div>
           {siteNames.length === 0 ? (
-            <div className="sw-nav-hint">
+            <div className="host-nav-hint">
               {problemsOnly ? "No APs with problems." : "No APs match."}
             </div>
           ) : siteNames.map((site) => (
