@@ -6,7 +6,8 @@ import React from "react";
 import { getJSON } from "./api.js";
 import { Icon } from "./primitives.jsx";
 
-const STORAGE_KEY = "netmon.sidebar.collapsed";
+// Collapse state is owned by App (main.jsx): ZCD swaps the grid template on
+// `.app`, so the class must sit on the ancestor, and persistence goes with it.
 
 // Routes for all planned pages (hash-routed SPA). Pages not yet built link to
 // their eventual route so the nav is complete now (DoD: "routes for all
@@ -36,10 +37,7 @@ const ZBX_LINKS = [
   { key: "fortigate", icon: "shield", label: "FortiGate", action: "tcs.fortigate.view" },
 ];
 
-export function Nav({ active }) {
-  const [collapsed, setCollapsed] = React.useState(() => {
-    try { return localStorage.getItem(STORAGE_KEY) === "1"; } catch { return false; }
-  });
+export function Nav({ active, collapsed = false, onToggle }) {
   const [counts, setCounts] = React.useState(null);
   const [health, setHealth] = React.useState(null);
   const [meta, setMeta] = React.useState(null);
@@ -55,10 +53,6 @@ export function Nav({ active }) {
       .then((me) => setRole(me?.role || null))
       .catch(() => { /* stay hidden */ });
   }, []);
-
-  React.useEffect(() => {
-    try { localStorage.setItem(STORAGE_KEY, collapsed ? "1" : "0"); } catch { /* ignore */ }
-  }, [collapsed]);
 
   React.useEffect(() => {
     let live = true;
@@ -96,7 +90,7 @@ export function Nav({ active }) {
       <button
         type="button"
         className="sidebar-toggle"
-        onClick={() => setCollapsed((c) => !c)}
+        onClick={onToggle}
         aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
       >
         {collapsed ? "»" : "«"}

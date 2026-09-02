@@ -17,12 +17,103 @@ function fmtUptime(s) {
 
 const STATUS_COLOR = { up: "ok", down: "crit", blind: "warn" };
 
+// ───────── APs by site ─────────
+//
+// ZCD's APs-by-site grid, which spec 15 §2 listed as missing. It was not
+// buildable until 2026-08-31: 782 of 783 APs read site "Unassigned" because
+// the seed let Zabbix's "Site/Wireless APs" catch-all outrank the real
+// Site/Wireless/<school>/<floor> group (spec 17). With attribution fixed the
+// grid is a pure client-side roll-up of /api/wireless/aps — no new endpoint.
+//
+// Tiles are tinted by worst status and are click-to-filter, so "which school
+// is unhappy" and "show me its APs" are one gesture rather than two.
+function SiteGrid({ aps, filter, onFilter, onPick, picked }) {
+  const sites = {};
+  for (const a of aps) (sites[a.site || "Unassigned"] ||= []).push(a);
+
+  const rows = Object.entries(sites).map(([name, list]) => {
+    const down = list.filter((a) => a.status === "down").length;
+    const blind = list.filter((a) => a.status === "blind").length;
+    const unknown = list.filter((a) => !a.status).length;
+    // "unknown" is never folded into "ok" — no reading is not a good reading.
+    const worst = down ? "crit" : (blind || unknown) ? "warn" : "ok";
+    const clients = list.reduce((n, a) => n + (a.clients_total || 0), 0);
+    return { name, total: list.length, down, blind, unknown, worst, clients };
+  });
+  rows.sort((a, b) => b.down - a.down || a.name.localeCompare(b.name));
+
+  const issues = rows.filter((r) => r.worst !== "ok");
+  const shown = filter === "issues" ? issues
+    : filter === "ok" ? rows.filter((r) => r.worst === "ok") : rows;
+
+  return (
+    <Card kicker={`${rows.length} site(s) · ${issues.length} needing attention`}>
+      <div className="evt-filters" style={{ marginTop: 0 }}>
+        <span className="seg-toggle">
+          {[["all", `All ${rows.length}`], ["issues", `Issues ${issues.length}`],
+            ["ok", `Healthy ${rows.length - issues.length}`]].map(([k, label]) => (
+            <button key={k} type="button"
+                    className={"seg-btn" + (filter === k ? " active" : "")}
+                    onClick={() => onFilter(k)}>{label}</button>
+          ))}
+        </span>
+        {picked && (
+          <button type="button" className="linkish" onClick={() => onPick(picked)}>
+            clear “{picked}” filter
+          </button>
+        )}
+      </div>
+      <div className="sites-grid">
+        {shown.map((r) => (
+          <button key={r.name} type="button"
+                  className={"site-tile" + (picked === r.name ? " active" : "")}
+                  style={{ borderColor: sevColor(r.worst) + "66",
+                           background: sevColor(r.worst) + (picked === r.name ? "28" : "14") }}
+                  onClick={() => onPick(r.name)}
+                  title={`${r.total} AP(s)${r.down ? ` · ${r.down} down` : ""}` +
+                         `${r.blind ? ` · ${r.blind} blind` : ""}` +
+                         `${r.unknown ? ` · ${r.unknown} unknown` : ""}`}>
+            <div className="site-tile-h">
+              <span className="site-tile-prob" style={{ color: sevColor(r.worst) }}>
+                {r.down || (r.blind + r.unknown) || "✓"}
+              </span>
+            </div>
+            <div className="site-tile-name">{r.name}</div>
+            <div className="site-tile-meta">
+              <span>{r.total} AP</span><span>{r.clients} cl</span>
+            </div>
+          </button>
+        ))}
+        {shown.length === 0 && <div className="msg">No sites in this filter.</div>}
+      </div>
+    </Card>
+  );
+}
+
+function pct(n, d) { return d ? Math.round((n / d) * 100) : 0; }
+
+function KpiCell({ label, value, unit, tone, foot, bar, barTone }) {
+  return (
+    <div className={"xiq-kpi-cell " + (tone || "")}>
+      <div className="xiq-kpi-h"><span className="xiq-kpi-lbl">{label}</span></div>
+      <div className="xiq-kpi-v">{value}{unit && <span className="u">{unit}</span>}</div>
+      {foot && <div className="xiq-kpi-foot">{foot}</div>}
+      {bar !== null && bar !== undefined && (
+        <div className="xiq-kpi-bar">
+          <div style={{ width: `${bar}%`, background: sevColor(barTone === "warn" ? "warn" : "ok") }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function XiqPage() {
   const [summary, setSummary] = React.useState(null);
   const [aps, setAps] = React.useState(null);
   const [ssids, setSsids] = React.useState(null);
   const [error, setError] = React.useState(null);
   const [site, setSite] = React.useState("");
+  const [siteFilter, setSiteFilter] = React.useState("all");
   const [q, setQ] = React.useState("");
 
   React.useEffect(() => {
@@ -59,33 +150,45 @@ export function XiqPage() {
       <h1>XIQ · Wireless</h1>
       <div className="subtitle">
         ExtremeCloud IQ cycles · <SourceBadge source="xiq" /> · refreshes every {REFRESH_MS / 1000}s
+        {" · "}<a href="#/wireless">AP navigator →</a>
         {detailAge && <span> · detail cache {detailAge} old</span>}
         {!summary.details_updated_at && <span style={{ color: sevColor("warn") }}> · no detail sweep yet</span>}
       </div>
 
-      <div className="stat-row">
-        <div className="stat"><div className="stat-value">{summary.aps_up}/{summary.aps_total}</div>
-          <div className="stat-label">APs connected</div></div>
-        <div className="stat"><div className="stat-value" style={summary.aps_down ? { color: sevColor("crit") } : undefined}>
-          {summary.aps_down}</div><div className="stat-label">APs down</div></div>
-        {summary.aps_blind > 0 && (
-          <div className="stat"><div className="stat-value" style={{ color: sevColor("warn") }}>{summary.aps_blind}</div>
-            <div className="stat-label">Blind (XIQ unreachable)</div></div>)}
-        <div className="stat"><div className="stat-value">{summary.clients_total}</div>
-          <div className="stat-label">Clients</div></div>
-        {/* `wired` is included on purpose. XIQ reports radio_type = 3 (WIRED)
-            for switch-attached clients, and they are ~85% of the rows — listing
-            only the Wi-Fi bands would show a number 6× smaller than the client
-            count directly beside it. Whether wired clients belong in
-            wireless_clients at all is an owner question; until it is answered
-            the tile must at least agree with the table. */}
-        <div className="stat"><div className="stat-value">
-          {["2.4", "5", "6", "wired"].filter((b) => bands[b])
-            .map((b) => `${b}: ${bands[b]}`).join(" · ") || "—"}</div>
-          <div className="stat-label">Clients by band</div></div>
-        <div className="stat"><div className="stat-value">{fwCompliant !== null ? `${fwCompliant}%` : "—"}</div>
-          <div className="stat-label">On {fwTop ? fwTop.fw_version : "top firmware"}</div></div>
-      </div>
+      {/* ZCD's 6-cell KPI strip (xiq.css .xiq-kpi). The band cell keeps its
+          `wired` bucket: XIQ reports radio_type = 3 (WIRED) for switch-attached
+          clients and they are ~65% of the rows, so listing only the Wi-Fi bands
+          would print a number a third the size of the client count beside it.
+          Whether wired clients belong in wireless_clients at all is still an
+          owner question; until it is answered the tile must agree with the
+          table it sits next to. */}
+      <Card tight>
+        <div className="xiq-kpi">
+          <KpiCell label="Access points" value={summary.aps_up} unit={`/ ${summary.aps_total}`}
+                   tone={summary.aps_down ? "warn" : "ok"}
+                   foot={`${pct(summary.aps_up, summary.aps_total)}% connected`}
+                   bar={pct(summary.aps_up, summary.aps_total)} barTone="ok" />
+          <KpiCell label="Down" value={summary.aps_down} tone={summary.aps_down ? "err" : "ok"}
+                   foot={summary.aps_down ? "per ExtremeCloud IQ" : "none"} />
+          <KpiCell label="Blind" value={summary.aps_blind}
+                   tone={summary.aps_blind ? "warn" : "ok"}
+                   foot={summary.aps_blind ? "XIQ unreachable" : "source reachable"} />
+          <KpiCell label="Clients" value={summary.clients_total} tone="ext"
+                   foot={`${sites.length} site(s)`} />
+          <KpiCell label="Clients by band" value={bands["5"] ?? 0} unit="on 5 GHz"
+                   tone="ext"
+                   foot={["2.4", "5", "6", "wired"].filter((b) => bands[b])
+                     .map((b) => `${b}:${bands[b]}`).join(" · ") || "—"} />
+          <KpiCell label="Firmware" value={fwCompliant !== null ? fwCompliant : "—"}
+                   unit={fwCompliant !== null ? "%" : ""}
+                   tone={fwCompliant !== null && fwCompliant < 90 ? "warn" : "ok"}
+                   foot={fwTop ? fwTop.fw_version : "no detail sweep yet"}
+                   bar={fwCompliant} barTone={fwCompliant !== null && fwCompliant < 90 ? "warn" : "ok"} />
+        </div>
+      </Card>
+
+      <SiteGrid aps={aps} filter={siteFilter} onFilter={setSiteFilter}
+                onPick={(s) => setSite(s === site ? "" : s)} picked={site} />
 
       <div className="evt-filters">
         <label className="evt-filter">
@@ -115,7 +218,7 @@ export function XiqPage() {
               {shown.map((a) => (
                 <tr key={a.id}>
                   <td><Dot severity={STATUS_COLOR[a.status] || "unknown"} /></td>
-                  <td><a href={`#/ap/${a.id}`}>{a.name}</a></td>
+                  <td><a href={`#/wireless/${a.id}`}>{a.name}</a></td>
                   <td>{a.site || "—"}</td>
                   <td className="dim">{a.model || "—"}</td>
                   <td className="mono dim">{a.ip || a.mgmt_ip || "—"}</td>

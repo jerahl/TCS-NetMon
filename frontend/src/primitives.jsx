@@ -56,12 +56,25 @@ export function deviceHref(d) {
   return d.device_type === "switch" ? `#/switches/${id}` : `#/ap/${id}`;
 }
 
-export function Card({ title, kicker, children }) {
+// ZCD's card structure (reference/assets/styles.css): a bordered .card whose
+// header is .card-h > h3 and whose padding lives on .card-b. NetMon previously
+// used .card-kicker/.card-title/.card-body, which the ported stylesheet does
+// not style — so cards would have rendered edge-to-edge with no padding.
+//
+// The kicker (a right-aligned meta line: row counts, cache age) has no ZCD
+// name; it maps onto .h-meta, which ZCD already defines for exactly that.
+// `tight` drops the body padding for full-bleed tables, matching .card-b.tight.
+export function Card({ title, kicker, tight = false, children }) {
   return (
     <section className="card">
-      {kicker && <div className="card-kicker">{kicker}</div>}
-      {title && <h3 className="card-title">{title}</h3>}
-      <div className="card-body">{children}</div>
+      {(title || kicker) && (
+        <div className="card-h">
+          {title && <h3>{title}</h3>}
+          <div className="h-spacer" />
+          {kicker && <div className="h-meta">{kicker}</div>}
+        </div>
+      )}
+      <div className={"card-b" + (tight ? " tight" : "")}>{children}</div>
     </section>
   );
 }
