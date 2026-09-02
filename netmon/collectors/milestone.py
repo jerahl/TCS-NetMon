@@ -256,19 +256,30 @@ class MilestoneCollector(Collector):
         degraded: list[str] = []
         storage_by_rs: dict[str, dict] = {}
         try:
-            for s in await self.client.storage():
-                rs = str(_first(s, "recordingServerId", "recordingServer") or "")
-                agg = storage_by_rs.setdefault(rs, {"used_gb": 0.0, "total_gb": 0.0, "retention_days": None})
-                used, total = _num(s.get("usedSpace"), s.get("used")), _num(s.get("size"), s.get("total"))
-                if used is not None:
-                    agg["used_gb"] += used / 1_000_000_000 if used > 1_000_000 else used
-                if total is not None:
-                    agg["total_gb"] += total / 1_000_000_000 if total > 1_000_000 else total
-                agg["retention_days"] = _num(s.get("retentionDays")) or agg["retention_days"]
+            for st in await self.client.storage([str(x.get("id")) for x in servers if x.get("id")]):
+                rs = str(st.get("recordingServerId") or "")
+                agg = storage_by_rs.setdefault(
+                    rs, {"used_gb": None, "total_gb": 0.0, "retention_days": None})
+                # maxSize is MEGABYTES, confirmed against the estate: NHS's live
+                # storage reads 103,014,400, which is its documented 100,600 GB
+                # (103,014,400 / 1024). Dividing by 1e9 as though it were bytes
+                # rendered every recorder as 0 GB.
+                agg["total_gb"] += (_num(st.get("maxSize")) or 0) / 1024
+                for arc in st.get("archives") or []:
+                    agg["total_gb"] += (_num(arc.get("maxSize")) or 0) / 1024
+                # Archive retention in XProtect is CUMULATIVE from the moment of
+                # recording, not additive on top of the live storage — so the
+                # total a recorder actually holds is MAX(retainMinutes), never
+                # SUM. Summing NHS would claim 106 days where it keeps 61.
+                mins = [_num(st.get("retainMinutes")) or 0]
+                mins += [_num(a.get("retainMinutes")) or 0 for a in st.get("archives") or []]
+                days = max(mins) / 1440 if mins else 0
+                agg["retention_days"] = max(agg["retention_days"] or 0, round(days))
         except MilestoneError as exc:
             degraded.append("storage")
-            log.warning("milestone storage endpoint unavailable — storage roll-up "
+            log.warning("milestone storage walk failed — storage roll-up "
                         "will be empty, not zero: %s", exc)
+
         hw_by_id: dict[str, dict] = {}
         try:
             hw_by_id = {str(h.get("id")): h for h in await self.client.hardware()}

@@ -5,6 +5,7 @@ from sqlalchemy import text
 from netmon import db
 from netmon.collectors.milestone import MilestoneCollector
 from netmon.collectors.milestone_client import MilestoneError
+from netmon.snapshots import read_snapshot
 from tests.conftest import create_core_tables
 
 
@@ -27,7 +28,7 @@ class FakeMs:
             raise self.fail
         return self.cameras_data
 
-    async def storage(self):
+    async def storage(self, recording_server_ids=None):
         if self.storage_fail:
             raise self.storage_fail
         return self.storage_data
@@ -107,13 +108,19 @@ def test_milestone_persists_cameras_servers_and_overview(tmp_path):
                           "resolution": "1920x1080", "framerate": 15, "codec": "H.264",
                           "recordingServerId": "RS1", "hardwareId": "HW1"}]
     fake.hardware_data = [{"id": "HW1", "mac": "00:40:8c:aa:bb:cc", "address": "192.0.2.60"}]
-    fake.storage_data = [{"recordingServerId": "RS1", "used": 4200, "size": 8000, "retentionDays": 30}]
+    # Real /recordingServers/{id}/storages shape: maxSize in MB, retainMinutes,
+    # and archives inline. The previous fixture here used {used, size,
+    # retentionDays} — the invented shape of GET /storages, which does not
+    # exist (400). It asserted against a payload nobody ever received.
+    fake.storage_data = [{"id": "S1", "recordingServerId": "RS1",
+                          "maxSize": 8_192_000, "retainMinutes": 43_200,
+                          "archives": []}]
     n = asyncio.run(MilestoneCollector(engine, fake).run_once())
     assert n >= 4  # 2 state + 1 rs row + 1 cam row
 
     rs = db.fetch_one(engine, "SELECT * FROM recording_servers WHERE device_id=1")
     assert rs["hostname"] == "nvr-1.tcs" and rs["chans_total"] == 40
-    assert rs["storage_total_gb"] == 8000 and rs["retention_days"] == 30
+    assert round(rs["storage_total_gb"]) == 8000 and rs["retention_days"] == 30
 
     cam = db.fetch_one(engine, "SELECT * FROM cameras WHERE device_id=2")
     assert cam["model"] == "AXIS P3255" and cam["fps_target"] == 15
@@ -268,3 +275,51 @@ def test_host_from_address_handles_ports_and_bare_hosts():
     assert _host_from_address("https://cam.example.invalid/snap") == "cam.example.invalid"
     assert _host_from_address(None) is None
     assert _host_from_address("") is None
+
+
+def test_storage_rollup_uses_megabytes_and_cumulative_retention(tmp_path):
+    """Two units were wrong here, and both rendered as plausible numbers.
+
+    ``maxSize`` is MEGABYTES. NHS's live storage reads 103,014,400, which is its
+    documented 100,600 GB — dividing by 1e9 as though it were bytes rendered
+    every recorder on the estate as 0 GB while the collector reported success.
+
+    Archive retention in XProtect is **cumulative from the moment of recording,
+    not additive** on top of the live storage, so the total a recorder holds is
+    MAX(retainMinutes) and never SUM. Summing NHS's 45-day live and 61-day
+    archive would claim 106 days where it actually keeps 61.
+    """
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.servers = [{"id": "RS1", "name": "NVR-1", "enabled": True}]
+    fake.storage_data = [{
+        "id": "S1", "recordingServerId": "RS1", "name": "Local default",
+        "maxSize": 103_014_400,          # 100,600 GB
+        "retainMinutes": 64_800,          # 45 days (live)
+        "archives": [{"id": "A1", "maxSize": 20_480_000,   # 20,000 GB
+                      "retainMinutes": 87_840}],           # 61 days (cumulative)
+    }]
+    asyncio.run(MilestoneCollector(engine, fake).run_once())
+
+    row = db.fetch_one(engine, "SELECT storage_total_gb, retention_days, storage_used_gb "
+                               "FROM recording_servers LIMIT 1")
+    assert round(row["storage_total_gb"]) == 120_600      # 100,600 live + 20,000 archive
+    assert row["retention_days"] == 61                     # MAX, not 45+61=106
+    # The Config API exposes configured size but not consumed space, so used
+    # must stay NULL. A 0 here would render as "nothing used" on the NOC wall.
+    assert row["storage_used_gb"] is None
+
+
+def test_storage_walk_failure_leaves_the_rollup_empty_not_zero(tmp_path):
+    """A failed walk must be visible as degraded, never as a confident 0 GB."""
+    from netmon.collectors.milestone import MilestoneError
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.servers = [{"id": "RS1", "name": "NVR-1", "enabled": True}]
+    fake.storage_fail = MilestoneError("boom")
+    asyncio.run(MilestoneCollector(engine, fake).run_once())
+
+    row = db.fetch_one(engine, "SELECT storage_total_gb FROM recording_servers LIMIT 1")
+    assert not row["storage_total_gb"]
+    snap = read_snapshot(engine, "milestone.overview")
+    assert "storage" in (snap["payload"].get("degraded") or [])

@@ -124,12 +124,41 @@ class MilestoneClient:
             data = await self._get(client, "/api/rest/v1/cameras")
         return _items(data)
 
-    async def storage(self) -> list[dict]:
-        """Storage volumes per recording server (Config API). 404/absent →
-        empty (older XProtect versions lack this endpoint)."""
+    async def storage(self, recording_server_ids: list[str] | None = None) -> list[dict]:
+        """Storage volumes per recording server, with their archives.
+
+        **There is no ``GET /storages`` collection endpoint.** It answers HTTP
+        400 on this deployment, and that is not a version quirk to fail soft
+        around — the collection simply does not exist in the Config API. Only
+        ``/storages/{id}``, ``/storages/{id}/archiveStorages`` and
+        ``/recordingServers/{id}/storages`` do. NetMon called the collection for
+        months, caught the 400, and reported a clean cycle over an empty storage
+        roll-up (spec 14 D-5; found by scripts/validate_payloads.py 2026-07-28).
+
+        So the walk is per recording server: one call each, plus one per live
+        storage for its archives. On this estate that is 22 + 22 = 44 GETs.
+
+        Each returned row is a live storage annotated with ``archives`` and the
+        recording server it belongs to, so the caller can roll up without
+        re-deriving the parentage.
+        """
+        ids = recording_server_ids
         async with await self._mkclient() as client:
-            data = await self._get(client, "/api/rest/v1/storages")
-        return _items(data)
+            if ids is None:
+                ids = [str(r.get("id")) for r in
+                       _items(await self._get(client, "/api/rest/v1/recordingServers"))
+                       if r.get("id")]
+            out: list[dict] = []
+            for rid in ids:
+                stores = _items(await self._get(
+                    client, f"/api/rest/v1/recordingServers/{rid}/storages"))
+                for st in stores:
+                    sid = str(st.get("id") or "")
+                    st["recordingServerId"] = rid
+                    st["archives"] = _items(await self._get(
+                        client, f"/api/rest/v1/storages/{sid}/archiveStorages")) if sid else []
+                    out.append(st)
+        return out
 
     async def hardware(self) -> list[dict]:
         """Hardware (a camera's physical host) → model, MAC and network address.
