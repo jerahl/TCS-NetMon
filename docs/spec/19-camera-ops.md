@@ -29,11 +29,44 @@ that requirement gone, the separation bought nothing and cost the usual price of
 two codebases: two collectors against the same Config API, two config files, two
 sets of credentials for `co-milestone`.
 
-**This spec, not #117, is now the record.** #117 should be updated or closed
-rather than left to contradict it — a tracker item that states the opposite of
-the repository is worse than one that is merely stale. Anything that read as a
-cross-app boundary (a federated `camera-ops` source in NetMon, an API contract
-between the two) is void; there is one app.
+**This spec, not #117, is now the record.** #117 was read in full on 2026-09-03
+once the OpenProject connector was fixed, and it is more specific than the
+handoff suggested — it uses the phrase "sub-project" in the narrow OpenProject
+sense and explicitly pre-empts the reading the owner has now confirmed:
+
+> **Nested for organisation only** — it remains a **separate application**, with
+> its own repository, database, deploy and release cycle. […] it does not make
+> camera-ops a NetMon module.
+
+The owner confirmed on 2026-09-03 that the merge reading is the current one, so
+that paragraph and everything built on it is superseded. What #117 lists as
+**leaving** NetMon therefore **stays**:
+
+- Milestone schema mapping (`/cameras`, `/hardware`, `/recordingServers`,
+  `/storages`) — including the storage walk fixed in §4 below
+- camera addressing for ~2,659 cameras
+- **D7** camera JPEG snapshot proxy
+- **D5** ESS WebSocket schema mapping
+- the Milestone portion of the payload-harness cutover gate
+- **D10** camera SNMP (spec 13), with its poller load assessment
+
+Two NetMon work packages exist only to serve the separate-app architecture and
+are void under this decision:
+
+| WP | Subject | Disposition |
+|---|---|---|
+| **#122** | Build `netmon/collectors/camera_ops.py` federated source | void — there is no second app to federate from |
+| **#123** | Drop migration 013 camera tables, retire the Surveillance page | void — and actively harmful: §4 has just made those tables carry real data |
+
+#123 is the one to catch early. It would drop `cameras` and `recording_servers`
+and retire the Surveillance page — the exact tables and page that now hold the
+storage roll-up. Its own rollback note calls the drop clean because the tables
+are "re-swept within minutes with nothing to export", which was true when they
+were empty and is not the point any more.
+
+Not yet done, and needing the UI either way: Camera Ops (project 5) still has
+**no parent set** — confirmed 2026-09-03. `create_project` can set a parent only
+at creation and the connector has no `update_project`.
 
 What does **not** change: the Milestone integration stays read-only through the
 Config API, and everything in the old M7 (write actions) stays gated behind the

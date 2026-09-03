@@ -46,8 +46,14 @@ def summary(engine: Engine = Depends(get_engine), _user=Depends(require_role(Rol
         "servers_total": srv.get("total") or 0,
         "servers_up": srv_up.get("up", 0),
         "servers_down": srv_up.get("down", 0) + srv_up.get("blind", 0),
-        "storage_used_gb": round(srv.get("used") or 0, 1),
+        # `used` stays None when unknown — never 0. The Config API exposes
+        # configured size but not consumed space (that is the WinRM dependency,
+        # OpenProject #111), and `or 0` here would let the UI divide a real
+        # 1.8 PB total by a fabricated zero and report "0% used" across the
+        # estate. An honest gap beats a confident wrong number (§4.5).
+        "storage_used_gb": None if srv.get("used") is None else round(srv["used"], 1),
         "storage_total_gb": round(srv.get("total_gb") or 0, 1),
+        "storage_used_known": srv.get("used") is not None,
         "overview": read_snapshot(engine, "milestone.overview"),
         "updated_at": cam.get("updated_at"),
     }

@@ -12,6 +12,9 @@ import { ageOf } from "../format.js";
 
 const REFRESH_MS = 30000;
 
+const fmtGb = (gb) => gb === null || gb === undefined ? "—"
+  : gb >= 1000 ? `${(gb / 1024).toFixed(1)} TB` : `${Math.round(gb)} GB`;
+
 const TABS = [
   { id: "overview", label: "NOC Overview" },
   { id: "cameras", label: "Cameras" },
@@ -43,7 +46,13 @@ export function SurveillancePage() {
   if (!summary) return <Loading what="surveillance" />;
 
   const age = ageOf(summary.updated_at);
-  const storagePct = summary.storage_total_gb
+  // Consumed space is NOT available from the Config API — it needs WinRM
+  // against the recorders (OpenProject #111). So a percentage cannot be
+  // computed, and computing one from a null `used` would report "0% of
+  // 1.8 PB" across the estate. The tile shows configured capacity, which is
+  // real, and says plainly why the used figure is missing (§4.5).
+  const usedKnown = summary.storage_used_known && summary.storage_used_gb !== null;
+  const storagePct = usedKnown && summary.storage_total_gb
     ? Math.round((summary.storage_used_gb / summary.storage_total_gb) * 100) : null;
 
   return (
@@ -69,7 +78,7 @@ export function SurveillancePage() {
         <div className="stat"><div className="stat-value">{summary.servers_up}/{summary.servers_total}</div>
           <div className="stat-label">Recording servers up</div></div>
         <div className="stat"><div className="stat-value" style={storagePct >= 90 ? { color: sevColor("crit") } : storagePct >= 75 ? { color: sevColor("warn") } : undefined}>
-          {storagePct !== null ? `${storagePct}%` : "—"}</div>
+          {storagePct !== null ? `${storagePct}%` : fmtGb(summary.storage_total_gb)}</div>
           <div className="stat-label">Storage used</div></div>
       </div>
 
@@ -96,7 +105,13 @@ function OverviewTab({ summary, storagePct }) {
           <tbody>
             <tr><td>Recording servers</td><td>{summary.servers_up} up / {summary.servers_total} total</td></tr>
             <tr><td>Cameras</td><td>{summary.cameras_recording} recording / {summary.cameras_total} total</td></tr>
-            <tr><td>Storage</td><td>{summary.storage_used_gb} / {summary.storage_total_gb} GB{storagePct !== null ? ` (${storagePct}%)` : ""}</td></tr>
+            <tr><td>Storage configured</td><td className="mono">{fmtGb(summary.storage_total_gb)}</td></tr>
+            <tr><td>Storage used</td><td>
+              {usedKnown
+                ? <span className="mono">{fmtGb(summary.storage_used_gb)}{storagePct !== null ? ` (${storagePct}%)` : ""}</span>
+                : <span className="dim">not available — the Config API exposes configured size only;
+                    consumed space needs WinRM against the recorders</span>}
+            </td></tr>
           </tbody>
         </table>
       </Card>
@@ -203,7 +218,11 @@ function ServersTab() {
                 <td className="dim">{s.role || "—"}</td>
                 <td className="mono dim">{s.version || "—"}</td>
                 <td className="mono">{s.chans_recording ?? "—"}/{s.chans_total ?? "—"}</td>
-                <td className="mono">{s.storage_total_gb ? `${Math.round(s.storage_used_gb)}/${Math.round(s.storage_total_gb)} GB` : "—"}</td>
+                <td className="mono">{s.storage_total_gb
+                  ? (s.storage_used_gb !== null && s.storage_used_gb !== undefined
+                      ? `${Math.round(s.storage_used_gb)}/${Math.round(s.storage_total_gb)} GB`
+                      : fmtGb(s.storage_total_gb))
+                  : "—"}</td>
                 <td className="mono dim">{s.retention_days ? `${s.retention_days}d` : "—"}</td>
               </tr>
             ))}
@@ -219,25 +238,34 @@ function StorageTab() {
   React.useEffect(() => { getJSON("/api/surveillance/storage").then(setRows).catch(() => setRows([])); }, []);
   if (!rows) return <Loading what="storage" />;
   return (
-    <Card kicker={`${rows.length} volume(s)`}>
-      {rows.length === 0 ? <div className="msg">No storage data — the Config API's storage endpoint may be absent on this XProtect version.</div> : (
+    <Card kicker={`${rows.length} recorder(s)`}>
+      {rows.length === 0 ? (
+        <div className="msg">
+          No storage rows cached yet. The collector walks the per-server
+          endpoint; if this stays empty while the Milestone collector reads
+          green, check NetMon Status for a degraded storage walk.
+        </div>
+      ) : (
         <table className="grid">
-          <thead><tr><th>Server</th><th>Used</th><th>Total</th><th>Usage</th><th>Retention</th></tr></thead>
+          <thead><tr><th>Recorder</th><th>Configured</th><th>Used</th><th>Retention</th></tr></thead>
           <tbody>
             {rows.map((s, i) => {
-              const pct = s.storage_total_gb ? Math.round((s.storage_used_gb / s.storage_total_gb) * 100) : null;
+              const known = s.storage_used_gb !== null && s.storage_used_gb !== undefined;
+              const pct = known && s.storage_total_gb
+                ? Math.round((s.storage_used_gb / s.storage_total_gb) * 100) : null;
               return (
                 <tr key={i}>
-                  <td>{s.name}</td>
-                  <td className="mono">{Math.round(s.storage_used_gb)} GB</td>
-                  <td className="mono">{Math.round(s.storage_total_gb)} GB</td>
-                  <td>
-                    <div className="pd-bar" style={{ width: 140 }}>
-                      <i style={{ width: `${pct || 0}%`, background: pct >= 90 ? sevColor("crit") : pct >= 75 ? sevColor("warn") : sevColor("ok") }} />
-                    </div>
-                    <span className="mono dim"> {pct}%</span>
-                  </td>
-                  <td className="mono dim">{s.retention_days ? `${s.retention_days}d` : "—"}</td>
+                  <td>{s.name}<div className="dim mono" style={{ fontSize: 11 }}>{s.hostname || ""}</div></td>
+                  <td className="mono">{fmtGb(s.storage_total_gb)}</td>
+                  {/* Consumed space is not in the Config API — only configured
+                      size is. A 0 here would read as "empty disk" on a NOC
+                      wall, so the gap is named instead (§4.5). */}
+                  <td className="mono">{known
+                    ? `${fmtGb(s.storage_used_gb)}${pct !== null ? ` (${pct}%)` : ""}`
+                    : <span className="dim">needs WinRM</span>}</td>
+                  {/* Cumulative from the moment of recording, not live plus
+                      archive added together: MAX(retainMinutes), never SUM. */}
+                  <td className="mono dim">{s.retention_days ? `${s.retention_days}d cumulative` : "—"}</td>
                 </tr>
               );
             })}
