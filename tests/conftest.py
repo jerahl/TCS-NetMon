@@ -428,6 +428,7 @@ CREATE TABLE recording_servers (
 CAMERAS_DDL_SQLITE = """
 CREATE TABLE cameras (
     device_id INTEGER PRIMARY KEY,
+    hardware_id TEXT,
     model TEXT,
     resolution TEXT,
     fps_target INTEGER,
@@ -436,6 +437,7 @@ CREATE TABLE cameras (
     recording_mode TEXT,
     state_msg TEXT,
     ip TEXT,
+    http_port INTEGER,
     mac TEXT,
     recording_server_device_id INTEGER,
     enabled INTEGER,

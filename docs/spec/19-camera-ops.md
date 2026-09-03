@@ -159,3 +159,75 @@ handoff flags for the owner should be asked about the cumulative figure.
   shortfall, and must not imply it can.
 - **Blocked on the owner, unchanged:** XProtect version (gates the M8 video
   strategy), WinRM access to the 22 recorders, and the retention SLA.
+
+## 6. M0 addressing — 2026-09-03
+
+The owner corrected the model this rests on, and the correction is load-bearing:
+
+> There are multi-camera devices. One device, one ip, but with multiple cameras.
+> not encoders.
+
+Confirmed live. `10.88.18.190` is a **single hardware record** — an AXIS M3007
+panoramic — with **eleven** child cameras on channels 0–10. Fleet-wide: 2,423
+hardware carry one camera and **61 carry more** (3×2, 6×3, 51×4, 1×11). The
+2026-07-28 investigation called these encoders; they are multi-imager cameras,
+and the distinction matters because an encoder is a separate box while these are
+one device that is up or down as a unit.
+
+### Why NetMon could not see it
+
+`devices.milestone_hardware_id` holds the **camera** GUID — 0 of 2,659 are
+hardware ids. That is correct for its actual job (registry↔entity linkage) but
+means nothing recorded which physical device a camera belongs to. Consequences:
+
+- the poller's contested-address guard counted 11 camera rows sharing one AXIS
+  as 11 rival claimants and refused every verdict;
+- D10's SNMP unit could not be the physical host, so a sweep would issue 11
+  identical walks against that camera and store 11 copies of its CPU.
+
+### Done
+
+Migration `022` adds `cameras.hardware_id` and `cameras.http_port`, populated
+from the hardware parent. The registry linkage key is left alone — it works, and
+repurposing it would break entity matching.
+
+| | |
+|---|---|
+| cameras with `hardware_id` | 2,651 / 2,651 |
+| distinct physical devices | **2,473** |
+| multi-camera devices | 61 |
+| cameras with a non-default HTTP port | 6 (five `:443`, one `:8080`) |
+
+The port is the #108 finding landing: five addresses are `http://<ip>:443/`, an
+http scheme on the TLS port. Inferring scheme from port contradicts the field;
+dropping the port sends D7's proxy to the wrong socket.
+
+### What this settles, and the one thing it does not
+
+The shared-address problem is now measurable rather than assumed: **61 of the 62
+shared IPs are a single physical device**, so the guard's contention there is a
+false positive. Keying it on the physical device instead of the IP string would
+preserve exactly the protection it was built for — the 2026-07-28
+`oak-DEAD`/`DEAD_AP` incident was two *different* devices on one address — while
+letting 239 cameras receive an honest verdict.
+
+**The 62nd is a real conflict, and it is a data problem worth fixing:**
+`10.132.18.209` at Northridge High carries two distinct hardware records, a Bosch
+FLEXIDOME 5000i and a 5100i. Almost certainly a replaced camera whose old
+Milestone record survived — the same pattern as the duplicate `192.168.100.253`
+switch registry entry. The guard is right to refuse both until one is removed.
+
+### Still the owner's call
+
+Populating `devices.mgmt_ip` for cameras remains open, because it is not only a
+schema question:
+
+- it takes the ICMP sweep from ~935 targets to ~3,586, nearly 4×;
+- it starts raising ping alerts on a fleet that already carries 2,659 open
+  `source_blind` alerts, on top of the unresolved camera-noise decision
+  (spec 16 C3);
+- with the guard unchanged, 239 of those cameras would sit at `ping = unknown`
+  forever.
+
+The guard change and the `mgmt_ip` population should be decided together, since
+each is much less useful without the other.

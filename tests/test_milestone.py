@@ -323,3 +323,61 @@ def test_storage_walk_failure_leaves_the_rollup_empty_not_zero(tmp_path):
     assert not row["storage_total_gb"]
     snap = read_snapshot(engine, "milestone.overview")
     assert "storage" in (snap["payload"].get("degraded") or [])
+
+
+def test_camera_address_keeps_its_port_and_names_its_physical_device():
+    """Two facts the host reduction was throwing away.
+
+    Six of 2,489 hardware carry an explicit port and five are
+    ``http://<ip>:443/`` — an http scheme on the TLS port. Inferring the scheme
+    from the port contradicts the field; dropping the port sends D7's snapshot
+    proxy to the wrong socket. Neither shows up in a fixture, because a fixture
+    would not contain six oddities out of 2,489.
+
+    And 61 hardware records here carry more than one camera — one AXIS M3007
+    panoramic has eleven, on channels 0-10. That is one physical device, not
+    eleven rivals for an address, which is the distinction the poller's
+    contested-address guard cannot make without ``hardware_id``.
+    """
+    from netmon.collectors.milestone import _host_from_address, _port_from_address
+
+    assert _host_from_address("http://10.84.18.20/") == "10.84.18.20"
+    assert _port_from_address("http://10.84.18.20/") is None      # default
+
+    # The live oddity: http scheme, TLS port. Host and port must both survive.
+    assert _host_from_address("http://10.84.18.20:443/") == "10.84.18.20"
+    assert _port_from_address("http://10.84.18.20:443/") == 443
+    assert _port_from_address("http://10.84.18.21:8080/") == 8080
+
+    # Bare and malformed forms must not raise or invent a port.
+    assert _port_from_address("10.84.18.20") is None
+    assert _port_from_address("") is None
+    assert _port_from_address(None) is None
+
+
+def test_multi_camera_device_rows_share_one_hardware_id(tmp_path):
+    """One device, one IP, several cameras — recorded as such."""
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.servers = [{"id": "RS1", "name": "NVR-1", "enabled": True}]
+    fake.hardware_data = [{"id": "HW1", "address": "http://10.88.18.190:8080/"}]
+    # Two channels of the same physical camera, joined via relations.parent.
+    fake.cameras_data = [
+        {"id": "C1", "name": "cam ch0", "channel": 0, "enabled": True,
+         "relations": {"parent": {"type": "hardware", "id": "HW1"}}},
+        {"id": "C2", "name": "cam ch1", "channel": 1, "enabled": True,
+         "relations": {"parent": {"type": "hardware", "id": "HW1"}}},
+    ]
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO devices (name, site, device_type, enabled, "
+                          "milestone_hardware_id) VALUES "
+                          "('cam ch0','BHS','camera',1,'C1'),"
+                          "('cam ch1','BHS','camera',1,'C2')"))
+    asyncio.run(MilestoneCollector(engine, fake).run_once())
+
+    rows = db.fetch_all(engine, "SELECT ip, http_port, hardware_id FROM cameras "
+                                "WHERE hardware_id IS NOT NULL")
+    assert len(rows) == 2
+    assert {r["hardware_id"] for r in rows} == {"HW1"}     # one physical device
+    assert {r["ip"] for r in rows} == {"10.88.18.190"}     # host, port stripped
+    assert {r["http_port"] for r in rows} == {8080}        # but not lost

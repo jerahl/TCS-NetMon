@@ -116,6 +116,27 @@ def _host_from_address(raw: Any) -> str | None:
         return None
 
 
+def _port_from_address(raw: Any) -> int | None:
+    """Explicit port from the hardware address, or None for the default.
+
+    Six of 2,489 hardware carry one, and five of those are ``http://<ip>:443/``
+    — an http scheme on the port conventionally reserved for TLS. Inferring the
+    scheme from the port would contradict what the field says, and dropping the
+    port would send D7's snapshot proxy to the wrong socket. Both are easy
+    mistakes and neither shows up in a fixture, because a hand-built fixture
+    would not contain six oddities out of 2,489.
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    if "://" not in s:
+        s = "//" + s
+    try:
+        return urlsplit(s).port
+    except ValueError:
+        return None
+
+
 def build_recording_servers(servers: list[dict], reg: dict[str, dict],
                             storage_by_rs: dict[str, dict], now: datetime) -> list[dict]:
     rows: list[dict] = []
@@ -159,6 +180,13 @@ def build_cameras(cameras: list[dict], reg: dict[str, dict],
             "recording_mode": _first(cam, "recordingMode", "recordingType"),
             "state_msg": _first(cam, "stateMessage", "state"),
             "ip": _first(cam, "address", "ip") or _host_from_address(_first(hw, "address", "ip")),
+            "http_port": _port_from_address(_first(hw, "address", "ip")),
+            # The physical device. 61 hardware records carry more than one
+            # camera here (up to 11 on one AXIS M3007 panoramic), so this is
+            # what tells "one device, several cameras" apart from "two devices
+            # fighting over an IP" — which the poller's guard cannot otherwise
+            # distinguish. See migration 022.
+            "hardware_id": _hardware_key(cam) or None,
             "mac": mac or None,
             "recording_server_device_id": rs_devid.get(rs_id),
             "enabled": 1 if _truthy(cam.get("enabled"), cam.get("recordingEnabled")) else 0,
