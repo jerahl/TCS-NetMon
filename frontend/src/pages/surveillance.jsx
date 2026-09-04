@@ -12,6 +12,14 @@ import { ageOf } from "../format.js";
 
 const REFRESH_MS = 30000;
 
+// Whether Milestone actually told us how much space is used. Module-level
+// because SurveillancePage and OverviewTab both need it and OverviewTab is a
+// sibling component, not a closure — deriving it in the page and reading it in
+// the tab is what produced "usedKnown is not defined" at runtime.
+const usedIsKnown = (summary) =>
+  Boolean(summary && summary.storage_used_known && summary.storage_used_gb !== null
+          && summary.storage_used_gb !== undefined);
+
 const fmtGb = (gb) => gb === null || gb === undefined ? "—"
   : gb >= 1000 ? `${(gb / 1024).toFixed(1)} TB` : `${Math.round(gb)} GB`;
 
@@ -51,7 +59,7 @@ export function SurveillancePage() {
   // computed, and computing one from a null `used` would report "0% of
   // 1.8 PB" across the estate. The tile shows configured capacity, which is
   // real, and says plainly why the used figure is missing (§4.5).
-  const usedKnown = summary.storage_used_known && summary.storage_used_gb !== null;
+  const usedKnown = usedIsKnown(summary);
   const storagePct = usedKnown && summary.storage_total_gb
     ? Math.round((summary.storage_used_gb / summary.storage_total_gb) * 100) : null;
 
@@ -97,7 +105,8 @@ export function SurveillancePage() {
   );
 }
 
-function OverviewTab({ summary, storagePct }) {
+export function OverviewTab({ summary, storagePct }) {
+  const usedKnown = usedIsKnown(summary);
   return (
     <React.Fragment>
       <Card kicker="XProtect environment">
@@ -234,7 +243,7 @@ function ServersTab() {
   );
 }
 
-function StorageTab() {
+export function StorageTab() {
   const [rows, setRows] = React.useState(null);
   React.useEffect(() => { getJSON("/api/surveillance/storage").then(setRows).catch(() => setRows([])); }, []);
   if (!rows) return <Loading what="storage" />;
