@@ -126,14 +126,14 @@ class PollerConfig:
     fping_path: str = "fping"
     fping_timeout_ms: int = 500
     fping_retries: int = 1
-    # Device types excluded from the ICMP sweep. Cameras are excluded by
-    # default on evidence, not caution: of 2,649 cameras that now carry an
-    # address, 193 do not answer ICMP while Milestone reports every one of them
-    # actively recording, and they are spread across every site rather than one
-    # subnet. So a non-answer here means "this model does not do ICMP", not
-    # "this camera is down" — and the device_down rule would raise 193 crits
-    # that are provably wrong. Clear the value to sweep everything.
-    ping_exclude_device_types: tuple[str, ...] = ("camera",)
+    # Device types excluded from the ICMP sweep. Empty by default: cameras were
+    # excluded while `device_down` could misread their silence as an outage, and
+    # migration 023 scopes that rule instead, so the sweep can now record the
+    # fact without the engine drawing the wrong conclusion from it. M1
+    # (OpenProject #92) wants exactly that — "the disagreement worth surfacing,
+    # not hiding". Kept as an escape hatch for a device class that should never
+    # be probed.
+    ping_exclude_device_types: tuple[str, ...] = ()
     snmpget_path: str = "snmpget"
     snmp_version: str = "2c"
     snmp_community: str = ""  # secret; config file only
@@ -404,7 +404,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         fping_retries=_pint("fping_retries", 1),
         ping_exclude_device_types=tuple(
             t.strip() for t in parser.get(
-                "poller", "ping_exclude_device_types", fallback="camera").split(",")
+                "poller", "ping_exclude_device_types", fallback="").split(",")
             if t.strip()),
         snmpget_path=parser.get("poller", "snmpget_path", fallback="snmpget").strip(),
         snmp_version=parser.get("poller", "snmp_version", fallback="2c").strip(),

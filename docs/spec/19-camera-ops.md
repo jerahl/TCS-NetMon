@@ -275,3 +275,53 @@ Shadow mode held — 174 notifications recorded, **0 sent** — so nothing reach
 human, which is precisely what shadow-first is for. The alerts were closed and
 the state rows removed. The order should have been: deploy the guard, restart
 both units, *then* populate.
+
+## 7. M1 — Inventory and state (started 2026-09-03)
+
+OpenProject **#92**. Its only tracked child is **#111** (recorder host health via
+WinRM/CIM), which is blocked on access the owner has to grant, but M1's own
+description covers more — and one line of it corrects what §6 had just done:
+
+> **ICMP is ground truth and tiebreaker.** Milestone reporting a camera online
+> while the network says otherwise is the disagreement worth surfacing, not
+> hiding — and it is why state carries which probe produced it.
+
+Excluding cameras from the ICMP sweep hid exactly that. It was the right stopgap
+while `device_down` could misread the silence, but the wrong end state.
+
+### Rules can now be scoped by device type
+
+Migration `023` adds `alert_rules.device_types` (NULL = fleet-wide, so every
+existing rule is unchanged) and the engine narrows a rule's state query to those
+types. `device_down` is scoped to `switch,ap,recording_server,trunk,pbx,other` —
+cameras deliberately absent.
+
+That inverts the stopgap: cameras are **back in the ICMP sweep**
+(`ping_exclude_device_types` is now empty) so the fact is recorded, and the rule
+declines to read it as an outage. A dimension that means different things to
+different hardware needed the rule to say which hardware it meant, rather than
+the sweep pretending the hardware does not exist.
+
+### The disagreement, now visible
+
+| | |
+|---|---|
+| cameras answering ICMP | 2,454 |
+| cameras silent on ICMP | **195** |
+| of those, Milestone reports recording | **195 — all of them** |
+| false `device_down` alerts raised | **0** |
+
+195 cameras are recording video while not answering ping. Two readings — the
+model does not implement ICMP, or something on the path blocks it — and either
+way it is a fact about the estate rather than an outage. The useful signal from
+here is *change*: a camera that answered yesterday and stops has told you
+something, and `state_events` is where that shows up.
+
+### Still blocked on the owner
+
+- **#111** — WinRM to the 22 recorders (JEA endpoint or an account scoped to
+  `root/cimv2`, 5986/tcp). This is the third evidence path in M1's own table and
+  the only one NetMon cannot reach.
+- XProtect version, which gates M8's video strategy.
+- The retention SLA, which decides whether a shortfall is an alert or a report
+  line — and should be asked against the **cumulative** figure (§4).

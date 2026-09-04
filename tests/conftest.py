@@ -76,6 +76,7 @@ CREATE TABLE alert_rules (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
     dimension TEXT NOT NULL,
+    device_types TEXT,
     `condition` TEXT NOT NULL,
     severity TEXT NOT NULL DEFAULT 'warn',
     min_duration_s INTEGER NOT NULL DEFAULT 0,
