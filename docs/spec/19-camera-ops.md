@@ -743,3 +743,72 @@ does not alert. That is the disagreement M1 asks to be surfaced rather than
 averaged — and it is now visible in `device_state` with `source` naming which
 probe produced each verdict (`milestone-ess` vs `poller`), exactly as M1
 specifies.
+
+## 13. Reachability tiers (2026-09-04)
+
+**Owner ask:** tiers distinguishing *ESS and ICMP both down* from *ESS down,
+ICMP up*, to key automated workflows off later.
+
+The distinction is not severity, it is **remedy**. Two probes agreeing that a
+device is gone means send someone. The platform being unable to reach a device
+the network can reach means the device is up and the problem is a service, a
+credential or the recording server — where rebooting the device is the wrong
+first move. Collapsing those into one "down" throws away the part that decides
+the action, so this is a dimension of its own rather than a severity on an
+existing one.
+
+### The vocabulary
+
+`netmon/reachability.py` derives `device_state.reachability` from
+`source_status` + `ping`. Pure derivation — reads the DB, writes the DB, no
+source calls — running as a supervised task that reports into
+`collector_health` like any collector, because a derivation that silently stops
+is as bad as a source that silently stops.
+
+| Tier | Meaning | Severity | Live |
+|---|---|---|---|
+| `down_confirmed` | both probes say down | crit | **90** |
+| `down_source_only` | source down, network up | warn | **59** |
+| `down_network_only` | network down, source content | warn | 146 |
+| `up` | nothing says down | ok | 3,318 |
+| `unknown` | no probe has an opinion | unknown | 11 |
+
+`blind` is treated as **absence** of a verdict, not a negative one. A blind
+source plus silent ICMP is `down_network_only`, not `down_confirmed` — counting
+it as agreement would promote 127 cameras from warn to crit on the strength of
+one probe.
+
+### Rules
+
+Migration `024`, all with a 300 s hold:
+
+- `unreachable_confirmed` → crit, fleet-wide. The only tier that justifies a
+  dispatch on its own.
+- `source_unreachable` → warn, fleet-wide.
+- `network_unreachable` → warn, **scoped away from cameras** using the
+  device-type scoping from §7 — 195 cameras never answer ICMP while Milestone
+  reports them recording, so fleet-wide it would fire on normal operation.
+
+Live: 90 confirmed, 58 source-only, 17 network-only.
+
+### One thing this introduces, for the owner to settle
+
+The pre-existing `device_down` (ping) and `device_source_down` (source_status)
+rules now **overlap the tiers**: a device both probes call down raises
+`unreachable_confirmed` *and* `device_down` *and* `device_source_down`. That is
+three alerts for one condition.
+
+The tiers are the better vocabulary — they say which probes agree, which is what
+a workflow needs to branch on — so the old two are candidates for disabling.
+They are left enabled rather than switched off unasked, since they are the
+owner's existing alerting and something may key off their names. Disabling is
+one `UPDATE alert_rules SET enabled = 0` per rule and needs no deploy.
+
+### A schema note worth carrying forward
+
+The dimension vocabulary lives in **four** places: `device_state`,
+`alert_rules`, `state_events`, and the Pydantic `Dimension` enum. Extending
+fewer than all four fails at a different point each time — `alert_rules` at rule
+insert, `state_events` not until a tier first *changes*, the Pydantic enum not
+until an API response is serialised. All four are extended here; a future
+dimension needs the same four.
