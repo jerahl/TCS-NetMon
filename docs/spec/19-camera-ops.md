@@ -231,3 +231,47 @@ schema question:
 
 The guard change and the `mgmt_ip` population should be decided together, since
 each is much less useful without the other.
+
+### M0 landed 2026-09-03 — addresses in the registry, cameras out of the ICMP sweep
+
+`devices.mgmt_ip` is now synced from the Milestone hardware address for **2,651
+cameras**, so D7's proxy and D10's sweep have a target. Milestone is
+authoritative, so the collector syncs rather than fills-if-empty; only changed
+rows are written.
+
+**The contested-address guard now counts physical devices, not rows.** With
+`cameras.hardware_id` available, eleven channels of one AXIS are one claimant,
+while two *different* devices on one address still disagree. Contested rows fell
+from what would have been 239 cameras plus 28 pre-existing, to **30** — one real
+camera conflict (10.132.18.209) and 14 pre-existing **AP** address duplicates
+that have nothing to do with cameras and are worth cleaning up separately.
+
+**Cameras are excluded from the ICMP sweep**, on evidence rather than caution.
+The first sweep with addresses gave 2,456 up and **193 down — every one of which
+Milestone reports actively recording**, spread across every site rather than one
+subnet. So a non-answer means the model does not do ICMP, not that the camera is
+down, and `device_down` (rule 3, crit) would have raised 193 provably-wrong
+criticals. `[poller] ping_exclude_device_types` defaults to `camera`; clearing it
+sweeps everything. SNMP is untouched — it gates on `snmp_capable`, which no
+camera carries, so D10's load assessment is not bypassed.
+
+Sweep cost is unchanged: 935 verdicts in 11.7 s, 19% of the 60 s interval. With
+cameras included it was 3,584 in 47.1 s — 78%, which is workable but leaves
+little margin and would need the interval raised.
+
+### Two operational findings from doing it
+
+**The poller is its own systemd unit.** `[poller] in_process` is false and
+`netmon-poller.service` runs the sweep with `AmbientCapabilities=CAP_NET_RAW` —
+the durable fix for netmon.service's sandbox stripping it. That unit had been
+running **since 29 July**, so `systemctl restart netmon` did not reload the
+guard: it kept writing camera verdicts from five-week-old code. Both units need
+restarting after touching `netmon/poller/`.
+
+**Sequencing matters more than it looks.** Populating `mgmt_ip` on the live
+database *before* the exclusion was deployed gave the running poller a window in
+which to sweep cameras, and the engine opened **174** false crit alerts from it.
+Shadow mode held — 174 notifications recorded, **0 sent** — so nothing reached a
+human, which is precisely what shadow-first is for. The alerts were closed and
+the state rows removed. The order should have been: deploy the guard, restart
+both units, *then* populate.

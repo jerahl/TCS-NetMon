@@ -127,6 +127,15 @@ enabled = false
 in_process = true
 ping_interval_s = 60
 snmp_interval_s = 300
+# Device types the ICMP sweep skips (comma-separated; empty sweeps everything).
+# Cameras are excluded by default on evidence: 193 of 2,649 addressed cameras
+# never answer ICMP while Milestone reports every one actively recording, spread
+# across every site rather than one subnet. A non-answer there means the model
+# does not do ICMP, not that the camera is down, and the device_down rule would
+# raise 193 crits that are provably wrong. They still carry an mgmt_ip, so the
+# snapshot proxy and SNMP sweeps can reach them.
+ping_exclude_device_types = camera
+
 # Hysteresis: consecutive failures to declare DOWN / successes to declare UP.
 fail_threshold = 3
 ok_threshold = 2

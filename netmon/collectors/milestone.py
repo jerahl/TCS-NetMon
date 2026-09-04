@@ -225,6 +225,34 @@ class MilestoneCollector(Collector):
         )
         return {str(r["milestone_hardware_id"]): r for r in rows}
 
+    def _sync_camera_addresses(self, cam_rows: list[dict]) -> int:
+        """Push the Milestone-derived address into the registry.
+
+        The address lives on the hardware parent, so it only ever reached the
+        `cameras` snapshot — `devices.mgmt_ip` was NULL for all 2,659 cameras.
+        That is the M0 gap: the registry is what the poller, the D7 proxy and
+        D10 read, so an address that never lands there gates all three.
+
+        Milestone is authoritative for a camera's address, so this syncs rather
+        than fills-if-empty: a camera that is re-addressed should follow, and a
+        stale manual value would be worse than no value. Only rows whose
+        address actually changed are written, so a steady state costs nothing.
+        """
+        updates = [(c["device_id"], c["ip"]) for c in cam_rows if c.get("ip")]
+        if not updates:
+            return 0
+        current = {r["id"]: r["mgmt_ip"] for r in db.fetch_all(
+            self.engine,
+            "SELECT id, mgmt_ip FROM devices WHERE device_type = 'camera'")}
+        changed = [(did, ip) for did, ip in updates if current.get(did) != ip]
+        for did, ip in changed:
+            db.execute(self.engine,
+                       "UPDATE devices SET mgmt_ip = :ip WHERE id = :id",
+                       {"ip": ip, "id": did})
+        if changed:
+            log.info("milestone: synced mgmt_ip for %d camera(s)", len(changed))
+        return len(changed)
+
     async def run_once(self) -> int:
         registry = self._by_milestone_id()
         try:
@@ -320,6 +348,7 @@ class MilestoneCollector(Collector):
         cam_rows = build_cameras(cameras, registry, hw_by_id, rs_devid, now)
         written += db.replace_rows(self.engine, "recording_servers", ["device_id"], rs_rows)
         written += db.replace_rows(self.engine, "cameras", ["device_id"], cam_rows)
+        written += self._sync_camera_addresses(cam_rows)
 
         # Environment overview singleton. `discovered_*` is what Milestone
         # returned; `recording_servers`/`cameras` are what actually linked to the

@@ -33,20 +33,32 @@ REACHABILITY_FLAGS_SQL = """\
        MAX(CASE WHEN s.dimension = 'source_status' AND s.value = 'down' THEN 1 ELSE 0 END) AS source_down,
        MAX(CASE WHEN s.dimension = 'snmp' AND s.value = 'up' THEN 1 ELSE 0 END) AS snmp_up,
        MAX(CASE WHEN s.device_id IS NULL THEN 0 ELSE 1 END) AS has_state,
-       (SELECT COUNT(*) FROM devices x
+       (SELECT COUNT(DISTINCT cx.hardware_id)
+             + COUNT(DISTINCT CASE WHEN cx.hardware_id IS NULL THEN x.id END)
+          FROM devices x LEFT JOIN cameras cx ON cx.device_id = x.id
          WHERE x.enabled = 1 AND x.mgmt_ip = d.mgmt_ip
            AND d.mgmt_ip IS NOT NULL AND d.mgmt_ip <> '') AS ip_claimants"""
 
 
 def native_trustworthy(d: dict[str, Any]) -> bool:
-    """False when more than one enabled device claims this ``mgmt_ip``.
+    """False when more than one **physical device** claims this ``mgmt_ip``.
 
-    A probe is keyed by address, so when two rows share one the verdict cannot
-    say which device answered — a decommissioned switch reads ``up`` because
+    A probe is keyed by address, so when two devices share one the verdict
+    cannot say which answered — a decommissioned switch reads ``up`` because
     its replacement responds. The poller refuses to *write* such a verdict, but
     rows written before that guard existed are still in the table, and they are
     exactly the ones that must not be believed: on 2026-07-28 they closed
     alerts for hardware named ``oak-DEAD`` and ``DEAD_AP``.
+
+    **Camera rows of one physical device are not rivals.** Milestone models a
+    camera as a channel of a hardware record, and 61 devices here carry more
+    than one — an AXIS M3007 panoramic carries eleven. Those eleven share one
+    network interface and are up or down together, so counting them as eleven
+    claimants refused a verdict that is not in doubt. Claimants are therefore
+    counted per physical device (``cameras.hardware_id`` where present, else the
+    device row), which leaves the original protection exactly as it was: two
+    *different* devices on one address still disagree, and 10.132.18.209 —
+    where a Bosch 5000i and 5100i are both registered — is still refused.
 
     Absent the ``ip_claimants`` column a caller is treated as trustworthy, so
     projections that predate it keep their behaviour.
