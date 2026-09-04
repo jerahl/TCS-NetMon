@@ -478,3 +478,53 @@ the format has to be established before code is written, and a probe that
 misreads a response would answer M2's headline question wrongly rather than not
 at all. The groundwork it needed is done — addressing (§6), the SLA, and the
 scope boundary above.
+
+## 9. WinRM readiness — measured 2026-09-04
+
+`scripts/winrm_check.py` answers what #111 needs to know before an account is
+provisioned. It sends no credentials: WinRM answers an anonymous `POST /wsman`
+with `401` and a `WWW-Authenticate` header, so listener presence and offered
+auth mechanisms are readable unauthenticated. One TCP connect and one
+unauthenticated POST per host — what any monitoring probe does. **Not impacket
+and not WMI over DCOM**, for the Cortex XDR reason in §3.
+
+Result across the 22 recorders:
+
+| | |
+|---|---|
+| WinRM listening | **19** |
+| auth offered | `Negotiate, Kerberos` on all 19 — no Basic, no NTLM-only |
+| listening on **5986** (what #111 specifies) | **3** |
+| listening on **5985** only | **19** |
+| not reachable | 3 |
+
+**#111's port assumption does not hold.** It specifies 5986/tcp, and HTTPS is
+refused on 19 of 22 recorders; the estate runs a plain 5985 listener. That is
+still usable — Negotiate/Kerberos encrypts the payload at the message layer, so
+5985 is not cleartext — but it is a deviation worth deciding deliberately rather
+than discovering mid-implementation. Only `arc`, `nms`, `okd` and `sky` have
+5986 open.
+
+The three unreachable ones fail in two different ways, and the difference is the
+actionable part:
+
+- **`sve-bcd-dvr`, `tran-bcd-ms` — refused on both ports.** The host answers and
+  nothing is listening: WinRM is not enabled there.
+- **`co-bcd-dvr` — timeout on both.** Packets dropped, so a firewall between the
+  NetMon host and that recorder rather than a recorder setting.
+
+All three are otherwise healthy — ping up, Milestone reporting them up — so this
+is specifically a WinRM gap, not a dead host.
+
+### What the script deliberately cannot do
+
+It does not authenticate, and it says so. This host has no WinRM client, no
+Kerberos (`/etc/krb5.conf` absent) and no `pywinrm`. A listening port and an
+offered mechanism are necessary, not sufficient. To go further, in order:
+
+1. an account — a JEA constrained endpoint, or one scoped to the `root/cimv2`
+   namespace, which is all `Win32_LogicalDisk` needs;
+2. a client on this host. `pywinrm` is the ordinary choice and is **a new
+   dependency requiring sign-off** (CLAUDE.md §3);
+3. for Kerberos rather than NTLM, `/etc/krb5.conf` for the domain and a keytab
+   or ticket for the service account.
