@@ -535,3 +535,68 @@ offered mechanism are necessary, not sufficient. To go further, in order:
    dependency requiring sign-off** (CLAUDE.md §3);
 3. for Kerberos rather than NTLM, `/etc/krb5.conf` for the domain and a keytab
    or ticket for the service account.
+
+## 10. D5 — the ESS, run live for the first time (2026-09-04)
+
+D5 wired the Events/State transport in July against a fake, and deferred the
+schema mapping *"until it could be observed rather than guessed"*. Running it
+against the live VMS found three bugs in the client and produced the evidence
+the mapping needs. None of the three could have been caught by a fixture.
+
+### Three bugs, each of which looked like something else
+
+1. **Wrong path — `/api/ws/events`, missing the version segment.** The gateway
+   answers **404** at the HTTP upgrade, before any ESS command is sent. The real
+   path is `/api/ws/events/v1`
+   (`reference/zabbix/milestone/milestone_ess_state.py:13`).
+2. **`addSubscription` sent no `filters`, and was accepted.** An unfiltered
+   subscription subscribes to **nothing**: the handshake reported success and
+   45 seconds passed without a frame, against an estate of 2,659 cameras. A
+   green handshake was not evidence of a working stream. The filter shape is
+   `{modifier: "include", resourceTypes, sourceIds: ["*"], eventTypes: ["*"]}`.
+3. **The 1 MiB frame limit closed the socket on the first real reply.** This
+   estate's `getState` snapshot is **4,253,984 bytes**, and `websockets` closes
+   with 1009 above its default — so the failure presented as a dropped
+   connection rather than a size problem. `max_size` is now 32 MiB, with
+   headroom because the snapshot grows with the camera count.
+
+A fourth thing was not a bug but a misreading: **the `getState` reply *is* the
+state snapshot.** The client sent the command and discarded the response,
+waiting for state to arrive as events. It never would. The reply is now kept.
+
+### The mapping evidence
+
+`getState` over `resourceTypes: ["cameras"]` returns **16,406 states** for 2,659
+cameras — CloudEvents-shaped, `{id, source, specversion, stategroupid, time,
+type}`, with `source` as `cameras/<guid>`. Across them: **9 state groups and 21
+distinct (stategroupid, type) pairs**, the largest four covering ~2,300–2,500
+cameras each, which is the shape of a per-camera status dimension.
+
+Those GUIDs are what still need naming — which is "Communication OK", which is
+"Recording Started", which is "Motion". The reference ships a
+`--list-stategroups` diagnostic for exactly this reason, so the naming is a
+lookup against this install rather than a guess. **The pairs are recorded in the
+commit; nothing has been mapped onto `device_state` yet**, because inventing a
+meaning is the failure §4.5 forbids and is precisely what D5 deferred.
+
+### What the ESS carries, and what it does not
+
+| `resourceTypes` | Accepted | States |
+|---|---|---|
+| `cameras` | yes | **16,406** |
+| `hardware` | yes | **2,368** |
+| `recordingServers` | yes | **152** — 9 pairs across all 22 recorders |
+| `storages` | yes | **0** |
+| `servers` | yes | 0 |
+
+**This settles §8's hypothesis, against it.** Used space is *not* in the Events/
+State interface: `storages` is an accepted resource type that returns nothing.
+So M2's second input is unavailable from both Milestone interfaces, and
+`spaceCapped` stays blocked rather than merely unimplemented.
+
+`recordingServers` returning 152 states across all 22 is the consolation, and
+possibly a real one: the D10 investigation found the SDK exposes disk *events*
+(`RunningOutOfDiskSpace`, `ArchiveDiskAvailableMessage`) even though it exposes
+no capacity API. If one of those nine pairs is a disk-pressure state, it would
+give M2 an actionable signal without a byte count — worth checking when the
+GUIDs are named.
