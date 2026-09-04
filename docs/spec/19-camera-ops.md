@@ -494,16 +494,23 @@ Result across the 22 recorders:
 |---|---|
 | WinRM listening | **19** |
 | auth offered | `Negotiate, Kerberos` on all 19 — no Basic, no NTLM-only |
-| listening on **5986** (what #111 specifies) | **3** |
-| listening on **5985** only | **19** |
+| serving WinRM on **5986** (what #111 specifies) | **0** |
+| serving WinRM on **5985** | **19** |
 | not reachable | 3 |
 
-**#111's port assumption does not hold.** It specifies 5986/tcp, and HTTPS is
-refused on 19 of 22 recorders; the estate runs a plain 5985 listener. That is
-still usable — Negotiate/Kerberos encrypts the payload at the message layer, so
-5985 is not cleartext — but it is a deviation worth deciding deliberately rather
-than discovering mid-implementation. Only `arc`, `nms`, `okd` and `sky` have
-5986 open.
+**#111's port assumption does not hold — more completely than a first read
+suggested.** It specifies 5986/tcp. Eighteen recorders refuse that port
+outright, and the four that *accept* a TCP connection (`arc`, `nms`, `okd`,
+`sky`) **reset during the TLS handshake**, so nothing is serving WinRM behind
+it. An open port is not a listener, and counting it as one would have sent the
+implementation at a socket that hangs up.
+
+Every working listener is plain 5985. That is still usable — Negotiate/Kerberos
+encrypts the payload at the message layer, so 5985 is not cleartext — but the
+ticket's port should change to 5985 rather than the deviation being discovered
+mid-implementation.
+
+Per-recorder provisioning worklist: `docs/design/winrm-provisioning-worklist.md`.
 
 The three unreachable ones fail in two different ways, and the difference is the
 actionable part:
