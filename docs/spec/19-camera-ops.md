@@ -441,3 +441,40 @@ either of the two blocked inputs (used space, volume size).
 
 It is the highest-value remaining M2 item, and the Wasabi question above governs
 how its answer should be read.
+
+### Wasabi offload is out of scope (owner, 2026-09-03)
+
+A separate application handles it. That resolves the ambiguity above rather than
+leaving it open, and the picture is coherent: the offload takes video **older**
+than the SLA window, so within 30 days the video is local and Milestone can
+serve it. **#112's answer is therefore the SLA answer**, not half of it — the
+false-shortfall risk in the previous section does not arise.
+
+camera-ops verifies local retention against a 30-day SLA. Long-term cloud
+retention belongs to the other application and is explicitly not modelled here.
+
+### #112 — reachable, but it is original protocol work
+
+Two things established 2026-09-03:
+
+**The port is open.** TCP 7563 answers on every recorder tested (ALB, ARC, BHS,
+CES, CHS, CO), so the probe is viable from the NetMon host — no firewall change
+needed, unlike #111's WinRM.
+
+**The server waits for the client.** Connecting and listening yields no banner,
+so the client speaks first and an implementation must open with a handshake
+rather than parse a greeting.
+
+**There is no prior art in this repository.** Grepping `reference/`, `scripts/`
+and `netmon/` for the port or the protocol name returns one false positive — a
+UUID that happens to contain `7563`. The owner's Zabbix collectors cover the
+Config API and the ESS, not ImageServer, and #112 itself is unbuilt on the
+camera-ops side too ("not built: everything from M1 onward"). So the ImageServer
+client is **new protocol work against an undocumented-here wire format**, not a
+port of something existing.
+
+That is worth its own scoped session rather than a tail-end implementation:
+the format has to be established before code is written, and a probe that
+misreads a response would answer M2's headline question wrongly rather than not
+at all. The groundwork it needed is done — addressing (§6), the SLA, and the
+scope boundary above.
