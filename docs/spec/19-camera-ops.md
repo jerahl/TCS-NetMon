@@ -600,3 +600,86 @@ possibly a real one: the D10 investigation found the SDK exposes disk *events*
 no capacity API. If one of those nine pairs is a disk-pressure state, it would
 give M2 an actionable signal without a byte count — worth checking when the
 GUIDs are named.
+
+## 11. The ESS state map, resolved (2026-09-04)
+
+The GUIDs are named, and **authoritatively rather than by inference**: the Config
+API's `/api/rest/v1/eventTypes` returns 590 event types carrying `id`, `name`,
+`displayName` and `stateGroupId`, which is the lookup
+`reference/zabbix/milestone/milestone_ess_resolve.py` was written to perform.
+So D5's mapping is a join, not a guess.
+
+### Cameras — 9 groups, 21 states, 16,406 rows
+
+| State | Group | Cameras |
+|---|---|---|
+| MotionStopped / MotionStarted | Motion | 2,504 / 5 |
+| **CommunicationStarted** | Communication | **2,425** |
+| **CommunicationError** | Communication | **97** |
+| **CommunicationStopped** | Communication | **12** |
+| FeedOverflowStopped / Begin | FeedOverflow | 2,312 / 13 |
+| LiveClientFeedTerminated / Requested | LiveClientFeed | 2,308 / 117 |
+| **RecordingStopped** | Recording | **1,846** |
+| **RecordingStarted** | Recording | **665** |
+| Recording FPS Critical / Warning / Normal / Undefined | Recording FPS | 1,259 / 170 / 577 / 44 |
+| Live FPS Critical / Warning / Normal / Undefined | Live FPS | 1,134 / 18 / 847 / 45 |
+| ManualRecordingStopped | ManualRecording | 3 |
+| Disabled | Disabled/Enabled | 5 |
+
+### Recording servers — 9 states, all 22 covered
+
+| State | Recorders |
+|---|---|
+| Retention time **Normal** | **22 — all** |
+| CPU Usage Normal | 22 |
+| CommunicationStarted | 22 |
+| **Service Available Critical** | **11** |
+| Service Available Normal | 11 |
+| GPU Memory / Rendering / Decoding Undefined | 21 each |
+| DatabaseDiskAvailable | 1 (WFS only) |
+
+### What this changes for M2
+
+**`Retention time Critical/Normal` is a Milestone-native retention signal, and
+it needs no WinRM.** §8 concluded that both of M2's remaining inputs were
+unreachable and the flags were stuck at `null`. That holds for the *numbers* —
+used space and volume size are still unavailable — but Milestone is evaluating
+retention itself and publishing a verdict, and every one of the 22 currently
+reads **Normal**.
+
+That is not the same as the byte-level `spaceCapped`/`overCommitted` pair, and it
+must not be presented as if it were: it is Milestone's own judgement, computed
+against thresholds NetMon cannot see. But it is an actionable signal available
+today, on an estate where five recorders are configured larger than their disk
+and the SLA sits exactly on the 30-day boundary. Worth wiring before the byte
+counts, not after.
+
+### Live findings worth acting on independently of any build
+
+- **11 of 22 recorders report `Service Available Critical`** — ALB, ARC, CES,
+  CHS, EMS, NHS, OKH, RQS, SKY, TMS, bhs. Half the estate. All are otherwise
+  healthy (ICMP up, Milestone reporting them up, recording), so this is a
+  specific sub-service rather than a down recorder, and **what it names should be
+  established before it is alerted on** — but half an estate in a critical state
+  that nothing is watching is the same shape as the over-committed storage
+  finding.
+- **1,259 cameras in `Recording FPS Critical`** and 1,134 in `Live FPS
+  Critical`, against 577 and 847 Normal respectively.
+- **109 cameras with communication problems** (97 `CommunicationError`, 12
+  `CommunicationStopped`). Compare the 195 that do not answer ICMP (§7): the
+  populations differ, which is exactly the cross-source disagreement M1 wants
+  surfaced rather than averaged.
+
+### A correction this makes available
+
+NetMon's `recording` dimension currently reads **up for all 2,659 cameras**,
+because it is derived from the Config API's `recordingEnabled` — a
+*configuration* flag. The ESS reports **1,846 `RecordingStopped` against 665
+`RecordingStarted`**, which is *state*. Those answer different questions and the
+current dimension is answering the less useful one.
+
+Not changed here: motion- and schedule-triggered recording means "stopped right
+now" is normal for most cameras most of the time, so mapping `RecordingStopped`
+onto `recording = down` would manufacture an outage out of ordinary operation.
+The distinction needs deciding before it is wired — which is the same reason D5
+deferred the mapping in the first place.
