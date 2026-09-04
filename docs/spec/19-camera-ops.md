@@ -683,3 +683,63 @@ now" is normal for most cameras most of the time, so mapping `RecordingStopped`
 onto `recording = down` would manufacture an outage out of ordinary operation.
 The distinction needs deciding before it is wired — which is the same reason D5
 deferred the mapping in the first place.
+
+## 12. Camera status from the ESS — the alert storm, resolved (2026-09-04)
+
+### The bug behind 2,659 alerts
+
+Cameras carried `source_status = blind` because the Config API has no
+per-camera status field — an honest "cannot tell". But that value was only ever
+written on the *failure* path, and **nothing on the success path cleared it**:
+the success path writes `source_status` for recording servers and `recording`
+for cameras, never `source_status` for a camera. So a failure two days earlier
+left 2,659 rows that no subsequent healthy cycle could correct, and each one
+held an open `source_blind` alert.
+
+That has been the single largest source of alert noise all along — the storm
+spec 16 C3 proposed *suppressing* by excluding cameras from roll-ups. It did not
+need suppressing. It needed the state to be true.
+
+### What was wired
+
+ESS Communication → camera `source_status`, with the mapping resolved
+authoritatively from `/api/rest/v1/eventTypes` (§11):
+
+| ESS state | `source_status` | severity |
+|---|---|---|
+| `CommunicationStarted` | up | ok |
+| `CommunicationError` | down | crit |
+| `CommunicationStopped` | down | crit |
+
+**Only the Communication group.** Recording is excluded on the owner's
+instruction — recording here is motion-triggered, so `RecordingStopped` is the
+ordinary resting state and mapping it would manufacture an outage out of normal
+operation. The FPS groups are left until someone decides what Critical means.
+
+The ESS is enrichment and fails soft: a WebSocket problem returns `None`, prior
+state is left untouched rather than downgraded to a guess, and `degraded`
+records it so the failure is visible. `[milestone] ess_enabled` turns it off
+without a deploy (§4.3); it defaults **on**, because leaving 2,659 false alerts
+in place is not a neutral default.
+
+### Result
+
+| | before | after |
+|---|---|---|
+| camera `source_status = blind` | 2,659 | **147** |
+| camera `up` | 0 | **2,415** |
+| camera `down` | 0 | **97** |
+| **total open alerts (fleet)** | **2,744** | **229** |
+
+The 147 still blind are cameras with no Communication state in the snapshot —
+genuinely unknown, and left that way.
+
+### The tiebreaker earned its keep
+
+Of the 97 cameras the ESS calls down, **65 also fail ICMP** and **32 answer it**.
+Only the former raise alerts: `device_source_down` applies the native-poller
+tiebreaker, so a camera Milestone calls down while the network says it is up
+does not alert. That is the disagreement M1 asks to be surfaced rather than
+averaged — and it is now visible in `device_state` with `source` naming which
+probe produced each verdict (`milestone-ess` vs `poller`), exactly as M1
+specifies.

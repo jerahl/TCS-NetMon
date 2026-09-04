@@ -160,6 +160,17 @@ class MilestoneClient:
                     out.append(st)
         return out
 
+    async def event_types(self) -> list[dict]:
+        """Event-type catalogue: GUID → name/displayName/stateGroupId.
+
+        This is what turns the ESS's raw type GUIDs into something nameable, so
+        the state mapping is a join against the install rather than a guess
+        (reference/zabbix/milestone/milestone_ess_resolve.py does the same).
+        """
+        async with await self._mkclient() as client:
+            data = await self._get(client, "/api/rest/v1/eventTypes?page=0&size=2000")
+        return _items(data)
+
     async def hardware(self) -> list[dict]:
         """Hardware (a camera's physical host) → model, MAC and network address.
 
