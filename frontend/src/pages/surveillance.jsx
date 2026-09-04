@@ -109,8 +109,9 @@ function OverviewTab({ summary, storagePct }) {
             <tr><td>Storage used</td><td>
               {usedKnown
                 ? <span className="mono">{fmtGb(summary.storage_used_gb)}{storagePct !== null ? ` (${storagePct}%)` : ""}</span>
-                : <span className="dim">not available — the Config API exposes configured size only;
-                    consumed space needs WinRM against the recorders</span>}
+                : <span className="dim">not available — the Config API on XProtect 2025 R2
+                    exposes configured size only, with no used-space field on the storage
+                    object and no storageInformation resource</span>}
             </td></tr>
           </tbody>
         </table>
@@ -262,7 +263,7 @@ function StorageTab() {
                       wall, so the gap is named instead (§4.5). */}
                   <td className="mono">{known
                     ? `${fmtGb(s.storage_used_gb)}${pct !== null ? ` (${pct}%)` : ""}`
-                    : <span className="dim">needs WinRM</span>}</td>
+                    : <span className="dim">not exposed</span>}</td>
                   {/* Cumulative from the moment of recording, not live plus
                       archive added together: MAX(retainMinutes), never SUM. */}
                   <td className="mono dim">{s.retention_days ? `${s.retention_days}d cumulative` : "—"}</td>

@@ -325,3 +325,59 @@ something, and `state_events` is where that shows up.
 - XProtect version, which gates M8's video strategy.
 - The retention SLA, which decides whether a shortfall is an alert or a report
   line — and should be asked against the **cumulative** figure (§4).
+
+## 8. M2 — Storage and retention (2026-09-03)
+
+OpenProject **#93**. The differentiator: how many days of video actually sit
+behind each camera.
+
+### XProtect version answered — 2025 R2
+
+The owner supplied it and the Config API corroborates: all 22 recorders report
+`25.2.16119.1`. That **unblocks M8's video strategy**, which the handoff had
+gated on it — WebRTC needs 2023 R1 and playback 2023 R3, so both are available
+with two years to spare. It also removes "old version" as an explanation for
+anything missing below: 25.2 is current.
+
+### M2's input table needs correcting: two of three are unavailable, not one
+
+#93 lists three inputs and marks only the third as unreachable:
+
+| Input | #93 says | Actually |
+|---|---|---|
+| Configured retention (`retainMinutes`) | Config API | ✅ collected (§4) |
+| Used space (`storageInformation.usedSpace`) | Config API | ❌ **not present on 2025 R2** |
+| Physical volume size | WinRM #111 | ❌ blocked, as stated |
+
+Probed read-only against the live gateway:
+
+- the storage object carries 13 fields and the only size-shaped one is
+  `maxSize` — configured, not used;
+- `GET /storages/{id}/storageInformation` and
+  `/recordingServers/{id}/storageInformation` both answer **400**;
+- the storage's `relations` holds only `parent` and `self` — no usage
+  sub-resource to follow;
+- the recordingServer object's 20 fields include nothing about space;
+- no OpenAPI document is served, so there is no index to check against.
+
+**Consequence: `spaceCapped` is blocked too, not just `overCommitted`.** #93
+treats used-vs-max as the check that works today and over-commitment as the one
+waiting on #111. Neither works today. Both flags stay `null`, and — following
+#93's own rule — **null, never `false`. An unknown is not a pass.**
+
+### Where used space probably lives
+
+Usage is *state*, not configuration, and the Config API is by name and behaviour
+a configuration API. The likely home is the **Events/State (ESS)** interface —
+the same one D5 wired the transport for and whose schema mapping was
+deliberately deferred until it could be observed rather than guessed. That makes
+M2's used-space input and D5's schema work the same task, which is worth knowing
+before either is scheduled separately. Stated as a hypothesis: it has not been
+probed.
+
+### Corrected on the Surveillance page
+
+The page previously said consumed space "needs WinRM against the recorders".
+That conflated two different unknowns: **used space** is Milestone's figure for
+how much video is stored, and **volume size** is the disk's capacity from WinRM.
+Only the second is a WinRM question. The page now names the actual gap.
