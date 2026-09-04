@@ -381,3 +381,63 @@ The page previously said consumed space "needs WinRM against the recorders".
 That conflated two different unknowns: **used space** is Milestone's figure for
 how much video is stored, and **volume size** is the disk's capacity from WinRM.
 Only the second is a WinRM question. The page now names the actual gap.
+
+### Retention SLA answered — 30 days, with older video offloaded to Wasabi
+
+The owner supplied this on 2026-09-03, closing the third of the handoff's
+blocked-on-owner questions. It resolves how to read the numbers in §4 and
+introduces a gap none of the interfaces can see.
+
+**Against a 30-day SLA, configured retention meets it everywhere — with no
+margin.** Live storage is 30 days on 21 of 22 recorders (NHS 45), so the SLA
+sits exactly on the configured boundary. Anything that causes early deletion
+puts a recorder *under* SLA, and that is precisely what over-commitment does:
+XProtect deletes early when the volume fills, whatever `retainMinutes` says.
+
+The five over-committed recorders (§ #93) therefore matter more, not less, now
+the target is known. **TMS-BCD-DVR is the sharpest case**: 30-day live, **no
+archive at all**, and over-committed — the only recorder with no second tier
+absorbing an early deletion.
+
+### Wasabi is invisible to every interface available
+
+Every storage path on the estate is a local drive letter:
+
+```
+D:\Archive   D:\MediaDatabase   E:\Archive   E:\MediaDatabase
+```
+
+That is the complete set across all 22 recorders and their archives. **No cloud
+tier appears anywhere in Milestone's storage configuration**, so whatever moves
+video to Wasabi runs outside Milestone's archive chain — Milestone does not know
+the tier exists.
+
+Consequences worth stating before anything is built on them:
+
+1. Milestone's retention figures (30 d live, 61 d cumulative) describe **local**
+   retention only. They are not the total video available.
+2. The **ImageServer probe (#112)** asks Milestone "is there video at
+   *now − 30 days*". It can only answer for video Milestone can serve. If a
+   frame has been offloaded and Milestone is not configured to retrieve it, the
+   probe reads "no video" for a clip that exists in Wasabi — a false shortfall.
+3. Conversely, if the offload *moves* rather than copies, local retention could
+   fall below 30 days while the SLA is still met from Wasabi — and nothing in
+   NetMon would see the cloud copy.
+
+So the SLA is verifiable **against local storage** and not against the estate as
+a whole, until it is known how the offload is wired: whether it copies or moves,
+whether Milestone can retrieve from it, and what holds the catalogue. That is an
+owner question, and it is the one that decides whether #112 measures the SLA or
+only the local half of it.
+
+### #112's stated blocker is now clear
+
+#112 is "blocked on camera addressing validating against live data (#108)".
+§6 populated `mgmt_ip` for 2,651 cameras from validated live payloads, so that
+dependency is met. The probe itself — raw TCP to the recorder on 7563, XML
+request, token auth, one `goto` at the SLA boundary per camera — needs no SDK,
+no Windows and no second runtime, and it answers M2's headline question without
+either of the two blocked inputs (used space, volume size).
+
+It is the highest-value remaining M2 item, and the Wasabi question above governs
+how its answer should be read.
