@@ -127,6 +127,13 @@ enabled = false
 in_process = true
 ping_interval_s = 60
 snmp_interval_s = 300
+# Device types the ICMP sweep skips (comma-separated; empty sweeps everything).
+# Empty by default. Cameras were excluded while the device_down rule could read
+# their ICMP silence as an outage — 193 of 2,649 never answer while Milestone
+# reports them recording — and migration 023 scopes that rule by device type
+# instead, so the sweep records the fact and the engine declines to misread it.
+ping_exclude_device_types =
+
 # Hysteresis: consecutive failures to declare DOWN / successes to declare UP.
 fail_threshold = 3
 ok_threshold = 2

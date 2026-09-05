@@ -5,6 +5,7 @@ from sqlalchemy import text
 from netmon import db
 from netmon.collectors.milestone import MilestoneCollector
 from netmon.collectors.milestone_client import MilestoneError
+from netmon.snapshots import read_snapshot
 from tests.conftest import create_core_tables
 
 
@@ -27,7 +28,7 @@ class FakeMs:
             raise self.fail
         return self.cameras_data
 
-    async def storage(self):
+    async def storage(self, recording_server_ids=None):
         if self.storage_fail:
             raise self.storage_fail
         return self.storage_data
@@ -65,7 +66,7 @@ def test_milestone_writes_recording_and_source_status(tmp_path):
     fake = FakeMs()
     fake.servers = [{"id": "RS1", "running": True}]
     fake.cameras_data = [{"id": "CAM1", "recordingEnabled": False}]
-    ms = MilestoneCollector(engine, fake)
+    ms = MilestoneCollector(engine, fake, ess_enabled=False)
     n = asyncio.run(ms.run_once())
     assert n == 4  # 2 state writes (RS source_status + cam recording) + 2 persisted rows
 
@@ -80,7 +81,7 @@ def test_milestone_blind_on_unreachable(tmp_path):
     fake = FakeMs()
     fake.servers = [{"id": "RS1", "running": True}]
     fake.cameras_data = [{"id": "CAM1", "recordingEnabled": True}]
-    ms = MilestoneCollector(engine, fake)
+    ms = MilestoneCollector(engine, fake, ess_enabled=False)
     asyncio.run(ms.run_once())
 
     fake.fail = MilestoneError("gateway down")
@@ -107,13 +108,19 @@ def test_milestone_persists_cameras_servers_and_overview(tmp_path):
                           "resolution": "1920x1080", "framerate": 15, "codec": "H.264",
                           "recordingServerId": "RS1", "hardwareId": "HW1"}]
     fake.hardware_data = [{"id": "HW1", "mac": "00:40:8c:aa:bb:cc", "address": "192.0.2.60"}]
-    fake.storage_data = [{"recordingServerId": "RS1", "used": 4200, "size": 8000, "retentionDays": 30}]
-    n = asyncio.run(MilestoneCollector(engine, fake).run_once())
+    # Real /recordingServers/{id}/storages shape: maxSize in MB, retainMinutes,
+    # and archives inline. The previous fixture here used {used, size,
+    # retentionDays} — the invented shape of GET /storages, which does not
+    # exist (400). It asserted against a payload nobody ever received.
+    fake.storage_data = [{"id": "S1", "recordingServerId": "RS1",
+                          "maxSize": 8_192_000, "retainMinutes": 43_200,
+                          "archives": []}]
+    n = asyncio.run(MilestoneCollector(engine, fake, ess_enabled=False).run_once())
     assert n >= 4  # 2 state + 1 rs row + 1 cam row
 
     rs = db.fetch_one(engine, "SELECT * FROM recording_servers WHERE device_id=1")
     assert rs["hostname"] == "nvr-1.tcs" and rs["chans_total"] == 40
-    assert rs["storage_total_gb"] == 8000 and rs["retention_days"] == 30
+    assert round(rs["storage_total_gb"]) == 8000 and rs["retention_days"] == 30
 
     cam = db.fetch_one(engine, "SELECT * FROM cameras WHERE device_id=2")
     assert cam["model"] == "AXIS P3255" and cam["fps_target"] == 15
@@ -136,7 +143,7 @@ def test_milestone_unlinked_entities_surface_in_overview(tmp_path):
     fake.servers = [{"id": "RS-X", "running": True}]
     fake.cameras_data = [{"id": "CAM-X", "recordingEnabled": True},
                          {"id": "CAM-Y", "recordingEnabled": True}]
-    n = asyncio.run(MilestoneCollector(engine, fake).run_once())
+    n = asyncio.run(MilestoneCollector(engine, fake, ess_enabled=False).run_once())
     assert n == 0  # nothing linked → nothing written
     ov = read_snapshot(engine, "milestone.overview")["payload"]
     assert ov["discovered_servers"] == 1 and ov["discovered_cameras"] == 2
@@ -152,7 +159,7 @@ def test_milestone_storage_endpoint_fail_soft(tmp_path):
     fake.cameras_data = [{"id": "CAM1", "recordingEnabled": True}]
     fake.storage_fail = MilestoneError("Milestone HTTP 404 on /storages")
     # The whole cycle still succeeds; RS row just has NULL storage.
-    asyncio.run(MilestoneCollector(engine, fake).run_once())
+    asyncio.run(MilestoneCollector(engine, fake, ess_enabled=False).run_once())
     rs = db.fetch_one(engine, "SELECT * FROM recording_servers WHERE device_id=1")
     assert rs is not None and rs["storage_total_gb"] is None
 
@@ -163,10 +170,10 @@ def test_milestone_unreachable_keeps_inventory_stale(tmp_path):
     fake = FakeMs()
     fake.servers = [{"id": "RS1", "running": True}]
     fake.cameras_data = [{"id": "CAM1", "recordingEnabled": True}]
-    asyncio.run(MilestoneCollector(engine, fake).run_once())
+    asyncio.run(MilestoneCollector(engine, fake, ess_enabled=False).run_once())
 
     fake.fail = MilestoneError("unreachable")
-    asyncio.run(MilestoneCollector(engine, fake).run_guarded())
+    asyncio.run(MilestoneCollector(engine, fake, ess_enabled=False).run_guarded())
     # Rows kept (stale), never blanked on a failed refresh.
     assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM cameras")["n"] == 1
     h = db.fetch_one(engine, "SELECT * FROM collector_health WHERE name='milestone'")
@@ -188,7 +195,7 @@ def test_degraded_enrichment_is_reported_not_silent(tmp_path):
     fake.servers = [{"id": "RS1", "running": True}]
     fake.cameras_data = [{"id": "CAM1", "recordingEnabled": True}]
     fake.storage_fail = MilestoneError("Milestone HTTP 400 on /storages")
-    asyncio.run(MilestoneCollector(engine, fake).run_once())
+    asyncio.run(MilestoneCollector(engine, fake, ess_enabled=False).run_once())
 
     row = db.fetch_one(engine, "SELECT payload FROM snapshot_cache WHERE `key`='milestone.overview'")
     payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
@@ -204,7 +211,7 @@ def test_healthy_cycle_reports_nothing_degraded(tmp_path):
     fake = FakeMs()
     fake.servers = [{"id": "RS1", "running": True}]
     fake.cameras_data = [{"id": "CAM1", "recordingEnabled": True}]
-    asyncio.run(MilestoneCollector(engine, fake).run_once())
+    asyncio.run(MilestoneCollector(engine, fake, ess_enabled=False).run_once())
 
     row = db.fetch_one(engine, "SELECT payload FROM snapshot_cache WHERE `key`='milestone.overview'")
     payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
@@ -268,3 +275,177 @@ def test_host_from_address_handles_ports_and_bare_hosts():
     assert _host_from_address("https://cam.example.invalid/snap") == "cam.example.invalid"
     assert _host_from_address(None) is None
     assert _host_from_address("") is None
+
+
+def test_storage_rollup_uses_megabytes_and_cumulative_retention(tmp_path):
+    """Two units were wrong here, and both rendered as plausible numbers.
+
+    ``maxSize`` is MEGABYTES. NHS's live storage reads 103,014,400, which is its
+    documented 100,600 GB — dividing by 1e9 as though it were bytes rendered
+    every recorder on the estate as 0 GB while the collector reported success.
+
+    Archive retention in XProtect is **cumulative from the moment of recording,
+    not additive** on top of the live storage, so the total a recorder holds is
+    MAX(retainMinutes) and never SUM. Summing NHS's 45-day live and 61-day
+    archive would claim 106 days where it actually keeps 61.
+    """
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.servers = [{"id": "RS1", "name": "NVR-1", "enabled": True}]
+    fake.storage_data = [{
+        "id": "S1", "recordingServerId": "RS1", "name": "Local default",
+        "maxSize": 103_014_400,          # 100,600 GB
+        "retainMinutes": 64_800,          # 45 days (live)
+        "archives": [{"id": "A1", "maxSize": 20_480_000,   # 20,000 GB
+                      "retainMinutes": 87_840}],           # 61 days (cumulative)
+    }]
+    asyncio.run(MilestoneCollector(engine, fake, ess_enabled=False).run_once())
+
+    row = db.fetch_one(engine, "SELECT storage_total_gb, retention_days, storage_used_gb "
+                               "FROM recording_servers LIMIT 1")
+    assert round(row["storage_total_gb"]) == 120_600      # 100,600 live + 20,000 archive
+    assert row["retention_days"] == 61                     # MAX, not 45+61=106
+    # The Config API exposes configured size but not consumed space, so used
+    # must stay NULL. A 0 here would render as "nothing used" on the NOC wall.
+    assert row["storage_used_gb"] is None
+
+
+def test_storage_walk_failure_leaves_the_rollup_empty_not_zero(tmp_path):
+    """A failed walk must be visible as degraded, never as a confident 0 GB."""
+    from netmon.collectors.milestone import MilestoneError
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.servers = [{"id": "RS1", "name": "NVR-1", "enabled": True}]
+    fake.storage_fail = MilestoneError("boom")
+    asyncio.run(MilestoneCollector(engine, fake, ess_enabled=False).run_once())
+
+    row = db.fetch_one(engine, "SELECT storage_total_gb FROM recording_servers LIMIT 1")
+    assert not row["storage_total_gb"]
+    snap = read_snapshot(engine, "milestone.overview")
+    assert "storage" in (snap["payload"].get("degraded") or [])
+
+
+def test_camera_address_keeps_its_port_and_names_its_physical_device():
+    """Two facts the host reduction was throwing away.
+
+    Six of 2,489 hardware carry an explicit port and five are
+    ``http://<ip>:443/`` — an http scheme on the TLS port. Inferring the scheme
+    from the port contradicts the field; dropping the port sends D7's snapshot
+    proxy to the wrong socket. Neither shows up in a fixture, because a fixture
+    would not contain six oddities out of 2,489.
+
+    And 61 hardware records here carry more than one camera — one AXIS M3007
+    panoramic has eleven, on channels 0-10. That is one physical device, not
+    eleven rivals for an address, which is the distinction the poller's
+    contested-address guard cannot make without ``hardware_id``.
+    """
+    from netmon.collectors.milestone import _host_from_address, _port_from_address
+
+    assert _host_from_address("http://10.84.18.20/") == "10.84.18.20"
+    assert _port_from_address("http://10.84.18.20/") is None      # default
+
+    # The live oddity: http scheme, TLS port. Host and port must both survive.
+    assert _host_from_address("http://10.84.18.20:443/") == "10.84.18.20"
+    assert _port_from_address("http://10.84.18.20:443/") == 443
+    assert _port_from_address("http://10.84.18.21:8080/") == 8080
+
+    # Bare and malformed forms must not raise or invent a port.
+    assert _port_from_address("10.84.18.20") is None
+    assert _port_from_address("") is None
+    assert _port_from_address(None) is None
+
+
+def test_multi_camera_device_rows_share_one_hardware_id(tmp_path):
+    """One device, one IP, several cameras — recorded as such."""
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.servers = [{"id": "RS1", "name": "NVR-1", "enabled": True}]
+    fake.hardware_data = [{"id": "HW1", "address": "http://10.88.18.190:8080/"}]
+    # Two channels of the same physical camera, joined via relations.parent.
+    fake.cameras_data = [
+        {"id": "C1", "name": "cam ch0", "channel": 0, "enabled": True,
+         "relations": {"parent": {"type": "hardware", "id": "HW1"}}},
+        {"id": "C2", "name": "cam ch1", "channel": 1, "enabled": True,
+         "relations": {"parent": {"type": "hardware", "id": "HW1"}}},
+    ]
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO devices (name, site, device_type, enabled, "
+                          "milestone_hardware_id) VALUES "
+                          "('cam ch0','BHS','camera',1,'C1'),"
+                          "('cam ch1','BHS','camera',1,'C2')"))
+    asyncio.run(MilestoneCollector(engine, fake, ess_enabled=False).run_once())
+
+    rows = db.fetch_all(engine, "SELECT ip, http_port, hardware_id FROM cameras "
+                                "WHERE hardware_id IS NOT NULL")
+    assert len(rows) == 2
+    assert {r["hardware_id"] for r in rows} == {"HW1"}     # one physical device
+    assert {r["ip"] for r in rows} == {"10.88.18.190"}     # host, port stripped
+    assert {r["http_port"] for r in rows} == {8080}        # but not lost
+
+
+def test_ess_communication_maps_to_camera_source_status(tmp_path):
+    """Cameras had `source_status = blind` because the Config API has no
+    per-camera status field — an honest "cannot tell" that nothing on the
+    success path ever cleared, so 2,659 rows sat two days stale behind 2,659
+    open alerts. The ESS can tell, so the blind rows become a real verdict.
+    """
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.servers = [{"id": "RS1", "hostName": "nvr-1.tcs", "running": True}]
+    fake.cameras_data = [{"id": "CAM1", "recordingEnabled": True},
+                         {"id": "CAM2", "recordingEnabled": True}]
+    fake.hardware_data = []
+    col = MilestoneCollector(engine, fake, ess_enabled=True)
+
+    async def fake_ess():
+        # Keyed by camera GUID, as the ESS `source` field supplies it.
+        return {"CAM1": ("up", "ok"), "CAM2": ("down", "crit")}
+    col._ess_camera_status = fake_ess
+    asyncio.run(col.run_once())
+
+    rows = {r["device_id"]: r for r in db.fetch_all(
+        engine, "SELECT device_id, value, severity, source FROM device_state "
+                "WHERE dimension='source_status'")}
+    cams = db.fetch_all(engine, "SELECT id, milestone_hardware_id FROM devices "
+                                "WHERE device_type='camera'")
+    for c in cams:
+        got = rows.get(c["id"])
+        if c["milestone_hardware_id"] == "CAM1":
+            assert got["value"] == "up" and got["source"] == "milestone-ess"
+        elif c["milestone_hardware_id"] == "CAM2":
+            assert got["value"] == "down" and got["severity"] == "crit"
+
+
+def test_ess_failure_degrades_without_failing_the_cycle(tmp_path):
+    """The ESS is enrichment. A WebSocket problem must not fail a Config-API
+    cycle that otherwise succeeded, and must not downgrade known state to a
+    guess — prior rows are left untouched and the degradation is recorded.
+    """
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.servers = [{"id": "RS1", "hostName": "nvr-1.tcs", "running": True}]
+    fake.cameras_data = [{"id": "CAM1", "recordingEnabled": True},
+                         {"id": "CAM2", "recordingEnabled": True}]
+    fake.hardware_data = []
+    col = MilestoneCollector(engine, fake, ess_enabled=True)
+
+    async def no_ess():
+        return None
+    col._ess_camera_status = no_ess
+    written = asyncio.run(col.run_once())          # must not raise
+
+    assert written > 0
+    snap = read_snapshot(engine, "milestone.overview")
+    assert "ess" in (snap["payload"].get("degraded") or [])
+
+
+def test_recording_state_is_not_derived_from_the_ess(tmp_path):
+    """Recording here is motion-triggered, so `RecordingStopped` is the ordinary
+    resting state for most cameras most of the time (owner, 2026-09-04).
+    Mapping it onto `recording = down` would manufacture an outage out of normal
+    operation, so only the Communication group is mapped."""
+    from netmon.collectors.milestone import ESS_COMMUNICATION
+
+    assert set(ESS_COMMUNICATION) == {
+        "CommunicationStarted", "CommunicationError", "CommunicationStopped"}
+    assert not any("Recording" in k or "FPS" in k for k in ESS_COMMUNICATION)

@@ -34,6 +34,21 @@ from netmon.config import Config
 from netmon.seed import canon_mac
 from netmon.snapshots import write_snapshot
 from netmon.state import write_state
+from netmon.collectors.ws_milestone import MilestoneEss
+
+# ESS event-type names → camera source_status. Resolved authoritatively from
+# /api/rest/v1/eventTypes (spec 19 §11), not inferred from the GUIDs.
+#
+# Only the Communication group is mapped. Recording is deliberately excluded:
+# recording here is motion-triggered, so `RecordingStopped` is the ordinary
+# resting state for most cameras most of the time and would manufacture an
+# outage out of normal operation (owner, 2026-09-04). FPS groups are likewise
+# left alone until someone decides what Critical means operationally.
+ESS_COMMUNICATION = {
+    "CommunicationStarted": ("up", "ok"),
+    "CommunicationError": ("down", "crit"),
+    "CommunicationStopped": ("down", "crit"),
+}
 
 log = logging.getLogger("netmon.collectors.milestone")
 
@@ -116,6 +131,27 @@ def _host_from_address(raw: Any) -> str | None:
         return None
 
 
+def _port_from_address(raw: Any) -> int | None:
+    """Explicit port from the hardware address, or None for the default.
+
+    Six of 2,489 hardware carry one, and five of those are ``http://<ip>:443/``
+    — an http scheme on the port conventionally reserved for TLS. Inferring the
+    scheme from the port would contradict what the field says, and dropping the
+    port would send D7's snapshot proxy to the wrong socket. Both are easy
+    mistakes and neither shows up in a fixture, because a hand-built fixture
+    would not contain six oddities out of 2,489.
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    if "://" not in s:
+        s = "//" + s
+    try:
+        return urlsplit(s).port
+    except ValueError:
+        return None
+
+
 def build_recording_servers(servers: list[dict], reg: dict[str, dict],
                             storage_by_rs: dict[str, dict], now: datetime) -> list[dict]:
     rows: list[dict] = []
@@ -159,6 +195,13 @@ def build_cameras(cameras: list[dict], reg: dict[str, dict],
             "recording_mode": _first(cam, "recordingMode", "recordingType"),
             "state_msg": _first(cam, "stateMessage", "state"),
             "ip": _first(cam, "address", "ip") or _host_from_address(_first(hw, "address", "ip")),
+            "http_port": _port_from_address(_first(hw, "address", "ip")),
+            # The physical device. 61 hardware records carry more than one
+            # camera here (up to 11 on one AXIS M3007 panoramic), so this is
+            # what tells "one device, several cameras" apart from "two devices
+            # fighting over an IP" — which the poller's guard cannot otherwise
+            # distinguish. See migration 022.
+            "hardware_id": _hardware_key(cam) or None,
             "mac": mac or None,
             "recording_server_device_id": rs_devid.get(rs_id),
             "enabled": 1 if _truthy(cam.get("enabled"), cam.get("recordingEnabled")) else 0,
@@ -170,9 +213,15 @@ def build_cameras(cameras: list[dict], reg: dict[str, dict],
 class MilestoneCollector(Collector):
     name = "milestone"
 
-    def __init__(self, engine: Engine, client: MilestoneClient, interval_s: float = 120.0) -> None:
+    def __init__(self, engine: Engine, client: MilestoneClient, interval_s: float = 120.0,
+                 ess_enabled: bool = True) -> None:
         super().__init__(engine)
         self.client = client
+        # One WebSocket getState per cycle (~4 MB on this estate). Default on
+        # because it replaces 2,659 stale `blind` rows with a real verdict;
+        # disableable without a deploy, and failure is soft either way.
+        self.ess_enabled = ess_enabled
+        self._etypes: dict[str, str] = {}
         self.interval_s = interval_s
         self.timeout_s = max(60.0, interval_s)
 
@@ -197,6 +246,76 @@ class MilestoneCollector(Collector):
         )
         return {str(r["milestone_hardware_id"]): r for r in rows}
 
+    def _sync_camera_addresses(self, cam_rows: list[dict]) -> int:
+        """Push the Milestone-derived address into the registry.
+
+        The address lives on the hardware parent, so it only ever reached the
+        `cameras` snapshot — `devices.mgmt_ip` was NULL for all 2,659 cameras.
+        That is the M0 gap: the registry is what the poller, the D7 proxy and
+        D10 read, so an address that never lands there gates all three.
+
+        Milestone is authoritative for a camera's address, so this syncs rather
+        than fills-if-empty: a camera that is re-addressed should follow, and a
+        stale manual value would be worse than no value. Only rows whose
+        address actually changed are written, so a steady state costs nothing.
+        """
+        updates = [(c["device_id"], c["ip"]) for c in cam_rows if c.get("ip")]
+        if not updates:
+            return 0
+        current = {r["id"]: r["mgmt_ip"] for r in db.fetch_all(
+            self.engine,
+            "SELECT id, mgmt_ip FROM devices WHERE device_type = 'camera'")}
+        changed = [(did, ip) for did, ip in updates if current.get(did) != ip]
+        for did, ip in changed:
+            db.execute(self.engine,
+                       "UPDATE devices SET mgmt_ip = :ip WHERE id = :id",
+                       {"ip": ip, "id": did})
+        if changed:
+            log.info("milestone: synced mgmt_ip for %d camera(s)", len(changed))
+        return len(changed)
+
+    async def _ess_camera_status(self) -> dict[str, tuple[str, str]] | None:
+        """Per-camera Communication state from the Events/State interface.
+
+        The Config API has no per-camera status field at all, which is why
+        cameras carried `source_status = blind` — an honest "cannot tell". The
+        ESS can tell, so this replaces the blind rows with a real verdict.
+
+        Returns ``None`` on any failure rather than raising: the ESS is
+        enrichment, and a WebSocket problem must not fail a Config-API cycle
+        that otherwise succeeded. The caller records the degradation so it is
+        visible rather than silent (§4.5).
+        """
+        try:
+            ess = MilestoneEss(self.client)
+            async with ess.connect() as conn:
+                await ess.handshake(conn)
+                states = (ess.initial_state or {}).get("states") or []
+            if not states:
+                return None
+            names = await self._event_type_names()
+            out: dict[str, tuple[str, str]] = {}
+            for st in states:
+                verdict = ESS_COMMUNICATION.get(names.get(str(st.get("type"))) or "")
+                if not verdict:
+                    continue
+                guid = str(st.get("source") or "").split("/")[-1]
+                if guid:
+                    out[guid] = verdict
+            return out or None
+        except Exception as exc:                      # noqa: BLE001 — enrichment
+            log.warning("milestone ESS state unavailable, camera status left "
+                        "as-is rather than guessed: %s", exc)
+            return None
+
+    async def _event_type_names(self) -> dict[str, str]:
+        """GUID → event-type name, from the Config API. Cached for the process."""
+        if getattr(self, "_etypes", None):
+            return self._etypes
+        rows = await self.client.event_types()
+        self._etypes = {str(t.get("id")): str(t.get("name") or "") for t in rows}
+        return self._etypes
+
     async def run_once(self) -> int:
         registry = self._by_milestone_id()
         try:
@@ -209,6 +328,9 @@ class MilestoneCollector(Collector):
 
         now = datetime.now(timezone.utc)
         written = 0
+        # Declared here because the ESS status fetch below can degrade, and it
+        # runs before the Config-API enrichment block that used to own this.
+        degraded: list[str] = []
 
         # State writes (unchanged contract) + RS device-id map for camera links.
         rs_devid: dict[str, int] = {}
@@ -223,6 +345,16 @@ class MilestoneCollector(Collector):
             write_state(self.engine, int(r["id"]), "source_status",
                         "up" if running else "down", "ok" if running else "crit", "milestone")
             written += 1
+        # Per-camera status, which the Config API cannot answer at all. Cameras
+        # carried `source_status = blind` for exactly that reason — an honest
+        # "cannot tell" — but nothing on the success path ever cleared it, so
+        # 2,659 rows sat two days stale and held 2,659 open alerts. The ESS can
+        # tell; None means it could not be reached, and prior state is then left
+        # untouched rather than downgraded to a guess.
+        ess_status = await self._ess_camera_status() if self.ess_enabled else None
+        if self.ess_enabled and ess_status is None:
+            degraded.append("ess")
+
         for cam in cameras:
             r = registry.get(str(cam.get("id")))
             if r is None:
@@ -232,6 +364,14 @@ class MilestoneCollector(Collector):
             write_state(self.engine, int(r["id"]), "recording",
                         "up" if recording else "down", "ok" if recording else "crit", "milestone")
             written += 1
+            if ess_status is not None:
+                # A camera absent from the snapshot has no Communication state
+                # published, which is not the same as being down.
+                verdict = ess_status.get(str(cam.get("id")))
+                if verdict:
+                    write_state(self.engine, int(r["id"]), "source_status",
+                                verdict[0], verdict[1], "milestone-ess")
+                    written += 1
 
         # Fail loud on the silent-empty trap: Milestone answered, but none of its
         # entities are linked to a registry device (nothing seeded
@@ -253,22 +393,32 @@ class MilestoneCollector(Collector):
         # the collector reported success (found 2026-07-28 by
         # scripts/validate_payloads.py). Record which enrichments degraded so
         # the NetMon Status page and the overview blob can say so.
-        degraded: list[str] = []
         storage_by_rs: dict[str, dict] = {}
         try:
-            for s in await self.client.storage():
-                rs = str(_first(s, "recordingServerId", "recordingServer") or "")
-                agg = storage_by_rs.setdefault(rs, {"used_gb": 0.0, "total_gb": 0.0, "retention_days": None})
-                used, total = _num(s.get("usedSpace"), s.get("used")), _num(s.get("size"), s.get("total"))
-                if used is not None:
-                    agg["used_gb"] += used / 1_000_000_000 if used > 1_000_000 else used
-                if total is not None:
-                    agg["total_gb"] += total / 1_000_000_000 if total > 1_000_000 else total
-                agg["retention_days"] = _num(s.get("retentionDays")) or agg["retention_days"]
+            for st in await self.client.storage([str(x.get("id")) for x in servers if x.get("id")]):
+                rs = str(st.get("recordingServerId") or "")
+                agg = storage_by_rs.setdefault(
+                    rs, {"used_gb": None, "total_gb": 0.0, "retention_days": None})
+                # maxSize is MEGABYTES, confirmed against the estate: NHS's live
+                # storage reads 103,014,400, which is its documented 100,600 GB
+                # (103,014,400 / 1024). Dividing by 1e9 as though it were bytes
+                # rendered every recorder as 0 GB.
+                agg["total_gb"] += (_num(st.get("maxSize")) or 0) / 1024
+                for arc in st.get("archives") or []:
+                    agg["total_gb"] += (_num(arc.get("maxSize")) or 0) / 1024
+                # Archive retention in XProtect is CUMULATIVE from the moment of
+                # recording, not additive on top of the live storage — so the
+                # total a recorder actually holds is MAX(retainMinutes), never
+                # SUM. Summing NHS would claim 106 days where it keeps 61.
+                mins = [_num(st.get("retainMinutes")) or 0]
+                mins += [_num(a.get("retainMinutes")) or 0 for a in st.get("archives") or []]
+                days = max(mins) / 1440 if mins else 0
+                agg["retention_days"] = max(agg["retention_days"] or 0, round(days))
         except MilestoneError as exc:
             degraded.append("storage")
-            log.warning("milestone storage endpoint unavailable — storage roll-up "
+            log.warning("milestone storage walk failed — storage roll-up "
                         "will be empty, not zero: %s", exc)
+
         hw_by_id: dict[str, dict] = {}
         try:
             hw_by_id = {str(h.get("id")): h for h in await self.client.hardware()}
@@ -281,6 +431,7 @@ class MilestoneCollector(Collector):
         cam_rows = build_cameras(cameras, registry, hw_by_id, rs_devid, now)
         written += db.replace_rows(self.engine, "recording_servers", ["device_id"], rs_rows)
         written += db.replace_rows(self.engine, "cameras", ["device_id"], cam_rows)
+        written += self._sync_camera_addresses(cam_rows)
 
         # Environment overview singleton. `discovered_*` is what Milestone
         # returned; `recording_servers`/`cameras` are what actually linked to the

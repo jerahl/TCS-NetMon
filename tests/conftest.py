@@ -76,6 +76,7 @@ CREATE TABLE alert_rules (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
     dimension TEXT NOT NULL,
+    device_types TEXT,
     `condition` TEXT NOT NULL,
     severity TEXT NOT NULL DEFAULT 'warn',
     min_duration_s INTEGER NOT NULL DEFAULT 0,
@@ -428,6 +429,7 @@ CREATE TABLE recording_servers (
 CAMERAS_DDL_SQLITE = """
 CREATE TABLE cameras (
     device_id INTEGER PRIMARY KEY,
+    hardware_id TEXT,
     model TEXT,
     resolution TEXT,
     fps_target INTEGER,
@@ -436,6 +438,7 @@ CREATE TABLE cameras (
     recording_mode TEXT,
     state_msg TEXT,
     ip TEXT,
+    http_port INTEGER,
     mac TEXT,
     recording_server_device_id INTEGER,
     enabled INTEGER,

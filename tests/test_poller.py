@@ -244,3 +244,36 @@ def test_disabled_device_does_not_make_an_ip_ambiguous(tmp_path):
     poller = Poller(engine, cfg, ping_sweep=all_alive)
     assert asyncio.run(poller.sweep_ping()) == 1
     assert db.fetch_one(engine, "SELECT value FROM device_state")["value"] == "up"
+
+
+def test_ambiguous_ips_counts_physical_devices_not_rows():
+    """Camera rows of one device are not rivals for its address.
+
+    Milestone models a camera as a channel of a hardware record, and 61 devices
+    on this estate carry more than one — an AXIS M3007 panoramic carries eleven,
+    all behind a single network interface. Counting rows made those eleven look
+    like eleven claimants and refused a verdict that was never in doubt,
+    stranding 239 cameras at unknown.
+    """
+    from netmon.poller.poller import Poller
+
+    eleven_channels = [{"id": i, "mgmt_ip": "10.88.18.190", "hardware_id": "HW1"}
+                       for i in range(1, 12)]
+    assert Poller._ambiguous_ips(eleven_channels) == set()
+
+    # Two *different* devices on one address is the case the guard exists for
+    # (oak-DEAD / DEAD_AP, 2026-07-28) and must still be refused.
+    two_devices = [{"id": 1, "mgmt_ip": "10.0.0.9", "hardware_id": None},
+                   {"id": 2, "mgmt_ip": "10.0.0.9", "hardware_id": None}]
+    assert Poller._ambiguous_ips(two_devices) == {"10.0.0.9"}
+
+    # Two different cameras on one address — the live 10.132.18.209 case, where
+    # a Bosch 5000i and 5100i are both registered. Still ambiguous.
+    two_cameras = [{"id": 3, "mgmt_ip": "10.132.18.209", "hardware_id": "HWa"},
+                   {"id": 4, "mgmt_ip": "10.132.18.209", "hardware_id": "HWb"}]
+    assert Poller._ambiguous_ips(two_cameras) == {"10.132.18.209"}
+
+    # A camera sharing an address with a switch is a genuine conflict too.
+    mixed = [{"id": 5, "mgmt_ip": "10.0.0.5", "hardware_id": "HW1"},
+             {"id": 6, "mgmt_ip": "10.0.0.5", "hardware_id": None}]
+    assert Poller._ambiguous_ips(mixed) == {"10.0.0.5"}

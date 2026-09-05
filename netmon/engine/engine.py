@@ -57,15 +57,36 @@ class AlertEngine:
     def _rules(self) -> list[dict[str, Any]]:
         return db.fetch_all(
             self.engine,
-            "SELECT id, name, dimension, `condition`, severity, min_duration_s, target "
-            "FROM alert_rules WHERE enabled = 1",
+            "SELECT id, name, dimension, device_types, `condition`, severity, "
+            "min_duration_s, target FROM alert_rules WHERE enabled = 1",
         )
 
-    def _states(self, dimension: str) -> list[dict[str, Any]]:
+    def _states(self, dimension: str, device_types: str | None = None) -> list[dict[str, Any]]:
+        """State rows for a dimension, optionally narrowed to some device types.
+
+        A rule keyed on dimension alone fires for anything carrying that row,
+        which stops being right once a dimension means different things to
+        different hardware. ICMP silence is "down" for a switch and merely "this
+        model does not answer" for 193 of the cameras here, every one of which
+        Milestone reports recording. NULL keeps the fleet-wide behaviour every
+        existing rule had.
+        """
+        types = [t.strip() for t in (device_types or "").split(",") if t.strip()]
+        if not types:
+            return db.fetch_all(
+                self.engine,
+                "SELECT device_id, value, updated_at FROM device_state WHERE dimension = :d",
+                {"d": dimension},
+            )
+        keys = [f":t{i}" for i in range(len(types))]
+        params: dict[str, Any] = {"d": dimension}
+        params.update({f"t{i}": t for i, t in enumerate(types)})
         return db.fetch_all(
             self.engine,
-            "SELECT device_id, value, updated_at FROM device_state WHERE dimension = :d",
-            {"d": dimension},
+            "SELECT s.device_id AS device_id, s.value AS value, s.updated_at AS updated_at "
+            "FROM device_state s JOIN devices d ON d.id = s.device_id "
+            f"WHERE s.dimension = :d AND d.device_type IN ({', '.join(keys)})",
+            params,
         )
 
     def _held_since(self, device_id: int, dimension: str, fallback: Any) -> datetime | None:
@@ -114,7 +135,7 @@ class AlertEngine:
         flags = self._reachability_flags()
         for rule in self._rules():
             matched: set[int] = set()
-            for st in self._states(rule["dimension"]):
+            for st in self._states(rule["dimension"], rule.get("device_types")):
                 if not rules.evaluate(rule["condition"], st.get("value")):
                     continue
                 device_id = int(st["device_id"])

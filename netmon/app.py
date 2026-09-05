@@ -34,6 +34,7 @@ from netmon.api import (
 from netmon.auth.sessions import DbSessionStore, SessionStore
 from netmon.engine.engine import AlertEngine
 from netmon.history import HistorySampler
+from netmon.reachability import ReachabilityDeriver
 from netmon.collectors.milestone import MilestoneCollector, MilestoneError
 from netmon.collectors.packetfence import PfCollector
 from netmon.collectors.pf_client import PfError
@@ -144,6 +145,13 @@ def register_tasks(app: FastAPI, cfg: Config, engine) -> None:
                             interval_s=sampler.interval_s, timeout_s=sampler.timeout_s)
         log.info("history sampler enabled: %ss, retain %dh",
                  cfg.history.interval_s, cfg.history.retention_hours)
+
+    # Derives the reachability tier from source_status + ping. Pure DB, no
+    # source calls, so it is always on: it cannot fail an integration and its
+    # absence would leave the tier rules matching nothing at all.
+    reach = ReachabilityDeriver(engine)
+    supervisor.register("reachability", reach.run_guarded,
+                        interval_s=reach.interval_s, timeout_s=reach.timeout_s)
 
 
 @asynccontextmanager

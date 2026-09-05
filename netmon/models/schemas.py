@@ -35,6 +35,11 @@ class Dimension(str, Enum):
     config_backup = "config_backup"
     recording = "recording"
     trunk = "trunk"
+    # Derived from source_status + ping — which probes agree, not just whether
+    # something is down. See netmon/reachability.py and migration 024. The enum
+    # lives in four places (this, device_state, alert_rules, state_events) and
+    # all four have to know a new dimension.
+    reachability = "reachability"
 
 
 class Severity(str, Enum):

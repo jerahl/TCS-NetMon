@@ -130,3 +130,41 @@ def test_surveillance_voip_require_auth(tmp_path):
     with TestClient(create_app(config=load_config(conf), supervisor=Supervisor())) as client:
         assert client.get("/api/surveillance/summary").status_code == 401
         assert client.get("/api/voip/trunks").status_code == 401
+
+
+def test_summary_never_reports_zero_used_storage_when_it_is_unknown(tmp_path):
+    """The Config API exposes configured size but not consumed space.
+
+    Coercing that unknown to 0 let the UI divide a real 1.8 PB total by a
+    fabricated zero and render "0% used" across the estate — a confident wrong
+    number where an honest gap belongs (§4.5). Consumed space is the WinRM
+    dependency (OpenProject #111).
+    """
+    url = f"sqlite:///{tmp_path/'s.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    with engine.begin() as c:
+        c.execute(text("UPDATE recording_servers SET storage_total_gb = 120600, "
+                       "storage_used_gb = NULL, retention_days = 61"))
+    engine.dispose()
+
+    with _client(tmp_path, url) as client:
+        s = client.get("/api/surveillance/summary").json()
+        assert s["storage_total_gb"] == 120600      # configured is real
+        assert s["storage_used_gb"] is None         # and must stay unknown
+        assert s["storage_used_known"] is False     # so the UI can say why
+
+
+def test_summary_reports_used_storage_when_it_is_known(tmp_path):
+    """The flag must not hard-code "unknown" — a real reading still gets through."""
+    url = f"sqlite:///{tmp_path/'s.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    with engine.begin() as c:
+        c.execute(text("UPDATE recording_servers SET storage_total_gb = 100, "
+                       "storage_used_gb = 40"))
+    engine.dispose()
+
+    with _client(tmp_path, url) as client:
+        s = client.get("/api/surveillance/summary").json()
+        assert s["storage_used_gb"] == 40 and s["storage_used_known"] is True
