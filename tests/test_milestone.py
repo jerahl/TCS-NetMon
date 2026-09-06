@@ -682,3 +682,45 @@ def test_identity_backfill_can_be_disabled(tmp_path):
     row = db.fetch_one(e, "SELECT mac, ip FROM cameras")
     assert row["mac"] is None
     assert row["ip"] == "192.0.2.60"     # the rest of the cycle is unaffected
+
+
+def test_transport_error_names_a_cause():
+    """An error whose message is empty tells an operator nothing.
+
+    httpx timeout exceptions stringify to "", so interpolating the exception
+    alone wrote `MilestoneError('Milestone transport error on
+    /api/rest/v1/cameras: ')` into collector_health — no cause, no next step.
+    The exception class is the diagnosis: ReadTimeout means the gateway was
+    slow, ConnectError means it was not there, and those need different
+    responses (§4.5).
+    """
+    import httpx
+    import pytest
+
+    from netmon.collectors.milestone_client import MilestoneClient
+
+    client = MilestoneClient(host="ms.invalid", user="u", password="p")
+    client._token = "t"
+
+    class Boom:
+        async def get(self, path, headers=None):
+            raise httpx.ReadTimeout("")          # exactly what the gateway raises
+
+    with pytest.raises(MilestoneError) as err:
+        asyncio.run(client._get(Boom(), "/api/rest/v1/cameras"))
+    msg = str(err.value)
+    assert "ReadTimeout" in msg, f"the cause must survive into the message: {msg}"
+    assert "/api/rest/v1/cameras" in msg
+    assert not msg.rstrip().endswith(":"), "message must not trail off with no detail"
+
+
+def test_bulk_endpoints_get_a_longer_timeout_than_the_default():
+    """/cameras and /hardware are multi-megabyte responses whose latency is
+    variable; the 30s default cost roughly one Milestone cycle in four. Both
+    stay under the collector's 120s supervisor boundary so a genuine hang is
+    still caught rather than waited out."""
+    from netmon.collectors.milestone_client import BULK_TIMEOUT, HARDWARE_TIMEOUT, TIMEOUT
+
+    assert BULK_TIMEOUT > TIMEOUT
+    assert BULK_TIMEOUT < 120.0
+    assert HARDWARE_TIMEOUT > TIMEOUT

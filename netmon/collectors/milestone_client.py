@@ -18,7 +18,20 @@ TIMEOUT = 30.0
 # The hardware tree is ~2,500 records on this deployment and the 30s default
 # reliably timed out against the live gateway (measured 2026-07-28; 180s
 # succeeded). Scoped to that one call so every other failure stays fast.
+#
+# Note this exceeds the collector's own supervisor boundary (timeout_s =
+# max(60, interval_s) = 120s at the default interval), so a genuinely hung
+# /hardware is cancelled by the supervisor at 120s rather than by httpx here.
+# Both paths record a failure, so it fails loud either way.
 HARDWARE_TIMEOUT = 180.0
+# /cameras returns ~2,662 records / 2.9 MB and its latency is highly variable:
+# measured 5.5, 14.0, 18.9, 7.4, 19.2 and 8.5 seconds across six consecutive
+# calls (2026-09-06). Against the 30s default that spikes over the limit often
+# enough to cost roughly one cycle in four — 187 timeouts over three days,
+# each one a skipped inventory and state refresh. Same reasoning as the
+# hardware tree, and still well inside the supervisor's 120s boundary so a real
+# hang is caught rather than waited out.
+BULK_TIMEOUT = 60.0
 
 
 class MilestoneError(Exception):
@@ -101,7 +114,15 @@ class MilestoneClient:
             try:
                 resp = await client.get(path, headers=headers)
             except httpx.HTTPError as exc:
-                raise MilestoneError(f"Milestone transport error on {path}: {exc}") from exc
+                # httpx timeout exceptions stringify to "", so interpolating the
+                # exception alone produced "Milestone transport error on
+                # /api/rest/v1/cameras: " in collector_health — an error that
+                # names no cause. The class is the diagnosis here: ReadTimeout
+                # says the gateway was slow, ConnectError says it was not there,
+                # and those want different responses (§4.5).
+                detail = str(exc) or "no detail"
+                raise MilestoneError(
+                    f"Milestone {type(exc).__name__} on {path}: {detail}") from exc
             if resp.status_code == 401 and attempt == 1:
                 self._token = None
                 await self._get_token(client)
@@ -120,7 +141,11 @@ class MilestoneClient:
         return _items(data)
 
     async def cameras(self) -> list[dict]:
-        async with await self._mkclient() as client:
+        """Every camera. ~2,662 records / 2.9 MB here, so it gets BULK_TIMEOUT —
+        the response is slow and jittery enough to cross the 30s default about
+        one cycle in four, and a timeout here loses the whole cycle."""
+        async with httpx.AsyncClient(base_url=self._base, timeout=BULK_TIMEOUT,
+                                     verify=self._verify) as client:
             data = await self._get(client, "/api/rest/v1/cameras")
         return _items(data)
 
