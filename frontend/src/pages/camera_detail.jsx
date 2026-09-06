@@ -110,6 +110,13 @@ export function CameraDetailView({ cam, meta, embedded = false }) {
             <table className="grid kv">
               <tbody>
                 <tr><td>Model</td><td>{cam.model || "—"}</td></tr>
+                {/* Device identity, from hardwareDriverSettings (migration 025).
+                    Per hardware, so every camera on a multi-camera device shows
+                    the same values — they are one physical device. */}
+                <tr><td>Vendor</td><td>{cam.vendor || "—"}</td></tr>
+                <tr><td>Firmware</td><td className="mono">{cam.firmware || "—"}</td></tr>
+                <tr><td>Serial</td><td className="mono">{cam.serial || "—"}</td></tr>
+                <tr><td>MAC</td><td className="mono">{cam.mac || <span className="dim">not yet collected</span>}</td></tr>
                 <tr><td>Resolution</td><td className="mono">{cam.resolution || "—"}</td></tr>
                 <tr><td>FPS target</td><td className="mono">{cam.fps_target ?? "—"}</td></tr>
                 <tr><td>Codec</td><td className="mono">{cam.codec || "—"}</td></tr>

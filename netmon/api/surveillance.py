@@ -185,13 +185,15 @@ def camera_detail(
     engine: Engine = Depends(get_engine),
     _user=Depends(require_role(Role.viewer)),
 ) -> dict:
-    # The detail page needs three columns the list does not: `hardware_id` to
-    # find the other cameras on the same physical device, `http_port` because
-    # six cameras here sit on a non-default port, and `bitrate_mode`. Selecting
-    # them only here keeps the 2,651-row list query narrow.
+    # Columns the detail page needs and the list does not: `hardware_id` to find
+    # the other cameras on the same physical device, `http_port` because six
+    # cameras here sit on a non-default port, and the device's own identity
+    # (firmware/serial/vendor, migration 025). Selecting them only here keeps
+    # the 2,651-row list query narrow.
     row = db.fetch_one(
         engine,
-        f"SELECT {_CAMERA_COLS}, c.hardware_id, c.http_port, c.bitrate_mode "
+        f"SELECT {_CAMERA_COLS}, c.hardware_id, c.http_port, c.bitrate_mode, "
+        f"c.firmware, c.serial, c.vendor "
         f"{_CAMERA_FROM} WHERE c.device_id = :d", {"d": device_id})
     if row is None:
         raise HTTPException(status_code=404, detail="camera not found")
