@@ -179,7 +179,19 @@ function CameraSiteGrid({ onPick }) {
 // Split from the fetch above so the render check can exercise it with fixed
 // rows — a component that only renders after a fetch never runs server-side.
 export function SiteTiles({ rows, filter, onFilter, onPick }) {
+  // Counts are coerced rather than trusted. They arrive from SQL SUM(), which
+  // MariaDB returns as Decimal and FastAPI once serialised as a quoted string —
+  // and a quoted count fails silently in both directions here: "1" + "0" is
+  // "10" on the badge, and "0" is truthy, so every site scored as a failure.
+  // db.py fixes that at the source; this keeps the component correct on its own.
+  const n = (v) => Number(v) || 0;
   const scored = rows.map((r) => ({
+    ...r,
+    total: n(r.total), up: n(r.up), recording: n(r.recording), blind: n(r.blind),
+    down_confirmed: n(r.down_confirmed),
+    down_source_only: n(r.down_source_only),
+    down_network_only: n(r.down_network_only),
+  })).map((r) => ({
     ...r,
     // Blind ranks with the warnings, not the failures: it is the source saying
     // it cannot tell, which is not evidence of an outage.

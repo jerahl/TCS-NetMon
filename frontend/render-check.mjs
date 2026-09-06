@@ -54,6 +54,27 @@ const cases = [
     ],
     filter: "all", onFilter: () => {}, onPick: () => {} }],
 
+  // Counts as quoted strings — what MariaDB's Decimal SUM() serialised to
+  // before db.py coerced it. Rendered "011010084717…" in the footer instead of
+  // a total, showed "10" on a badge for 1 down + 0 unreachable, and made every
+  // tile red because "0" is truthy. Asserted below, not just rendered.
+  ["SiteTiles · counts arriving as strings", S.SiteTiles, {
+    rows: [
+      { site: "MLK", total: 114, up: "83", down_confirmed: "11",
+        down_source_only: "0", down_network_only: "20", blind: "20", recording: "94" },
+      { site: "Skyland", total: 59, up: "59", down_confirmed: "0",
+        down_source_only: "0", down_network_only: "0", blind: "0", recording: "59" },
+    ],
+    filter: "all", onFilter: () => {}, onPick: () => {} },
+   (html) => {
+     // React SSR puts <!-- --> between adjacent text nodes, so match on the
+     // text as a reader sees it rather than on the raw markup.
+     const text = html.replace(/<!-- -->/g, "");
+     if (!text.includes("11 camera(s) down")) throw new Error("footer did not add up");
+     if (text.includes("110")) throw new Error("counts concatenated instead of adding");
+     if (!text.includes("✓")) throw new Error("a site with nothing wrong scored as a failure");
+   }],
+
   // Camera detail with everything resolved: the path where the port is known
   // and PoE cycling is offered.
   ["CameraDetailView · full uplink", D.CameraDetailView, {
@@ -84,9 +105,12 @@ const cases = [
 ];
 
 let failed = 0;
-for (const [name, Comp, props] of cases) {
+for (const [name, Comp, props, assert] of cases) {
   try {
     const html = renderToString(React.createElement(Comp, props));
+    // A component that renders without throwing can still render nonsense, so
+    // a case may carry an assertion over the produced HTML.
+    if (assert) assert(html);
     console.log(`  ok    ${name}  (${html.length} chars)`);
   } catch (e) {
     failed++;
