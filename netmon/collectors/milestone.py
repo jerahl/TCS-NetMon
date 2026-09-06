@@ -214,7 +214,7 @@ class MilestoneCollector(Collector):
     name = "milestone"
 
     def __init__(self, engine: Engine, client: MilestoneClient, interval_s: float = 120.0,
-                 ess_enabled: bool = True) -> None:
+                 ess_enabled: bool = True, blind_after_failures: int = 3) -> None:
         super().__init__(engine)
         self.client = client
         # One WebSocket getState per cycle (~4 MB on this estate). Default on
@@ -222,6 +222,10 @@ class MilestoneCollector(Collector):
         # disableable without a deploy, and failure is soft either way.
         self.ess_enabled = ess_enabled
         self._etypes: dict[str, str] = {}
+        # Consecutive failures before declaring every device blind. One blip
+        # must not erase good state; a real outage must not read as healthy.
+        self.blind_after_failures = blind_after_failures
+        self._consecutive_failures = 0
         self.interval_s = interval_s
         self.timeout_s = max(60.0, interval_s)
 
@@ -322,10 +326,34 @@ class MilestoneCollector(Collector):
             servers = await self.client.recording_servers()
             cameras = await self.client.cameras()
         except MilestoneError:
-            for r in registry.values():
-                write_state(self.engine, int(r["id"]), "source_status", "blind", "warn", "milestone")
+            # Do NOT blind every device on a single transport error. CLAUDE.md
+            # §4.5 says a failing collector records the failure and leaves prior
+            # state *visibly stale*, never overwrites it — and this path was
+            # doing the overwrite. On 2026-09-06 one transient error on
+            # /cameras wiped ESS-derived status for all 2,659 cameras 90 seconds
+            # after a clean cycle, and the result read as "0 cameras down": a
+            # total recovery, from losing the signal. That is the most dangerous
+            # shape a monitoring bug can take.
+            #
+            # Blind is still written when the source is *persistently* gone,
+            # because then "we cannot see" is the truth and stale rows would
+            # read as healthy. The threshold distinguishes a blip from an
+            # outage; collector_health records the failure either way.
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= self.blind_after_failures:
+                for r in registry.values():
+                    write_state(self.engine, int(r["id"]), "source_status",
+                                "blind", "warn", "milestone")
+                log.warning("milestone unreachable for %d consecutive cycle(s) — "
+                            "marking %d device(s) blind",
+                            self._consecutive_failures, len(registry))
+            else:
+                log.warning("milestone cycle failed (%d/%d before blinding); prior "
+                            "state left stale rather than overwritten",
+                            self._consecutive_failures, self.blind_after_failures)
             raise
 
+        self._consecutive_failures = 0
         now = datetime.now(timezone.utc)
         written = 0
         # Declared here because the ESS status fetch below can degrade, and it

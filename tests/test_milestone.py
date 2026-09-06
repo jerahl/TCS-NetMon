@@ -85,14 +85,22 @@ def test_milestone_blind_on_unreachable(tmp_path):
     asyncio.run(ms.run_once())
 
     fake.fail = MilestoneError("gateway down")
+    # A source that is genuinely gone must go blind — stale rows would read as
+    # healthy. But that now takes a *persistent* failure: one blip used to
+    # overwrite good state for the whole estate, which on 2026-09-06 turned a
+    # transient error into an apparent full recovery.
     asyncio.run(ms.run_guarded())
+    src = _state(engine, "source_status")
+    assert src["RS1"]["value"] != "blind", "one failure must not blind the estate"
+
+    for _ in range(ms.blind_after_failures - 1):
+        asyncio.run(ms.run_guarded())
 
     src = _state(engine, "source_status")
-    # Every tracked Milestone device goes blind (source unreachable), not left fresh.
     assert src["RS1"]["value"] == "blind"
     assert src["CAM1"]["value"] == "blind"
     h = db.fetch_one(engine, "SELECT * FROM collector_health WHERE name='milestone'")
-    assert h["consecutive_failures"] == 1
+    assert h["consecutive_failures"] == ms.blind_after_failures
 
 
 # ---- Phase 10.4 inventory persistence ---------------------------------------
@@ -449,3 +457,83 @@ def test_recording_state_is_not_derived_from_the_ess(tmp_path):
     assert set(ESS_COMMUNICATION) == {
         "CommunicationStarted", "CommunicationError", "CommunicationStopped"}
     assert not any("Recording" in k or "FPS" in k for k in ESS_COMMUNICATION)
+
+
+def test_a_single_transport_error_does_not_blind_the_estate(tmp_path):
+    """One blip must not erase good state.
+
+    On 2026-09-06 a single transient error on /cameras overwrote ESS-derived
+    status for all 2,659 cameras 90 seconds after a clean cycle, and the result
+    read as "0 cameras down" — a total recovery, produced by losing the signal.
+    CLAUDE.md §4.5 requires a failing collector to record the failure and leave
+    prior state visibly stale, never to overwrite it.
+    """
+    from netmon.collectors.milestone_client import MilestoneError
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.servers = [{"id": "RS1", "hostName": "nvr-1", "running": True}]
+    fake.cameras_data = [{"id": "CAM1", "recordingEnabled": True}]
+    col = MilestoneCollector(engine, fake, ess_enabled=False)
+    asyncio.run(col.run_once())                      # good state first
+
+    before = {r["device_id"]: r["value"] for r in db.fetch_all(
+        engine, "SELECT device_id, value FROM device_state WHERE dimension='source_status'")}
+    assert before, "expected state from the healthy cycle"
+
+    fake.fail = MilestoneError("transient")
+    for _ in range(2):                               # below the threshold
+        try:
+            asyncio.run(col.run_once())
+        except MilestoneError:
+            pass
+
+    after = {r["device_id"]: r["value"] for r in db.fetch_all(
+        engine, "SELECT device_id, value FROM device_state WHERE dimension='source_status'")}
+    assert after == before, "prior state must survive a blip, not be blinded"
+
+
+def test_a_persistent_outage_does_blind(tmp_path):
+    """A source that is genuinely gone must not read as healthy — stale rows
+    would. Past the threshold, blind is the honest answer."""
+    from netmon.collectors.milestone_client import MilestoneError
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.servers = [{"id": "RS1", "hostName": "nvr-1", "running": True}]
+    fake.cameras_data = [{"id": "CAM1", "recordingEnabled": True}]
+    col = MilestoneCollector(engine, fake, ess_enabled=False, blind_after_failures=3)
+    asyncio.run(col.run_once())
+
+    fake.fail = MilestoneError("gone")
+    for _ in range(3):
+        try:
+            asyncio.run(col.run_once())
+        except MilestoneError:
+            pass
+
+    vals = {r["value"] for r in db.fetch_all(
+        engine, "SELECT value FROM device_state WHERE dimension='source_status'")}
+    assert vals == {"blind"}
+
+
+def test_the_failure_counter_resets_on_success(tmp_path):
+    """Two blips a week apart must not add up to an outage."""
+    from netmon.collectors.milestone_client import MilestoneError
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.servers = [{"id": "RS1", "hostName": "nvr-1", "running": True}]
+    fake.cameras_data = [{"id": "CAM1", "recordingEnabled": True}]
+    col = MilestoneCollector(engine, fake, ess_enabled=False, blind_after_failures=3)
+
+    for _ in range(2):
+        fake.fail = MilestoneError("blip")
+        try:
+            asyncio.run(col.run_once())
+        except MilestoneError:
+            pass
+        fake.fail = None
+        asyncio.run(col.run_once())
+
+    assert col._consecutive_failures == 0
+    vals = {r["value"] for r in db.fetch_all(
+        engine, "SELECT value FROM device_state WHERE dimension='source_status'")}
+    assert "blind" not in vals
