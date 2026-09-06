@@ -206,11 +206,16 @@ def camera_detail(
                         "SELECT dimension, value, severity, source, updated_at "
                         "FROM device_state WHERE device_id = :d", {"d": device_id})}
 
-    # Milestone exposes no camera MAC at all, so the FDB join has no key of its
-    # own. PacketFence does know IP → MAC, and it bridges the gap for 1,532 of
-    # 2,651 cameras. The resolved MAC then goes through the same access-port
-    # logic the AP page uses — trunk-avoidance included, because a camera's MAC
-    # appears on every uplink in its path just as an AP's does.
+    # Milestone does expose a camera MAC — in hardwareDriverSettings, one
+    # resource below /hardware (migration 025). It is the better key: on the
+    # first 155 cameras backfilled, 152 were found in the FDB against 124 whose
+    # IP PacketFence had seen. PacketFence stays as the fallback for cameras the
+    # backfill has not reached, and as the independent second opinion on which
+    # port is the access port.
+    #
+    # Either way the MAC goes through the same access-port logic the AP page
+    # uses — trunk-avoidance included, because a camera's MAC appears on every
+    # uplink in its path just as an AP's does.
     out["pf"] = None
     out["switch_port"] = None
     if out.get("ip"):

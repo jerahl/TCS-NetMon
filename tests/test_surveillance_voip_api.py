@@ -298,9 +298,13 @@ def test_camera_detail_carries_probe_state_and_siblings(tmp_path):
 
 
 def test_camera_detail_resolves_port_through_packetfence_when_milestone_has_no_mac(tmp_path):
-    """Milestone exposes no camera MAC, so most cameras have none in `cameras`.
-    PacketFence knows IP → MAC and bridges the gap; without that bridge the
-    port pane would be empty for the majority of the estate."""
+    """The fallback for cameras the Milestone identity backfill has not reached.
+
+    Milestone does expose a MAC (migration 025), but it arrives a batch at a
+    time, so at any moment some cameras still have none. PacketFence knows
+    IP -> MAC and covers those; without the fallback their port pane would go
+    blank until the backfill caught up.
+    """
     url = f"sqlite:///{tmp_path/'s.db'}"
     _seed(url)
     engine = db.make_engine(url)

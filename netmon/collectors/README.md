@@ -153,8 +153,26 @@ Ported from `reference/zabbix/milestone/*`.
   tested (forced-disconnect / watchdog), and runnable standalone. **Wiring it
   to a live Milestone socket needs the `websockets` dependency (owner approval
   pending)** — until then the Config-API poll provides state.
+- **Device identity backfill** (`/api/rest/v1/hardware/{id}/hardwareDriverSettings`):
+  MAC, serial, firmware and vendor per hardware record → `cameras.mac/serial/
+  firmware/vendor` (migration 025). **This is the only place Milestone exposes a
+  camera MAC** — neither `/cameras` nor `/hardware` carries one, which is why
+  `cameras.mac` was NULL estate-wide for months even though the Management
+  Client shows a MAC for every camera.
+  - *Rate limit shape:* no collection form. Asking for `/hardwareDriverSettings`
+    without a parent answers HTTP 400 telling you to prefix it, so this is one
+    request per hardware record at ~300 ms — ~12 min for 2,489 if swept whole.
+    Each cycle therefore fetches at most `identity_batch` of the records still
+    missing a MAC; at the defaults the estate fills in ~30 min and then costs
+    nothing, since the values are static.
+  - *Failure mode:* soft and per-record. A hardware that errors leaves its
+    cameras NULL and adds `identity` to the overview's `degraded` list, so a
+    stalled backfill is distinguishable from a finished one.
+  - *Gotcha:* an unrecognised query param on this API returns `{"array": []}`
+    rather than an error — `/hardware?fields=all` reports zero hardware. Treat
+    an unexpectedly empty array as a malformed request, not an empty fleet.
 - **Config:** `[milestone] enabled, host, user, pass, scheme, client_id,
-  verify_ssl, interval_s`.
+  verify_ssl, interval_s, identity_batch, identity_concurrency`.
 
 Both collectors are standalone-runnable
 (`python -m netmon.collectors.packetfence|milestone --once|--loop`).

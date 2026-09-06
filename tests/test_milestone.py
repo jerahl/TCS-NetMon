@@ -15,6 +15,10 @@ class FakeMs:
         self.cameras_data = []
         self.storage_data = []
         self.hardware_data = []
+        # hardwareDriverSettings: the only place Milestone exposes a camera MAC.
+        self.settings_data = {}
+        self.settings_calls = []
+        self.settings_fail = None
         self.fail = None
         self.storage_fail = None
 
@@ -35,6 +39,12 @@ class FakeMs:
 
     async def hardware(self):
         return self.hardware_data
+
+    async def hardware_driver_settings(self, hardware_id):
+        self.settings_calls.append(hardware_id)
+        if self.settings_fail:
+            raise self.settings_fail
+        return self.settings_data.get(hardware_id, {})
 
 
 def _engine(tmp_path):
@@ -251,7 +261,7 @@ def test_camera_hardware_resolves_via_relations_parent():
     assert len(rows) == 1
     assert rows[0]["ip"] == "192.0.2.10", "URL-shaped address must reduce to a bare host"
     assert rows[0]["model"] == "FAKE-CAM"
-    assert rows[0]["mac"] is not None, "hardware MAC is the only MAC source"
+    assert rows[0]["mac"] is not None, "the hardware MAC still reaches the row"
 
 
 def test_camera_hardware_link_tolerates_other_shapes():
@@ -537,3 +547,138 @@ def test_the_failure_counter_resets_on_success(tmp_path):
     vals = {r["value"] for r in db.fetch_all(
         engine, "SELECT value FROM device_state WHERE dimension='source_status'")}
     assert "blind" not in vals
+
+
+def _cam(cid, hw):
+    return {"id": cid, "name": cid, "enabled": True,
+            "relations": {"parent": {"type": "hardware", "id": hw}}}
+
+
+def _identity_engine(tmp_path, cam_ids):
+    """Registry with one device per camera GUID, so every camera links."""
+    e = db.make_engine(f"sqlite:///{tmp_path / 'id.db'}")
+    create_core_tables(e)
+    with e.begin() as conn:
+        for cid in cam_ids:
+            conn.execute(text(
+                "INSERT INTO devices (name, site, device_type, enabled, "
+                "milestone_hardware_id) VALUES (:n,'S','camera',1,:m)"),
+                {"n": cid, "m": cid})
+    return e
+
+
+def test_camera_mac_comes_from_hardware_driver_settings(tmp_path):
+    """The MAC is not on /cameras or /hardware — it is one resource deeper.
+
+    NetMon looked on both for months and wrote NULL for all 2,651 cameras while
+    the Management Client displayed a MAC for every one of them, because the
+    Management Client reads hardwareDriverSettings and NetMon never did.
+    """
+    e = _identity_engine(tmp_path, ["C1"])
+    fake = FakeMs()
+    fake.cameras_data = [_cam("C1", "HW1")]
+    fake.hardware_data = [{"id": "HW1", "address": "http://192.0.2.60/"}]
+    fake.settings_data = {"HW1": {"macAddress": "00075FD83950", "serialNumber": "d83950",
+                                  "firmwareVersion": "900", "productID": "Bosch"}}
+    asyncio.run(MilestoneCollector(e, fake).run_once())
+
+    row = db.fetch_one(e, "SELECT mac, serial, firmware, vendor FROM cameras")
+    assert row["mac"] == "00:07:5f:d8:39:50"      # canonicalised on the way in
+    assert row["serial"] == "d83950"
+    assert row["firmware"] == "900"
+    assert row["vendor"] == "Bosch"
+
+
+def test_every_camera_on_one_device_shares_its_mac(tmp_path):
+    """One hardware, one NIC, one MAC — however many cameras hang off it.
+
+    61 hardware records here carry more than one camera (eleven on one AXIS
+    M3007). Fetching per camera would issue eleven identical requests and, if
+    the settings were keyed per camera, would leave ten of them NULL.
+    """
+    e = _identity_engine(tmp_path, ["C1", "C2", "C3"])
+    fake = FakeMs()
+    fake.cameras_data = [_cam("C1", "HW1"), _cam("C2", "HW1"), _cam("C3", "HW1")]
+    fake.hardware_data = [{"id": "HW1", "address": "http://192.0.2.60/"}]
+    fake.settings_data = {"HW1": {"macAddress": "00075FD83950"}}
+    asyncio.run(MilestoneCollector(e, fake).run_once())
+
+    macs = [r["mac"] for r in db.fetch_all(e, "SELECT mac FROM cameras")]
+    assert macs == ["00:07:5f:d8:39:50"] * 3
+    # One request for the device, not one per camera.
+    assert fake.settings_calls == ["HW1"]
+
+
+def test_identity_backfill_is_bounded_per_cycle(tmp_path):
+    """There is no collection form of hardwareDriverSettings, so this is one
+    request per hardware at ~300 ms. Sweeping 2,489 every 120 s cycle would be
+    ~12 minutes of gateway traffic every two minutes."""
+    ids = [f"C{i}" for i in range(10)]
+    e = _identity_engine(tmp_path, ids)
+    fake = FakeMs()
+    fake.cameras_data = [_cam(c, f"HW{i}") for i, c in enumerate(ids)]
+    fake.hardware_data = [{"id": f"HW{i}"} for i in range(10)]
+    fake.settings_data = {f"HW{i}": {"macAddress": f"00075FD839{i:02d}"} for i in range(10)}
+
+    col = MilestoneCollector(e, fake, identity_batch=4)
+    asyncio.run(col.run_once())
+    assert len(fake.settings_calls) == 4
+    assert db.fetch_one(e, "SELECT COUNT(*) n FROM cameras WHERE mac IS NOT NULL")["n"] == 4
+
+    # Next cycle picks up where it left off and does not re-fetch what is known.
+    fake.settings_calls.clear()
+    asyncio.run(col.run_once())
+    assert len(fake.settings_calls) == 4
+    assert db.fetch_one(e, "SELECT COUNT(*) n FROM cameras WHERE mac IS NOT NULL")["n"] == 8
+
+
+def test_known_macs_survive_a_cycle_that_does_not_refetch_them(tmp_path):
+    """`replace_rows` rewrites the whole camera row, so a MAC that is not
+    re-supplied would be silently blanked. The backfill reads what is already
+    stored before deciding what to fetch, which is what keeps it stable."""
+    e = _identity_engine(tmp_path, ["C1"])
+    fake = FakeMs()
+    fake.cameras_data = [_cam("C1", "HW1")]
+    fake.hardware_data = [{"id": "HW1"}]
+    fake.settings_data = {"HW1": {"macAddress": "00075FD83950", "firmwareVersion": "900"}}
+    col = MilestoneCollector(e, fake)
+    asyncio.run(col.run_once())
+
+    fake.settings_calls.clear()
+    asyncio.run(col.run_once())
+    assert fake.settings_calls == []                      # nothing left to fetch
+    row = db.fetch_one(e, "SELECT mac, firmware FROM cameras")
+    assert row["mac"] == "00:07:5f:d8:39:50"              # and it is still there
+    assert row["firmware"] == "900"
+
+
+def test_identity_backfill_failure_is_soft_and_reported(tmp_path):
+    """A camera whose hardware could not be read keeps NULL rather than losing
+    the cycle — but the overview must say the enrichment degraded, or a stalled
+    backfill looks exactly like a finished one (§4.5)."""
+    e = _identity_engine(tmp_path, ["C1"])
+    fake = FakeMs()
+    fake.cameras_data = [_cam("C1", "HW1")]
+    fake.hardware_data = [{"id": "HW1"}]
+    fake.settings_fail = MilestoneError("boom")
+    asyncio.run(MilestoneCollector(e, fake).run_once())
+
+    assert db.fetch_one(e, "SELECT mac FROM cameras")["mac"] is None
+    overview = read_snapshot(e, "milestone.overview")["payload"]
+    assert "identity" in overview["degraded"]
+
+
+def test_identity_backfill_can_be_disabled(tmp_path):
+    """Per-step reversibility (§4.3): the batch size is the off switch, and
+    turning it off must not disturb the rest of the cycle."""
+    e = _identity_engine(tmp_path, ["C1"])
+    fake = FakeMs()
+    fake.cameras_data = [_cam("C1", "HW1")]
+    fake.hardware_data = [{"id": "HW1", "address": "http://192.0.2.60/"}]
+    fake.settings_data = {"HW1": {"macAddress": "00075FD83950"}}
+    asyncio.run(MilestoneCollector(e, fake, identity_batch=0).run_once())
+
+    assert fake.settings_calls == []
+    row = db.fetch_one(e, "SELECT mac, ip FROM cameras")
+    assert row["mac"] is None
+    assert row["ip"] == "192.0.2.60"     # the rest of the cycle is unaffected

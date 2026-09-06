@@ -155,7 +155,7 @@ export function CameraDetailView({ cam, meta, embedded = false }) {
             {!sp ? (
               <div className="msg">
                 {cam.ip
-                  ? "No switch has learned this camera's MAC. Milestone exposes no camera MAC, so the port is resolved through PacketFence's IP→MAC record — which covers 1,532 of 2,651 cameras."
+                  ? "No switch has learned this camera's MAC. The MAC comes from Milestone where the identity backfill has reached the device, and from PacketFence's IP→MAC record otherwise; a camera on a switch NetMon does not sweep has no FDB row either way."
                   : "No address, so no way to resolve a port."}
               </div>
             ) : (

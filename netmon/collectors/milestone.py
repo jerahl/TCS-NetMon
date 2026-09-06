@@ -19,6 +19,7 @@ Alarms tab shows NetMon alerts scoped to surveillance devices.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 from datetime import datetime, timezone
@@ -176,14 +177,32 @@ def build_recording_servers(servers: list[dict], reg: dict[str, dict],
 
 
 def build_cameras(cameras: list[dict], reg: dict[str, dict],
-                  hw_by_id: dict[str, dict], rs_devid: dict[str, int], now: datetime) -> list[dict]:
+                  hw_by_id: dict[str, dict], rs_devid: dict[str, int], now: datetime,
+                  identity: dict[str, dict] | None = None) -> list[dict]:
+    """Camera rows.
+
+    ``identity`` maps hardware id → the ``hardwareDriverSettings`` block, which
+    is the only place Milestone exposes a MAC, serial or firmware. It is keyed
+    by *hardware*, so every camera sharing a physical device gets the same
+    values — correct, because they share one NIC (migration 022).
+
+    It is passed in rather than fetched here because it costs one request per
+    hardware record and is filled in bounded batches across cycles; a camera
+    whose hardware has not been reached yet keeps NULL rather than blocking the
+    whole cycle on 2,489 requests.
+    """
+    identity = identity or {}
     rows: list[dict] = []
     for cam in cameras:
         r = reg.get(str(cam.get("id")))
         if r is None:
             continue
-        hw = hw_by_id.get(_hardware_key(cam), {})
-        mac = canon_mac(str(_first(cam, "mac", "macAddress") or _first(hw, "mac", "macAddress") or ""))
+        hw_id = _hardware_key(cam)
+        hw = hw_by_id.get(hw_id, {})
+        ident = identity.get(hw_id) or {}
+        mac = canon_mac(str(_first(cam, "mac", "macAddress")
+                            or _first(hw, "mac", "macAddress")
+                            or ident.get("macAddress") or ""))
         rs_id = str(_first(cam, "recordingServerId", "recordingServer") or "")
         rows.append({
             "device_id": int(r["id"]),
@@ -201,8 +220,14 @@ def build_cameras(cameras: list[dict], reg: dict[str, dict],
             # what tells "one device, several cameras" apart from "two devices
             # fighting over an IP" — which the poller's guard cannot otherwise
             # distinguish. See migration 022.
-            "hardware_id": _hardware_key(cam) or None,
+            "hardware_id": hw_id or None,
             "mac": mac or None,
+            # Per-hardware identity from hardwareDriverSettings (migration 025).
+            # Firmware picks the SNMP profile for D10; serial is the only stable
+            # identity for a camera that has been re-addressed.
+            "firmware": (ident.get("firmwareVersion") or None),
+            "serial": (ident.get("serialNumber") or None),
+            "vendor": (ident.get("productID") or None),
             "recording_server_device_id": rs_devid.get(rs_id),
             "enabled": 1 if _truthy(cam.get("enabled"), cam.get("recordingEnabled")) else 0,
             "updated_at": now,
@@ -214,7 +239,8 @@ class MilestoneCollector(Collector):
     name = "milestone"
 
     def __init__(self, engine: Engine, client: MilestoneClient, interval_s: float = 120.0,
-                 ess_enabled: bool = True, blind_after_failures: int = 3) -> None:
+                 ess_enabled: bool = True, blind_after_failures: int = 3,
+                 identity_batch: int = 150, identity_concurrency: int = 6) -> None:
         super().__init__(engine)
         self.client = client
         # One WebSocket getState per cycle (~4 MB on this estate). Default on
@@ -226,6 +252,12 @@ class MilestoneCollector(Collector):
         # must not erase good state; a real outage must not read as healthy.
         self.blind_after_failures = blind_after_failures
         self._consecutive_failures = 0
+        # Per-cycle ceiling on the MAC/serial/firmware backfill. 150 at a
+        # 120s interval fills 2,489 hardware in roughly half an hour and then
+        # costs nothing. 0 disables the backfill outright (§4.3) — the rest of
+        # the cycle is unaffected and MACs already stored are kept.
+        self.identity_batch = identity_batch
+        self.identity_concurrency = max(1, identity_concurrency)
         self.interval_s = interval_s
         self.timeout_s = max(60.0, interval_s)
 
@@ -240,7 +272,9 @@ class MilestoneCollector(Collector):
             client_id=(s.get("client_id") or "GrantValidatorClient").strip(),
             verify_ssl=str(s.get("verify_ssl", "true")).strip().lower() in ("1", "true", "yes", "on"),
         )
-        return cls(engine, client, interval_s=int(s.get("interval_s") or 120))
+        return cls(engine, client, interval_s=int(s.get("interval_s") or 120),
+                   identity_batch=int(s.get("identity_batch", 150) or 0),
+                   identity_concurrency=int(s.get("identity_concurrency") or 6))
 
     def _by_milestone_id(self) -> dict[str, dict]:
         rows = db.fetch_all(
@@ -277,6 +311,85 @@ class MilestoneCollector(Collector):
         if changed:
             log.info("milestone: synced mgmt_ip for %d camera(s)", len(changed))
         return len(changed)
+
+    def _known_identity(self) -> dict[str, dict]:
+        """Identity already in the DB, keyed by hardware id.
+
+        Read back each cycle so the batch below only has to fetch what is
+        missing, and so a camera keeps its MAC on cycles where its hardware is
+        not in the batch — ``replace_rows`` rewrites the whole row, so anything
+        not re-supplied would be blanked.
+        """
+        out: dict[str, dict] = {}
+        for r in db.fetch_all(
+                self.engine,
+                "SELECT hardware_id, mac, firmware, serial, vendor FROM cameras "
+                "WHERE hardware_id IS NOT NULL AND mac IS NOT NULL "
+                "GROUP BY hardware_id, mac, firmware, serial, vendor"):
+            out[str(r["hardware_id"])] = {"macAddress": r["mac"],
+                                          "firmwareVersion": r["firmware"],
+                                          "serialNumber": r["serial"],
+                                          "productID": r["vendor"]}
+        return out
+
+    async def _device_identity(self, cameras: list[dict],
+                               degraded: list[str]) -> dict[str, dict]:
+        """MAC/serial/firmware per hardware, backfilled a batch at a time.
+
+        There is no collection form of ``hardwareDriverSettings`` — asking for
+        one answers 400 telling you to prefix it with a parent — so this is one
+        request per hardware record, ~300 ms each. Sweeping all 2,489 every
+        cycle would be ~12 minutes of gateway traffic every 2 minutes, so
+        instead each cycle fetches at most ``identity_batch`` of the records
+        that have no MAC yet. At the defaults the estate fills in about half an
+        hour and then costs nothing, because everything is known.
+
+        These are near-static facts — a MAC changes when the hardware is
+        replaced, which also changes the hardware id — so there is no refresh
+        pass. A replaced device arrives as a new hardware record with no MAC and
+        is picked up by the same backfill.
+
+        Failure is soft and per-record: a camera whose hardware could not be
+        read keeps NULL rather than losing the cycle. `identity` is added to
+        `degraded` so a stalled backfill is visible instead of looking finished.
+        """
+        known = self._known_identity()
+        if not self.identity_batch:
+            return known
+
+        pending = []
+        seen = set()
+        for cam in cameras:
+            hw_id = _hardware_key(cam)
+            if hw_id and hw_id not in known and hw_id not in seen:
+                seen.add(hw_id)
+                pending.append(hw_id)
+        if not pending:
+            return known
+
+        batch = pending[:self.identity_batch]
+        sem = asyncio.Semaphore(self.identity_concurrency)
+        failures = 0
+
+        async def one(hw_id: str) -> None:
+            nonlocal failures
+            async with sem:
+                try:
+                    settings = await self.client.hardware_driver_settings(hw_id)
+                except MilestoneError:
+                    failures += 1
+                    return
+            if settings.get("macAddress"):
+                known[hw_id] = settings
+
+        await asyncio.gather(*(one(h) for h in batch))
+        if failures:
+            degraded.append("identity")
+        log.info("milestone identity backfill: %d fetched, %d failed, "
+                 "%d of %d hardware still unknown",
+                 len(batch) - failures, failures,
+                 max(0, len(pending) - (len(batch) - failures)), len(pending))
+        return known
 
     async def _ess_camera_status(self) -> dict[str, tuple[str, str]] | None:
         """Per-camera Communication state from the Events/State interface.
@@ -455,8 +568,10 @@ class MilestoneCollector(Collector):
             log.warning("milestone hardware endpoint unavailable — camera hardware "
                         "enrichment missing: %s", exc)
 
+        identity = await self._device_identity(cameras, degraded)
+
         rs_rows = build_recording_servers(servers, registry, storage_by_rs, now)
-        cam_rows = build_cameras(cameras, registry, hw_by_id, rs_devid, now)
+        cam_rows = build_cameras(cameras, registry, hw_by_id, rs_devid, now, identity)
         written += db.replace_rows(self.engine, "recording_servers", ["device_id"], rs_rows)
         written += db.replace_rows(self.engine, "cameras", ["device_id"], cam_rows)
         written += self._sync_camera_addresses(cam_rows)

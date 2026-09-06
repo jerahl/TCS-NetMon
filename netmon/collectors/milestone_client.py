@@ -171,13 +171,47 @@ class MilestoneClient:
             data = await self._get(client, "/api/rest/v1/eventTypes?page=0&size=2000")
         return _items(data)
 
+    async def hardware_driver_settings(self, hardware_id: str) -> dict:
+        """The device's own identity: MAC, serial, firmware, vendor.
+
+        **This is where the camera MAC lives.** Neither ``/cameras`` nor
+        ``/hardware`` carries one — the collector looked on both for months and
+        wrote NULL for the whole estate — but the Management Client displays a
+        MAC for every camera, because it reads this resource. The parent
+        ``/hardware/{id}`` object stops at name, model, address and driver path.
+
+        Per hardware, not per camera: the 61 multi-camera devices have one NIC
+        between them (migration 022), so every camera on a hardware shares this.
+
+        One request per hardware record, ~300 ms each, with no collection form —
+        ``/hardwareDriverSettings`` without a parent answers 400 telling you to
+        prefix it. That is why the caller backfills in bounded batches rather
+        than sweeping 2,489 records on every cycle.
+
+        Returns the flattened ``hardwareDriverSettings`` block, or ``{}`` when
+        the driver exposes none. Deliberately drops the sibling ``ptz`` block
+        and the password-policy fields, which are of no interest here.
+        """
+        async with await self._mkclient() as client:
+            data = await self._get(
+                client, f"/api/rest/v1/hardware/{hardware_id}/hardwareDriverSettings")
+        for entry in _items(data):
+            settings = entry.get("hardwareDriverSettings")
+            if isinstance(settings, dict):
+                return settings
+        return {}
+
     async def hardware(self) -> list[dict]:
-        """Hardware (a camera's physical host) → model, MAC and network address.
+        """Hardware (a camera's physical host) → model and network address.
 
         Cameras link to hardware through ``camera.relations.parent``, **not** a
         ``hardwareId`` field — ``/cameras`` does not return one (confirmed live
         2026-07-28; the previous docstring asserted otherwise and the collector's
         lookup was built on it, which is why ``cameras.ip`` was always NULL).
+
+        Carries no MAC, serial or firmware despite the name suggesting a
+        physical device — those are one resource deeper, in
+        :meth:`hardware_driver_settings`.
 
         Uses a longer timeout than the other calls: this is ~2,500 records and
         the default 30s reliably hit ``httpx.ReadTimeout`` on the live gateway.
