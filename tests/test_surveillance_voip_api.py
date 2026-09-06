@@ -168,3 +168,60 @@ def test_summary_reports_used_storage_when_it_is_known(tmp_path):
     with _client(tmp_path, url) as client:
         s = client.get("/api/surveillance/summary").json()
         assert s["storage_used_gb"] == 40 and s["storage_used_known"] is True
+
+
+def test_camera_status_filter_narrows_by_reachability_tier(tmp_path):
+    """"Show me what's down" has to mean any tier where something says down.
+
+    Filtering to `down_confirmed` alone would hide the cameras Milestone cannot
+    reach but the network can — a platform-side fault, still a fault, and the
+    one with a different remedy (spec 19 §13).
+    """
+    url = f"sqlite:///{tmp_path/'s.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    with engine.begin() as c:
+        cams = [r["device_id"] for r in db.fetch_all(engine, "SELECT device_id FROM cameras")]
+        tiers = ["down_confirmed", "down_source_only"]
+        for did, tier in zip(cams, tiers):
+            c.execute(text("INSERT INTO device_state (device_id,dimension,value,severity,"
+                           "source,updated_at) VALUES (:d,'reachability',:v,'crit','derived',:t)"),
+                      {"d": did, "v": tier, "t": "2026-09-06 00:00:00"})
+    engine.dispose()
+
+    with _client(tmp_path, url) as client:
+        assert len(client.get("/api/surveillance/cameras?status=down").json()) == 2
+        assert len(client.get("/api/surveillance/cameras?status=down_confirmed").json()) == 1
+        assert len(client.get("/api/surveillance/cameras?status=down_source_only").json()) == 1
+        assert client.get("/api/surveillance/cameras?status=up").json() == []
+
+
+def test_camera_rows_carry_both_probe_verdicts(tmp_path):
+    """The row needs the source verdict *and* the derived tier: "down" alone
+    cannot distinguish a dead camera from one the platform cannot reach."""
+    url = f"sqlite:///{tmp_path/'s.db'}"
+    _seed(url)
+    with _client(tmp_path, url) as client:
+        rows = client.get("/api/surveillance/cameras").json()
+        assert rows
+        assert "source_status" in rows[0] and "reachability" in rows[0]
+
+
+def test_blind_is_counted_apart_from_down(tmp_path):
+    """`blind` is the source saying it cannot tell. Folding it into `down`
+    would report an outage NetMon has no evidence for."""
+    url = f"sqlite:///{tmp_path/'s.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    with engine.begin() as c:
+        did = db.fetch_one(engine, "SELECT device_id FROM cameras")["device_id"]
+        c.execute(text("INSERT INTO device_state (device_id,dimension,value,severity,"
+                       "source,updated_at) VALUES (:d,'source_status','blind','warn','milestone',:t)"),
+                  {"d": did, "t": "2026-09-06 00:00:00"})
+    engine.dispose()
+
+    with _client(tmp_path, url) as client:
+        counts = client.get("/api/surveillance/summary").json()["cameras_by_status"]
+        assert counts["blind"] == 1
+        assert counts["down"] == 0
+        assert len(client.get("/api/surveillance/cameras?status=blind").json()) == 1

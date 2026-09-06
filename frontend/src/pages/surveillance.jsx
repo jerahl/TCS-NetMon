@@ -20,6 +20,27 @@ const usedIsKnown = (summary) =>
   Boolean(summary && summary.storage_used_known && summary.storage_used_gb !== null
           && summary.storage_used_gb !== undefined);
 
+// Reachability tiers as an operator reads them. The wording matters more than
+// the colour: "down" alone cannot distinguish a dead camera from one the
+// platform cannot reach, and those need different responses (spec 19 §13).
+const STATUS = {
+  up:                { label: "Up",              tone: "ok",   hint: "platform and network both reach it" },
+  down_confirmed:    { label: "Down",            tone: "err",  hint: "Milestone and ICMP agree it is unreachable" },
+  down_source_only:  { label: "Milestone down",  tone: "err",  hint: "Milestone cannot reach it; the network can — a platform-side problem, not a dead camera" },
+  down_network_only: { label: "No ICMP",         tone: "warn", hint: "does not answer ping while Milestone reports it fine — most camera models never answer ICMP" },
+  unknown:           { label: "Unknown",         tone: "",     hint: "no probe has an opinion" },
+};
+
+function StatusPill({ tier, blind }) {
+  // Blind outranks the tier: if Milestone cannot see the camera at all, saying
+  // anything about agreement between probes would overstate what is known.
+  if (blind) {
+    return <span className="state-pill warn" title="Milestone has no state for this camera — not the same as down">Blind</span>;
+  }
+  const s = STATUS[tier] || STATUS.unknown;
+  return <span className={"state-pill " + s.tone} title={s.hint}>{s.label}</span>;
+}
+
 const fmtGb = (gb) => gb === null || gb === undefined ? "—"
   : gb >= 1000 ? `${(gb / 1024).toFixed(1)} TB` : `${Math.round(gb)} GB`;
 
@@ -60,6 +81,7 @@ export function SurveillancePage() {
   // 1.8 PB" across the estate. The tile shows configured capacity, which is
   // real, and says plainly why the used figure is missing (§4.5).
   const usedKnown = usedIsKnown(summary);
+  const cs = summary.cameras_by_status || {};
   const storagePct = usedKnown && summary.storage_total_gb
     ? Math.round((summary.storage_used_gb / summary.storage_total_gb) * 100) : null;
 
@@ -74,21 +96,46 @@ export function SurveillancePage() {
 
       <UnlinkedBanner overview={summary.overview} />
 
-      <div className="stat-row">
-        <div className="stat"><div className="stat-value">{summary.cameras_total}</div><div className="stat-label">Cameras</div></div>
-        <div className="stat"><div className="stat-value" style={{ color: sevColor("ok") }}>{summary.cameras_recording}</div>
-          <div className="stat-label">Recording</div></div>
-        <div className="stat"><div className="stat-value" style={summary.cameras_not_recording ? { color: sevColor("crit") } : undefined}>
-          {summary.cameras_not_recording}</div><div className="stat-label">Not recording</div></div>
-        {summary.cameras_blind > 0 && (
-          <div className="stat"><div className="stat-value" style={{ color: sevColor("warn") }}>{summary.cameras_blind}</div>
-            <div className="stat-label">Blind</div></div>)}
-        <div className="stat"><div className="stat-value">{summary.servers_up}/{summary.servers_total}</div>
-          <div className="stat-label">Recording servers up</div></div>
-        <div className="stat"><div className="stat-value" style={storagePct >= 90 ? { color: sevColor("crit") } : storagePct >= 75 ? { color: sevColor("warn") } : undefined}>
-          {storagePct !== null ? `${storagePct}%` : fmtGb(summary.storage_total_gb)}</div>
-          <div className="stat-label">Storage used</div></div>
-      </div>
+      {/* ZCD's .stat-grid (surveillance.css). Six cells rather than four,
+          because camera health here has three distinct failure shapes and
+          collapsing them loses the one that decides the response. */}
+      <Card tight>
+        <div className="stat-grid cols-6">
+          <div className="stat-cell">
+            <span className="lbl">Cameras</span>
+            <span className="val">{summary.cameras_total}</span>
+            <span className="sub">{summary.servers_total} recorders</span>
+          </div>
+          <div className="stat-cell">
+            <span className="lbl">Up</span>
+            <span className="val" style={{ color: sevColor("ok") }}>{cs.up ?? "—"}</span>
+            <span className="sub">both probes agree</span>
+          </div>
+          <div className="stat-cell">
+            <span className="lbl">Down</span>
+            <span className="val" style={cs.down_confirmed ? { color: sevColor("crit") } : undefined}>
+              {cs.down_confirmed ?? "—"}</span>
+            <span className="sub">Milestone + ICMP</span>
+          </div>
+          <div className="stat-cell">
+            <span className="lbl">Milestone down</span>
+            <span className="val" style={cs.down_source_only ? { color: sevColor("crit") } : undefined}>
+              {cs.down_source_only ?? "—"}</span>
+            <span className="sub">network reaches them</span>
+          </div>
+          <div className="stat-cell">
+            <span className="lbl">Blind</span>
+            <span className="val" style={cs.blind ? { color: sevColor("warn") } : undefined}>
+              {cs.blind ?? "—"}</span>
+            <span className="sub">no Milestone verdict</span>
+          </div>
+          <div className="stat-cell">
+            <span className="lbl">Storage</span>
+            <span className="val">{storagePct !== null ? `${storagePct}%` : fmtGb(summary.storage_total_gb)}</span>
+            <span className="sub">{usedKnown ? "used" : "configured"}</span>
+          </div>
+        </div>
+      </Card>
 
       <div className="tabs">
         {TABS.map((t) => (
@@ -98,7 +145,7 @@ export function SurveillancePage() {
       </div>
 
       {tab === "overview" && <OverviewTab summary={summary} storagePct={storagePct} />}
-      {tab === "cameras" && <CamerasTab />}
+      {tab === "cameras" && <CamerasTab counts={summary.cameras_by_status} />}
       {tab === "servers" && <ServersTab />}
       {tab === "storage" && <StorageTab />}
     </div>
@@ -107,6 +154,7 @@ export function SurveillancePage() {
 
 export function OverviewTab({ summary, storagePct }) {
   const usedKnown = usedIsKnown(summary);
+  const cs = summary.cameras_by_status || {};
   return (
     <React.Fragment>
       <Card kicker="XProtect environment">
@@ -137,43 +185,88 @@ export function OverviewTab({ summary, storagePct }) {
   );
 }
 
-function CamerasTab() {
+export function CamerasTab({ counts }) {
   const [rows, setRows] = React.useState(null);
   const [q, setQ] = React.useState("");
+  const [status, setStatus] = React.useState("");
   const [detail, setDetail] = React.useState(null);
   React.useEffect(() => {
+    setRows(null);
     const id = setTimeout(() =>
-      getJSON("/api/surveillance/cameras" + qs({ q })).then(setRows).catch(() => setRows([])), 250);
+      getJSON("/api/surveillance/cameras" + qs({ q, status })).then(setRows).catch(() => setRows([])), 250);
     return () => clearTimeout(id);
-  }, [q]);
+  }, [q, status]);
+
+  const c = counts || {};
+  // "down" first and widest, because it is the question being asked. It is the
+  // union of the three down tiers, not just down_confirmed — filtering to the
+  // strictest tier would hide the cameras Milestone cannot reach.
+  const chips = [
+    ["", "All", (c.up || 0) + (c.down || 0) + (c.unknown || 0)],
+    ["down", "Down (any)", c.down],
+    ["down_confirmed", STATUS.down_confirmed.label, c.down_confirmed],
+    ["down_source_only", STATUS.down_source_only.label, c.down_source_only],
+    ["down_network_only", STATUS.down_network_only.label, c.down_network_only],
+    ["blind", "Blind", c.blind],
+    ["up", "Up", c.up],
+  ];
+
   return (
     <React.Fragment>
-      <Card kicker={rows ? `${rows.length} camera(s)` : "Cameras"}>
-        <label className="evt-filter evt-filter-grow" style={{ marginBottom: 8 }}>
-          <span>Search</span>
-          <input type="text" placeholder="name, model, IP, MAC…" value={q} onChange={(e) => setQ(e.target.value)} />
-        </label>
+      <Card kicker={rows ? `${rows.length} shown` : "Cameras"} tight>
+        <div className="cam-filter-bar">
+          <div className="cfb-group">
+            <span className="cfb-lbl">Status</span>
+            {chips.map(([val, label, n]) => (
+              <button key={val || "all"} type="button"
+                      className={"cfb-chip" + (status === val ? " active" : "")}
+                      title={STATUS[val]?.hint || ""}
+                      onClick={() => setStatus(val)}>
+                {label}{n !== undefined ? ` ${n}` : ""}
+              </button>
+            ))}
+          </div>
+          <div className="cfb-group" style={{ marginLeft: "auto", flex: 1, maxWidth: 320 }}>
+            <span className="cfb-lbl">Search</span>
+            <input type="text" placeholder="name, model, IP, MAC…" value={q}
+                   onChange={(e) => setQ(e.target.value)} style={{ width: "100%" }} />
+          </div>
+        </div>
         {!rows ? <Loading what="cameras" /> : rows.length === 0 ? (
-          <div className="msg">No cameras cached — the Milestone collector hasn't populated the camera table.</div>
+          <div className="msg" style={{ padding: 14 }}>
+            {status || q
+              ? "No cameras match this filter."
+              : "No cameras cached — the Milestone collector hasn't populated the camera table."}
+          </div>
         ) : (
-          <table className="grid">
-            <thead><tr><th></th><th>Camera</th><th>Site</th><th>Model</th><th>Resolution</th>
-                       <th>FPS</th><th>Server</th><th>IP</th><th></th></tr></thead>
+          <table className="grid nvr-tbl">
+            <thead><tr><th>Status</th><th>Camera</th><th>Site</th><th>Model</th>
+                       <th>Recording</th><th>Server</th><th>IP</th><th></th></tr></thead>
             <tbody>
-              {rows.map((c) => (
-                <tr key={c.device_id}>
-                  <td><StateDot value={c.recording_state} /></td>
-                  <td>{c.name}</td>
-                  <td>{c.site || "—"}</td>
-                  <td className="dim">{c.model || "—"}</td>
-                  <td className="mono dim">{c.resolution || "—"}</td>
-                  <td className="mono dim">{c.fps_target ?? "—"}</td>
-                  <td className="dim">{c.recording_server || "—"}</td>
-                  <td className="mono dim">{c.ip || "—"}</td>
-                  <td><button type="button" className="btn" onClick={() =>
-                    getJSON(`/api/surveillance/cameras/${c.device_id}`).then(setDetail)}>Detail</button></td>
-                </tr>
-              ))}
+              {rows.map((cam) => {
+                const blind = cam.source_status === "blind";
+                const tier = cam.reachability;
+                const rowCls = blind ? "row-warn"
+                  : tier === "down_confirmed" || tier === "down_source_only" ? "row-err"
+                  : tier === "down_network_only" ? "row-warn" : "";
+                return (
+                  <tr key={cam.device_id} className={rowCls}>
+                    <td><StatusPill tier={tier} blind={blind} /></td>
+                    <td>{cam.name}</td>
+                    <td>{cam.site || "—"}</td>
+                    <td className="dim">{cam.model || "—"}</td>
+                    {/* Recording here is motion-triggered, so "stopped" is the
+                        ordinary resting state and is shown as information
+                        rather than as a fault. */}
+                    <td><span className={"rec-pill" + (cam.recording_state === "up" ? "" : " off")}>
+                      {cam.recording_state || "unknown"}</span></td>
+                    <td className="dim">{cam.recording_server || "—"}</td>
+                    <td className="mono dim">{cam.ip || "—"}</td>
+                    <td><button type="button" className="btn btn-sm" onClick={() =>
+                      getJSON(`/api/surveillance/cameras/${cam.device_id}`).then(setDetail)}>Detail</button></td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}

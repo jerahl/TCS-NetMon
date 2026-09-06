@@ -20,7 +20,14 @@ const mod = { exports: {} };
 new Function("module", "exports", "require", res.outputFiles[0].text)(mod, mod.exports, require);
 const { surveillance: S, React, renderToString } = mod.exports;
 
+const CAM = (over) => ({ device_id: 1, name: "chs-cam-1", site: "Central High",
+  model: "Bosch FLEXIDOME", recording_state: "up", recording_server: "CHS-BCD-DVR",
+  ip: "10.32.18.4", ...over });
+
 const cases = [
+  ["CamerasTab · every status tier", S.CamerasTab, {
+    counts: { up: 2422, down: 228, down_confirmed: 82, down_source_only: 15,
+              down_network_only: 131, blind: 139, unknown: 1 } }],
   ["OverviewTab · used space unknown", S.OverviewTab, {
     summary: { cameras_total: 2651, cameras_recording: 2651, servers_total: 22,
                servers_up: 22, storage_total_gb: 1837600, storage_used_gb: null,

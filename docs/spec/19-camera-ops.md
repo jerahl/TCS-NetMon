@@ -812,3 +812,61 @@ fewer than all four fails at a different point each time — `alert_rules` at ru
 insert, `state_events` not until a tier first *changes*, the Pydantic enum not
 until an API response is serialised. All four are extended here; a future
 dimension needs the same four.
+
+## 14. Surveillance page — camera status and filtering (2026-09-06)
+
+The page showed one dot per camera driven by `recording`, which after §12 is the
+least useful signal it has: recording here is motion-triggered, so "stopped" is
+the ordinary resting state. Meanwhile the two verdicts that *do* say whether a
+camera is healthy — Milestone's Communication state and the derived tier — were
+being collected and not shown.
+
+### Status, in the operator's words
+
+`STATUS` in the page maps tiers to labels chosen for what they tell you to do,
+not for severity:
+
+| Tier | Label | Reads as |
+|---|---|---|
+| `up` | Up | both probes reach it |
+| `down_confirmed` | **Down** | Milestone and ICMP agree — the camera is gone |
+| `down_source_only` | **Milestone down** | the network reaches it; Milestone cannot. A platform-side problem, not a dead camera |
+| `down_network_only` | No ICMP | does not answer ping while Milestone is content — most models never answer ICMP |
+| *(source blind)* | Blind | Milestone has no verdict at all |
+
+**Blind outranks the tier.** If Milestone cannot see a camera, saying anything
+about whether the probes agree would overstate what is known.
+
+### Filtering
+
+`GET /api/surveillance/cameras?status=…` takes any tier, plus two shorthands:
+
+- **`down`** — the union of all three down tiers. This is the one the filter bar
+  leads with, because "show me what is down" is the question actually being
+  asked, and answering it with `down_confirmed` alone would hide the cameras
+  Milestone cannot reach.
+- **`blind`** — counted and filtered separately from `down` throughout. Folding
+  it in would report an outage NetMon has no evidence for.
+
+`/summary` gained `cameras_by_status`, so the chips carry their own counts
+rather than the UI counting a list it has not fetched.
+
+### ZCD vocabulary
+
+The page now uses `surveillance.css` rather than NetMon's generic classes:
+`.stat-grid.cols-6` for the KPI strip, `.cam-filter-bar` + `.cfb-chip` for the
+filter, `.state-pill` / `.rec-pill` for status, `.nvr-tbl` with `row-err` /
+`row-warn` tinting for the table.
+
+Six KPI cells rather than ZCD's four, because camera health here has three
+distinct failure shapes and collapsing them loses the one that decides the
+response.
+
+Recording is still shown, as a `.rec-pill` — information, not a fault.
+
+### Coverage
+
+`render-check.mjs` gained a `CamerasTab` case exercising every tier, so the
+status rendering is checked at build time rather than only in a browser. Three
+API tests cover the filter union, both verdicts reaching the row, and blind
+being counted apart from down.

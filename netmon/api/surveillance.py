@@ -54,6 +54,9 @@ def summary(engine: Engine = Depends(get_engine), _user=Depends(require_role(Rol
         "storage_used_gb": None if srv.get("used") is None else round(srv["used"], 1),
         "storage_total_gb": round(srv.get("total_gb") or 0, 1),
         "storage_used_known": srv.get("used") is not None,
+        # Per-tier camera counts, so the filter chips can carry their own
+        # numbers rather than the UI counting a list it has not fetched yet.
+        "cameras_by_status": _camera_status_counts(engine),
         "overview": read_snapshot(engine, "milestone.overview"),
         "updated_at": cam.get("updated_at"),
     }
@@ -63,11 +66,45 @@ _CAMERA_COLS = ("c.device_id, d.name, d.site, c.model, c.resolution, c.fps_targe
                 "c.codec, c.recording_mode, c.state_msg, c.ip, c.mac, c.enabled, "
                 "c.recording_server_device_id, c.updated_at, "
                 "rs.name AS recording_server, "
-                "st.value AS recording_state")
+                "st.value AS recording_state, "
+                # What Milestone's Events/State interface says about the camera
+                # (spec 19 §12), and the derived tier that says whether ICMP
+                # agrees (§13). Both are needed: "down" alone cannot distinguish
+                # a dead camera from one the platform simply cannot reach.
+                "src.value AS source_status, "
+                "reach.value AS reachability")
 
 _CAMERA_FROM = ("FROM cameras c JOIN devices d ON d.id = c.device_id "
                 "LEFT JOIN devices rs ON rs.id = c.recording_server_device_id "
-                "LEFT JOIN device_state st ON st.device_id = c.device_id AND st.dimension = 'recording'")
+                "LEFT JOIN device_state st ON st.device_id = c.device_id AND st.dimension = 'recording' "
+                "LEFT JOIN device_state src ON src.device_id = c.device_id "
+                "  AND src.dimension = 'source_status' "
+                "LEFT JOIN device_state reach ON reach.device_id = c.device_id "
+                "  AND reach.dimension = 'reachability'")
+
+
+def _camera_status_counts(engine: Engine) -> dict:
+    """Cameras per reachability tier, plus the blind count.
+
+    `blind` is tracked separately from the tiers because it is the source
+    saying "I cannot tell", not a verdict — folding it into `down` would report
+    an outage NetMon has no evidence for (spec 19 §13).
+    """
+    out = {r["tier"] or "unknown": r["n"] for r in db.fetch_all(
+        engine,
+        "SELECT reach.value AS tier, COUNT(*) AS n FROM cameras c "
+        "JOIN devices d ON d.id = c.device_id "
+        "LEFT JOIN device_state reach ON reach.device_id = c.device_id "
+        "  AND reach.dimension = 'reachability' "
+        "WHERE d.enabled = 1 GROUP BY reach.value")}
+    out["blind"] = db.fetch_one(
+        engine,
+        "SELECT COUNT(*) AS n FROM cameras c JOIN device_state s "
+        "  ON s.device_id = c.device_id AND s.dimension = 'source_status' "
+        "WHERE s.value = 'blind'")["n"]
+    out["down"] = sum(out.get(k, 0) for k in
+                      ("down_confirmed", "down_source_only", "down_network_only"))
+    return out
 
 
 @router.get("/cameras")
@@ -76,7 +113,17 @@ def cameras(
     _user=Depends(require_role(Role.viewer)),
     q: str | None = None,
     site: str | None = None,
+    status: str | None = None,
 ) -> list[dict]:
+    """Cameras, optionally narrowed by search, site, or status.
+
+    ``status`` accepts a reachability tier (`down_confirmed`,
+    `down_source_only`, `down_network_only`, `up`, `unknown`) or the shorthand
+    ``down``, which means *any* tier where something says down. The shorthand
+    exists because "show me what is down" is the question an operator actually
+    asks, and answering it with only `down_confirmed` would hide the cameras the
+    platform cannot reach.
+    """
     conds, params = [], {}
     if q:
         conds.append("(d.name LIKE :q OR c.ip LIKE :q OR c.model LIKE :q OR c.mac LIKE :q)")
@@ -84,6 +131,15 @@ def cameras(
     if site:
         conds.append("d.site = :site")
         params["site"] = site
+    if status:
+        if status == "down":
+            conds.append("reach.value IN ('down_confirmed', 'down_source_only', "
+                         "'down_network_only')")
+        elif status == "blind":
+            conds.append("src.value = 'blind'")
+        else:
+            conds.append("reach.value = :status")
+            params["status"] = status
     where = f"WHERE {' AND '.join(conds)}" if conds else ""
     return [dict(r) for r in db.fetch_all(
         engine, f"SELECT {_CAMERA_COLS} {_CAMERA_FROM} {where} ORDER BY d.site, d.name", params)]
