@@ -86,7 +86,7 @@ def test_camera_detail_switch_port_join(tmp_path):
     with _client(tmp_path, url) as client:
         d = client.get("/api/surveillance/cameras/2").json()
         # The marquee FDB join: camera MAC → switch + port.
-        assert d["switch_port"]["switch"] == "BHS-Core-1"
+        assert d["switch_port"]["switch_name"] == "BHS-Core-1"
         assert d["switch_port"]["port"] == "1:42"
         # CAM-Gym's MAC isn't in any FDB table → no link, honestly null.
         d2 = client.get("/api/surveillance/cameras/3").json()
@@ -225,3 +225,146 @@ def test_blind_is_counted_apart_from_down(tmp_path):
         assert counts["blind"] == 1
         assert counts["down"] == 0
         assert len(client.get("/api/surveillance/cameras?status=blind").json()) == 1
+
+
+def test_camera_sites_counts_each_failure_shape_separately(tmp_path):
+    """The by-school grid must not collapse the tiers into one "down".
+
+    A school with cameras Milestone cannot reach has a different problem from
+    one with genuinely dead cameras, and the grid is where an operator decides
+    which school to drive to — so the roll-up keeps them apart (spec 19 §13).
+    """
+    url = f"sqlite:///{tmp_path/'s.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO device_state (device_id,dimension,value,severity,"
+                       "source,updated_at) VALUES "
+                       "(2,'reachability','down_confirmed','crit','derived',:t),"
+                       "(3,'reachability','down_source_only','warn','derived',:t)"),
+                  {"t": "2026-09-06 00:00:00"})
+    engine.dispose()
+
+    with _client(tmp_path, url) as client:
+        rows = {r["site"]: r for r in client.get("/api/surveillance/sites").json()}
+        bhs = rows["BHS"]
+        assert bhs["total"] == 2
+        assert bhs["down_confirmed"] == 1
+        assert bhs["down_source_only"] == 1
+        # Recording state is its own axis and is reported alongside, not merged:
+        # a camera can be reachable and not recording, or the reverse.
+        assert bhs["recording"] == 1
+        # Only cameras — the switch and the recording server at these sites must
+        # not inflate the count the grid renders.
+        assert "Central" not in rows
+
+
+def test_camera_sites_excludes_disabled_devices(tmp_path):
+    url = f"sqlite:///{tmp_path/'s.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    with engine.begin() as c:
+        c.execute(text("UPDATE devices SET enabled = 0 WHERE id = 3"))
+    engine.dispose()
+    with _client(tmp_path, url) as client:
+        rows = {r["site"]: r for r in client.get("/api/surveillance/sites").json()}
+        assert rows["BHS"]["total"] == 1
+
+
+def test_camera_detail_carries_probe_state_and_siblings(tmp_path):
+    """The detail page shows which probe said what, plus the other cameras on
+    the same physical device — they share an interface, so a fault on one is a
+    fault on all, and that is only visible if the page says they exist."""
+    url = f"sqlite:///{tmp_path/'s.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    with engine.begin() as c:
+        c.execute(text("UPDATE cameras SET hardware_id = 'hw-1' WHERE device_id IN (2,3)"))
+        c.execute(text("INSERT INTO device_state (device_id,dimension,value,severity,"
+                       "source,updated_at) VALUES "
+                       "(2,'source_status','up','ok','milestone-ess',:t),"
+                       "(2,'ping','down','warn','poller',:t),"
+                       "(2,'reachability','down_network_only','warn','derived',:t)"),
+                  {"t": "2026-09-06 00:00:00"})
+    engine.dispose()
+
+    with _client(tmp_path, url) as client:
+        d = client.get("/api/surveillance/cameras/2").json()
+        # Both verdicts survive to the page, unmerged.
+        assert d["state"]["source_status"]["value"] == "up"
+        assert d["state"]["ping"]["value"] == "down"
+        assert d["state"]["reachability"]["value"] == "down_network_only"
+        assert [s["device_id"] for s in d["siblings"]] == [3]
+
+
+def test_camera_detail_resolves_port_through_packetfence_when_milestone_has_no_mac(tmp_path):
+    """Milestone exposes no camera MAC, so most cameras have none in `cameras`.
+    PacketFence knows IP → MAC and bridges the gap; without that bridge the
+    port pane would be empty for the majority of the estate."""
+    url = f"sqlite:///{tmp_path/'s.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    with engine.begin() as c:
+        # CAM-Gym: no MAC of its own, but an IP PacketFence has seen.
+        c.execute(text("UPDATE cameras SET mac = NULL, ip = '10.32.18.7' WHERE device_id = 3"))
+        c.execute(text("INSERT INTO pf_nodes (mac, ip, computername, role, reg_status, "
+                       "last_switch, last_port, online, updated_at) VALUES "
+                       "('00:40:8c:99:88:77','10.32.18.7','cam-gym','cameras','reg',"
+                       "'10.0.0.9','1:43',1,:t)"), {"t": "2026-09-06 00:00:00"})
+        # is_sfp must be an explicit 0. NULL means "not confirmed as copper",
+        # which the resolver deliberately treats as not safe to power-cycle.
+        c.execute(text("INSERT INTO switch_ports (device_id, ifindex, name, oper_state, "
+                       "poe_delivering, is_sfp, updated_at) VALUES "
+                       "(4,1043,'1:43','up',1,0,:t)"), {"t": "2026-09-06 00:00:00"})
+        c.execute(text("INSERT INTO fdb_entries (device_id, mac, ifindex, updated_at) "
+                       "VALUES (4,'00:40:8c:99:88:77',1043,:t)"), {"t": "2026-09-06 00:00:00"})
+    engine.dispose()
+
+    with _client(tmp_path, url) as client:
+        d = client.get("/api/surveillance/cameras/3").json()
+        assert d["pf"]["mac"] == "00:40:8c:99:88:77"
+        sp = d["switch_port"]
+        assert sp["switch_name"] == "BHS-Core-1" and sp["port"] == "1:43"
+        # PacketFence independently recorded the same port, which is what makes
+        # this port safe to power-cycle rather than merely the best guess.
+        assert sp["pf_agrees"] is True
+        assert sp["poe_cycle_safe"] is True
+
+
+def test_camera_detail_without_an_address_offers_no_port_to_cycle(tmp_path):
+    """No address means no MAC means no port. The pane must say so rather than
+    fall back to a guess — bouncing an unconfirmed port risks an uplink."""
+    url = f"sqlite:///{tmp_path/'s.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    with engine.begin() as c:
+        c.execute(text("UPDATE cameras SET mac = NULL, ip = NULL WHERE device_id = 3"))
+    engine.dispose()
+    with _client(tmp_path, url) as client:
+        d = client.get("/api/surveillance/cameras/3").json()
+        assert d["pf"] is None
+        assert d["switch_port"] is None
+
+
+def test_camera_port_on_an_unconfirmed_link_is_not_offered_for_poe_cycle(tmp_path):
+    """The gate on the destructive action, exercised on the camera path.
+
+    A MAC is learned on every port in its path, so the resolver picks the one
+    with the fewest MACs and then wants corroboration: PoE-delivering copper.
+    Without it the port is still shown — hiding it would leave the operator
+    guessing — but Cycle PoE must not be offered, because an unconfirmed pick
+    can be a 10 G uplink carrying a whole wiring closet.
+    """
+    url = f"sqlite:///{tmp_path/'s.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    with engine.begin() as c:
+        # Fibre, no PoE — the shape of an uplink, not an access port.
+        c.execute(text("UPDATE switch_ports SET is_sfp = 1, poe_delivering = 0 "
+                       "WHERE device_id = 4 AND ifindex = 1042"))
+    engine.dispose()
+    with _client(tmp_path, url) as client:
+        sp = client.get("/api/surveillance/cameras/2").json()["switch_port"]
+        assert sp is not None and sp["port"] == "1:42"      # still shown
+        assert sp["poe_cycle_safe"] is False                # but not actionable
+        assert "uplink" in sp["why"]

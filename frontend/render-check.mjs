@@ -7,6 +7,7 @@ import { createRequire } from "module";
 
 const entry = `
 export * as surveillance from "./src/pages/surveillance.jsx";
+export * as cameraDetail from "./src/pages/camera_detail.jsx";
 export { default as React } from "react";
 export { renderToString } from "react-dom/server";
 `;
@@ -18,7 +19,7 @@ const res = await build({
 const require = createRequire(import.meta.url);
 const mod = { exports: {} };
 new Function("module", "exports", "require", res.outputFiles[0].text)(mod, mod.exports, require);
-const { surveillance: S, React, renderToString } = mod.exports;
+const { surveillance: S, cameraDetail: D, React, renderToString } = mod.exports;
 
 const CAM = (over) => ({ device_id: 1, name: "chs-cam-1", site: "Central High",
   model: "Bosch FLEXIDOME", recording_state: "up", recording_server: "CHS-BCD-DVR",
@@ -38,6 +39,48 @@ const cases = [
                servers_up: 1, storage_total_gb: 100, storage_used_gb: 40,
                storage_used_known: true, overview: null },
     storagePct: 40 }],
+
+  // The by-school grid. Includes an unnamed site because 96% of the registry
+  // had no site until the resolver landed and some rows still resolve to NULL —
+  // a tile keyed on a null site name must not collide or crash.
+  ["SiteTiles · mixed health", S.SiteTiles, {
+    rows: [
+      { site: "Bryant High", total: 264, up: 240, down_confirmed: 7,
+        down_source_only: 4, down_network_only: 13, blind: 15, recording: 258 },
+      { site: "Central Elementary", total: 83, up: 77, down_confirmed: 5,
+        down_source_only: 0, down_network_only: 1, blind: 1, recording: 83 },
+      { site: null, total: 8, up: 8, down_confirmed: 0, down_source_only: 0,
+        down_network_only: 0, blind: 0, recording: 8 },
+    ],
+    filter: "all", onFilter: () => {}, onPick: () => {} }],
+
+  // Camera detail with everything resolved: the path where the port is known
+  // and PoE cycling is offered.
+  ["CameraDetailView · full uplink", D.CameraDetailView, {
+    cam: { ...CAM(), state: {
+             source_status: { value: "up", source: "milestone-ess" },
+             ping: { value: "up", updated_at: "2026-09-06T12:00:00Z" },
+             recording: { value: "up" },
+             reachability: { value: "up" } },
+           switch_port: { switch_device_id: 42, switch_name: "WFS-MDF",
+             switch_site: "Westlawn", port: "4:37", ifindex: 437,
+             oper_state: "up", speed_mbps: 1000, is_sfp: 0, poe_delivering: 1,
+             poe_watts: 6.4, macs_on_port: 1, pf_agrees: true, pf_port: "4:37",
+             candidates: 1, poe_cycle_safe: true,
+             why: "fewest MACs on port, PoE-delivering copper, confirmed by PacketFence" },
+           pf: { mac: "00:11:22:33:44:55", computername: "cam-1", role: "cameras",
+                 reg_status: "reg", vlan: "300", last_switch: "10.0.0.9",
+                 last_port: "4:37", online: 1, updated_at: "2026-09-06T12:00:00Z" },
+           siblings: [{ device_id: 2, name: "chs-cam-1 - Camera 2", recording_state: "up" }] },
+    meta: { packetfence_url: "https://pf.example" } }],
+
+  // …and the honest-gap path: blind, no port resolved, no PF record. The page
+  // must still render and say why each thing is missing rather than blank out.
+  ["CameraDetailView · blind, unresolved", D.CameraDetailView, {
+    cam: { ...CAM({ ip: null, recording_state: null }),
+           state: { source_status: { value: "blind", source: "milestone" } },
+           switch_port: null, pf: null, siblings: [] },
+    meta: {} }],
 ];
 
 let failed = 0;

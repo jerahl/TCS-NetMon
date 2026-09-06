@@ -16,6 +16,7 @@ from netmon import db
 from netmon.api.deps import get_engine, require_role
 from netmon.models.schemas import Role
 from netmon.snapshots import read_snapshot
+from netmon.uplink import uplink_for_mac
 
 router = APIRouter(prefix="/api/surveillance", tags=["surveillance"])
 
@@ -107,6 +108,39 @@ def _camera_status_counts(engine: Engine) -> dict:
     return out
 
 
+@router.get("/sites")
+def camera_sites(
+    engine: Engine = Depends(get_engine),
+    _user=Depends(require_role(Role.viewer)),
+) -> list[dict]:
+    """Cameras rolled up by site, for the overview grid.
+
+    Counts each failure shape separately rather than summing them into one
+    "down". A site with 12 cameras Milestone cannot reach has a different
+    problem from one with 12 genuinely dead, and a single number cannot say
+    which — see spec 19 §13.
+    """
+    return [dict(r) for r in db.fetch_all(engine, """
+        SELECT d.site AS site,
+               COUNT(*) AS total,
+               SUM(CASE WHEN reach.value = 'up' THEN 1 ELSE 0 END) AS up,
+               SUM(CASE WHEN reach.value = 'down_confirmed' THEN 1 ELSE 0 END) AS down_confirmed,
+               SUM(CASE WHEN reach.value = 'down_source_only' THEN 1 ELSE 0 END) AS down_source_only,
+               SUM(CASE WHEN reach.value = 'down_network_only' THEN 1 ELSE 0 END) AS down_network_only,
+               SUM(CASE WHEN src.value = 'blind' THEN 1 ELSE 0 END) AS blind,
+               SUM(CASE WHEN rec.value = 'up' THEN 1 ELSE 0 END) AS recording
+        FROM cameras c
+        JOIN devices d ON d.id = c.device_id
+        LEFT JOIN device_state reach ON reach.device_id = c.device_id
+             AND reach.dimension = 'reachability'
+        LEFT JOIN device_state src ON src.device_id = c.device_id
+             AND src.dimension = 'source_status'
+        LEFT JOIN device_state rec ON rec.device_id = c.device_id
+             AND rec.dimension = 'recording'
+        WHERE d.enabled = 1
+        GROUP BY d.site ORDER BY d.site""")]
+
+
 @router.get("/cameras")
 def cameras(
     engine: Engine = Depends(get_engine),
@@ -151,22 +185,59 @@ def camera_detail(
     engine: Engine = Depends(get_engine),
     _user=Depends(require_role(Role.viewer)),
 ) -> dict:
+    # The detail page needs three columns the list does not: `hardware_id` to
+    # find the other cameras on the same physical device, `http_port` because
+    # six cameras here sit on a non-default port, and `bitrate_mode`. Selecting
+    # them only here keeps the 2,651-row list query narrow.
     row = db.fetch_one(
-        engine, f"SELECT {_CAMERA_COLS} {_CAMERA_FROM} WHERE c.device_id = :d", {"d": device_id})
+        engine,
+        f"SELECT {_CAMERA_COLS}, c.hardware_id, c.http_port, c.bitrate_mode "
+        f"{_CAMERA_FROM} WHERE c.device_id = :d", {"d": device_id})
     if row is None:
         raise HTTPException(status_code=404, detail="camera not found")
     out = dict(row)
-    # Linked switch port via FDB (the marquee join): the camera's MAC learned
-    # on a switch port → switch name + port. Zero source calls.
+
+    # Every state dimension this camera carries, so the page can show which
+    # probe said what rather than one collapsed verdict.
+    out["state"] = {r["dimension"]: {"value": r["value"], "severity": r["severity"],
+                                     "source": r["source"], "updated_at": r["updated_at"]}
+                    for r in db.fetch_all(
+                        engine,
+                        "SELECT dimension, value, severity, source, updated_at "
+                        "FROM device_state WHERE device_id = :d", {"d": device_id})}
+
+    # Milestone exposes no camera MAC at all, so the FDB join has no key of its
+    # own. PacketFence does know IP → MAC, and it bridges the gap for 1,532 of
+    # 2,651 cameras. The resolved MAC then goes through the same access-port
+    # logic the AP page uses — trunk-avoidance included, because a camera's MAC
+    # appears on every uplink in its path just as an AP's does.
+    out["pf"] = None
     out["switch_port"] = None
-    if out.get("mac"):
-        out["switch_port"] = db.fetch_one(
+    if out.get("ip"):
+        out["pf"] = db.fetch_one(
             engine,
-            "SELECT d.name AS switch, sp.name AS port, f.updated_at "
-            "FROM fdb_entries f JOIN devices d ON d.id = f.device_id "
-            "LEFT JOIN switch_ports sp ON sp.device_id = f.device_id AND sp.ifindex = f.ifindex "
-            "WHERE f.mac = :mac ORDER BY f.updated_at DESC LIMIT 1",
-            {"mac": out["mac"]})
+            "SELECT mac, computername, owner, role, reg_status, vlan, last_switch, "
+            "       last_port, conn_method, online, last_seen, updated_at "
+            "FROM pf_nodes WHERE ip = :ip ORDER BY updated_at DESC LIMIT 1",
+            {"ip": out["ip"]})
+    mac = out.get("mac") or (out["pf"] or {}).get("mac")
+    if mac:
+        out["switch_port"] = uplink_for_mac(engine, mac, out["pf"])
+
+    # Other cameras on the same physical device. 61 hardware records here carry
+    # more than one (up to eleven on an AXIS M3007), and they share a network
+    # interface — so a fault on one is a fault on all of them, which is only
+    # obvious if the page says they exist.
+    out["siblings"] = []
+    if out.get("hardware_id"):
+        out["siblings"] = [dict(r) for r in db.fetch_all(
+            engine,
+            "SELECT c.device_id, d.name, st.value AS recording_state "
+            "FROM cameras c JOIN devices d ON d.id = c.device_id "
+            "LEFT JOIN device_state st ON st.device_id = c.device_id "
+            "  AND st.dimension = 'recording' "
+            "WHERE c.hardware_id = :hw AND c.device_id != :d ORDER BY d.name",
+            {"hw": out["hardware_id"], "d": device_id})]
     return out
 
 

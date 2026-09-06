@@ -15,6 +15,7 @@ import { VoipPage } from "./pages/voip.jsx";
 import { MapPage } from "./pages/map.jsx";
 import { NetmonStatusPage } from "./pages/netmon_status.jsx";
 import { WirelessPage } from "./pages/wireless.jsx";
+import { CameraDetailPage } from "./pages/camera_detail.jsx";
 import { XiqPage } from "./pages/xiq.jsx";
 import { SettingsPage } from "./pages/settings.jsx";
 import { RegistryPage } from "./pages/registry.jsx";
@@ -33,6 +34,7 @@ function parseRoute() {
   if (parts[0] === "switches") return { name: "switches", id: parts[1] || null, query };
   if (parts[0] === "nac") return { name: "nac", query };
   if (parts[0] === "surveillance") return { name: "surveillance", query };
+  if (parts[0] === "camera" && parts[1]) return { name: "camera", id: parts[1], query };
   if (parts[0] === "events") return { name: "events", query };
   if (parts[0] === "problems") return { name: "problems", query };
   if (parts[0] === "voip") return { name: "voip", query };
@@ -64,6 +66,7 @@ const CRUMBS = {
   nac: "NAC", events: "Events", problems: "Problems", map: "Site Map",
   "netmon-status": "NetMon Status", registry: "Registry", settings: "Settings",
   ap: "AP Detail",
+  camera: "Camera Detail",
 };
 
 // ZCD's topbar (spec 14 §2 row 1): breadcrumb, search, refresh. Ported to
@@ -125,6 +128,7 @@ function App() {
   else if (route.name === "settings") { page = <SettingsPage />; active = "settings"; }
   else if (route.name === "registry") { page = <RegistryPage />; active = "registry"; }
   else if (route.name === "ap") { page = <ApDetailPage id={route.id} />; active = "wireless"; }
+  else if (route.name === "camera") { page = <CameraDetailPage id={route.id} />; active = "surveillance"; }
   else { page = <GlobalPage />; active = "global"; }
 
   // The map is a full-bleed NOC view — no content padding.

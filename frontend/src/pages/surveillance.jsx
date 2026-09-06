@@ -60,6 +60,9 @@ export function SurveillancePage() {
   const [tab, setTab] = React.useState("overview");
   const [summary, setSummary] = React.useState(null);
   const [error, setError] = React.useState(null);
+  // Lifted out of CamerasTab so the by-school grid can drive it: clicking a
+  // school on the overview is the same gesture as filtering the camera list.
+  const [site, setSite] = React.useState("");
 
   React.useEffect(() => {
     let live = true;
@@ -144,19 +147,129 @@ export function SurveillancePage() {
         ))}
       </div>
 
-      {tab === "overview" && <OverviewTab summary={summary} storagePct={storagePct} />}
-      {tab === "cameras" && <CamerasTab counts={summary.cameras_by_status} />}
+      {tab === "overview" && (
+        <OverviewTab summary={summary} storagePct={storagePct}
+                     onPickSite={(s) => { setSite(s || ""); setTab("cameras"); }} />
+      )}
+      {tab === "cameras" && (
+        <CamerasTab counts={summary.cameras_by_status} site={site} onSite={setSite} />
+      )}
       {tab === "servers" && <ServersTab />}
       {tab === "storage" && <StorageTab />}
     </div>
   );
 }
 
-export function OverviewTab({ summary, storagePct }) {
+// Cameras by school, the same idiom as the XIQ page's APs-by-site grid. Tinted
+// by the worst thing present rather than by a ratio: one dead camera at a small
+// site matters as much as one at a large one, and a percentage hides that.
+function CameraSiteGrid({ onPick }) {
+  const [rows, setRows] = React.useState(null);
+  const [filter, setFilter] = React.useState("all");
+  React.useEffect(() => {
+    // Rolled up server-side. The XIQ grid groups a list the page already has,
+    // but there are 2,651 cameras here — shipping them all to the browser to
+    // count them by site would be the slowest part of the page.
+    getJSON("/api/surveillance/sites").then(setRows).catch(() => setRows([]));
+  }, []);
+  if (!rows) return <Card kicker="Cameras by school"><Loading what="sites" /></Card>;
+  return <SiteTiles rows={rows} filter={filter} onFilter={setFilter} onPick={onPick} />;
+}
+
+// Split from the fetch above so the render check can exercise it with fixed
+// rows — a component that only renders after a fetch never runs server-side.
+export function SiteTiles({ rows, filter, onFilter, onPick }) {
+  const scored = rows.map((r) => ({
+    ...r,
+    // Blind ranks with the warnings, not the failures: it is the source saying
+    // it cannot tell, which is not evidence of an outage.
+    worst: (r.down_confirmed || r.down_source_only) ? "crit"
+         : (r.down_network_only || r.blind) ? "warn" : "ok",
+  })).sort((a, b) => (b.down_confirmed + b.down_source_only)
+                   - (a.down_confirmed + a.down_source_only)
+                   || String(a.site).localeCompare(String(b.site)));
+  const issues = scored.filter((r) => r.worst !== "ok");
+  const shown = filter === "issues" ? issues
+    : filter === "ok" ? scored.filter((r) => r.worst === "ok") : scored;
+
+  return (
+    <Card kicker={`${scored.length} school(s) · ${issues.length} needing attention`}>
+      <div className="evt-filters" style={{ marginTop: 0 }}>
+        <span className="seg-toggle">
+          {[["all", `All ${scored.length}`], ["issues", `Issues ${issues.length}`],
+            ["ok", `Healthy ${scored.length - issues.length}`]].map(([k, label]) => (
+            <button key={k} type="button"
+                    className={"seg-btn" + (filter === k ? " active" : "")}
+                    onClick={() => onFilter(k)}>{label}</button>
+          ))}
+        </span>
+      </div>
+      <div className="sites-grid">
+        {shown.map((r) => {
+          // The badge counts what someone would be dispatched for. no-ICMP and
+          // blind still tint the tile and show in the tooltip, but they are not
+          // failures — most no-ICMP cameras here are models that never answer
+          // ping at all (spec 19 §7), and putting that in the headline number
+          // would make every school look broken.
+          const bad = r.down_confirmed + r.down_source_only;
+          return (
+            <button key={r.site || "unassigned"} type="button" className="site-tile"
+                    onClick={() => onPick(r.site)}
+                    style={{ borderColor: sevColor(r.worst) + "66",
+                             background: sevColor(r.worst) + "14" }}
+                    title={`${r.total} camera(s) · ${r.up} up · ${r.recording} recording` +
+                           `${r.down_confirmed ? ` · ${r.down_confirmed} down` : ""}` +
+                           `${r.down_source_only ? ` · ${r.down_source_only} Milestone-down` : ""}` +
+                           `${r.down_network_only ? ` · ${r.down_network_only} no ICMP` : ""}` +
+                           `${r.blind ? ` · ${r.blind} blind` : ""}`}>
+              <div className="site-tile-h">
+                <span className="site-tile-prob" style={{ color: sevColor(r.worst) }}>
+                  {bad || (r.down_network_only + r.blind) || "✓"}
+                </span>
+              </div>
+              <div className="site-tile-name">{r.site || "Unassigned"}</div>
+              <div className="site-tile-meta">
+                <span>{r.total} cam</span><span>{r.recording} rec</span>
+              </div>
+            </button>
+          );
+        })}
+        {shown.length === 0 && <div className="msg">No schools in this filter.</div>}
+      </div>
+      <div className="sites-legend">
+        <span className="legend-item">
+          <span className="legend-sw" style={{ borderColor: sevColor("crit") + "66",
+                                               background: sevColor("crit") + "22" }} />
+          down / Milestone-down
+        </span>
+        <span className="legend-item">
+          <span className="legend-sw" style={{ borderColor: sevColor("warn") + "66",
+                                               background: sevColor("warn") + "22" }} />
+          no ICMP / blind
+        </span>
+        <span className="legend-item">
+          <span className="legend-sw" style={{ borderColor: sevColor("ok") + "66",
+                                               background: sevColor("ok") + "22" }} />
+          all up
+        </span>
+        <span className="legend-foot">
+          {scored.reduce((n, r) => n + r.down_confirmed + r.down_source_only, 0)} camera(s) down
+          across {scored.length} school(s)
+        </span>
+      </div>
+    </Card>
+  );
+}
+
+export function OverviewTab({ summary, storagePct, onPickSite }) {
   const usedKnown = usedIsKnown(summary);
   const cs = summary.cameras_by_status || {};
   return (
     <React.Fragment>
+      {/* First, because "which school has a problem" is the question this page
+          gets opened for. The environment roll-up below is context, not the
+          lede. */}
+      <CameraSiteGrid onPick={onPickSite} />
       <Card kicker="XProtect environment">
         <table className="grid kv">
           <tbody>
@@ -185,7 +298,7 @@ export function OverviewTab({ summary, storagePct }) {
   );
 }
 
-export function CamerasTab({ counts }) {
+export function CamerasTab({ counts, site = "", onSite }) {
   const [rows, setRows] = React.useState(null);
   const [q, setQ] = React.useState("");
   const [status, setStatus] = React.useState("");
@@ -193,9 +306,10 @@ export function CamerasTab({ counts }) {
   React.useEffect(() => {
     setRows(null);
     const id = setTimeout(() =>
-      getJSON("/api/surveillance/cameras" + qs({ q, status })).then(setRows).catch(() => setRows([])), 250);
+      getJSON("/api/surveillance/cameras" + qs({ q, site, status }))
+        .then(setRows).catch(() => setRows([])), 250);
     return () => clearTimeout(id);
-  }, [q, status]);
+  }, [q, site, status]);
 
   const c = counts || {};
   // "down" first and widest, because it is the question being asked. It is the
@@ -213,16 +327,29 @@ export function CamerasTab({ counts }) {
 
   return (
     <React.Fragment>
-      <Card kicker={rows ? `${rows.length} shown` : "Cameras"} tight>
+      <Card kicker={rows ? `${rows.length} shown${site ? ` at ${site}` : ""}` : "Cameras"} tight>
         <div className="cam-filter-bar">
+          {site && (
+            <div className="cfb-group">
+              <span className="cfb-lbl">School</span>
+              <button type="button" className="cfb-chip active"
+                      title="clear the school filter"
+                      onClick={() => onSite && onSite("")}>{site} ✕</button>
+            </div>
+          )}
           <div className="cfb-group">
             <span className="cfb-lbl">Status</span>
             {chips.map(([val, label, n]) => (
               <button key={val || "all"} type="button"
                       className={"cfb-chip" + (status === val ? " active" : "")}
-                      title={STATUS[val]?.hint || ""}
+                      title={site
+                        ? "counts are estate-wide; the list below is limited to " + site
+                        : (STATUS[val]?.hint || "")}
                       onClick={() => setStatus(val)}>
-                {label}{n !== undefined ? ` ${n}` : ""}
+                {/* The counts come from the estate-wide summary, so they stop
+                    describing the list once a school is picked. Dropping them
+                    beats showing a number that belongs to a different set. */}
+                {label}{!site && n !== undefined ? ` ${n}` : ""}
               </button>
             ))}
           </div>
@@ -252,7 +379,7 @@ export function CamerasTab({ counts }) {
                 return (
                   <tr key={cam.device_id} className={rowCls}>
                     <td><StatusPill tier={tier} blind={blind} /></td>
-                    <td>{cam.name}</td>
+                    <td><a href={`#/camera/${cam.device_id}`}>{cam.name}</a></td>
                     <td>{cam.site || "—"}</td>
                     <td className="dim">{cam.model || "—"}</td>
                     {/* Recording here is motion-triggered, so "stopped" is the
@@ -262,8 +389,7 @@ export function CamerasTab({ counts }) {
                       {cam.recording_state || "unknown"}</span></td>
                     <td className="dim">{cam.recording_server || "—"}</td>
                     <td className="mono dim">{cam.ip || "—"}</td>
-                    <td><button type="button" className="btn btn-sm" onClick={() =>
-                      getJSON(`/api/surveillance/cameras/${cam.device_id}`).then(setDetail)}>Detail</button></td>
+                    <td><a className="btn btn-sm" href={`#/camera/${cam.device_id}`}>Detail</a></td>
                   </tr>
                 );
               })}
