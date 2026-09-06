@@ -346,10 +346,25 @@ the N:1 encoder reality.
    (use `relations.parent.id`), plus reuse `bare_host()`.
 2. `milestone_client.TIMEOUT = 30.0` is too low for the bulk hardware tree
    (observed `ReadTimeout`; succeeded at 180 s).
-3. Bulk `includeChildren=…,hardwareDriverSettings` is rejected here → MAC and
+3. ~~Bulk `includeChildren=…,hardwareDriverSettings` is rejected here → MAC and
    `serialNumber`/`firmwareVersion` cost ~2,489 per-hardware GETs. Decide whether
    the `cameras.mac ⋈ fdb_entries` payoff justifies that per cycle, or fetch it on
-   a slow secondary cadence.
+   a slow secondary cadence.~~
+   **Closed 2026-09-06 — slow secondary cadence, built.** The payoff is real:
+   on the first 155 cameras backfilled, 152 were found in the FDB against 124
+   whose IP PacketFence had seen, so the first-party MAC resolves a switch port
+   for materially more cameras than the PacketFence bridge does. Not per cycle:
+   the Milestone collector fetches at most `[milestone] identity_batch` (default
+   150) of the hardware records still missing a MAC, so the estate fills in
+   ~30 minutes and then costs nothing, the values being static. MAC, serial,
+   firmware and vendor all persist (migration 025).
+
+   Worth flagging for anyone reading this later: between this investigation and
+   that build, the assertion "Milestone exposes no camera MAC at all" was
+   written into the collector, the API and the UI, and the port pane was built
+   on the PacketFence bridge as though it were the only option. This document
+   already said otherwise. Check the follow-up list before concluding a source
+   cannot supply something.
 4. `GET /api/rest/v1/hardwareDriverSettings` (collection form) → HTTP 400; only
    the by-id form exists. Worth recording alongside the known `/storages` 400.
 5. One address is claimed by two distinct Milestone hardware records — duplicate
