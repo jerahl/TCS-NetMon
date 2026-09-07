@@ -25,6 +25,11 @@ class FakeMs:
         # Camera groups (migration 026) — the Smart Client tree.
         self.groups_data = []
         self.groups_fail = None
+        # Environment facts (spec 20 S2): /sites and /licenseDetails.
+        self.site_data = {}
+        self.site_fail = None
+        self.license_data = []
+        self.license_fail = None
 
     async def recording_servers(self):
         if self.fail:
@@ -48,6 +53,16 @@ class FakeMs:
         if self.groups_fail:
             raise self.groups_fail
         return self.groups_data
+
+    async def site_info(self):
+        if self.site_fail:
+            raise self.site_fail
+        return self.site_data
+
+    async def license_details(self):
+        if self.license_fail:
+            raise self.license_fail
+        return self.license_data
 
     async def hardware_driver_settings(self, hardware_id):
         self.settings_calls.append(hardware_id)
@@ -425,9 +440,11 @@ def test_ess_communication_maps_to_camera_source_status(tmp_path):
     col = MilestoneCollector(engine, fake, ess_enabled=True)
 
     async def fake_ess():
-        # Keyed by camera GUID, as the ESS `source` field supplies it.
-        return {"CAM1": ("up", "ok"), "CAM2": ("down", "crit")}
-    col._ess_camera_status = fake_ess
+        # (camera verdicts, recording-server states) — one snapshot serves both
+        # since the subscription asks for both resource types (migration 027).
+        # Keyed by GUID, as the ESS `source` field supplies it.
+        return {"CAM1": ("up", "ok"), "CAM2": ("down", "crit")}, {}
+    col._ess_state = fake_ess
     asyncio.run(col.run_once())
 
     rows = {r["device_id"]: r for r in db.fetch_all(
@@ -458,7 +475,7 @@ def test_ess_failure_degrades_without_failing_the_cycle(tmp_path):
 
     async def no_ess():
         return None
-    col._ess_camera_status = no_ess
+    col._ess_state = no_ess
     written = asyncio.run(col.run_once())          # must not raise
 
     assert written > 0
@@ -843,3 +860,268 @@ def test_group_membership_prunes_on_refresh(tmp_path):
     asyncio.run(c.run_once())
     rows = db.fetch_all(e, "SELECT group_id FROM camera_group_members")
     assert [r["group_id"] for r in rows] == ["g1"]
+
+
+def test_ess_recording_server_states_land_on_the_row(tmp_path):
+    """Recording-server verdicts from the Events/State interface (migration 027).
+
+    The subscription only ever asked for `resourceTypes: ["cameras"]`, so these
+    were never delivered and RS status came from the Config API's `running`
+    flag. Communication now drives source_status; the other three are
+    descriptive columns and must NOT become severities here — half this estate
+    reads "Service Available Critical" with a months-old timestamp.
+    """
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.servers = [{"id": "RS1", "hostName": "nvr-1.tcs", "running": False}]
+    fake.cameras_data = []
+    col = MilestoneCollector(engine, fake, ess_enabled=True)
+
+    async def fake_ess():
+        return {}, {"RS1": {"comm_state": "Communication Started",
+                            "cpu_state": "CPU Usage Normal",
+                            "retention_state": "Retention time Warning",
+                            "service_state": "Service Available Critical",
+                            "states_at": "2026-04-24T07:13:31Z"}}
+    col._ess_state = fake_ess
+    asyncio.run(col.run_once())
+
+    row = db.fetch_one(engine, "SELECT comm_state, cpu_state, retention_state, "
+                               "service_state FROM recording_servers")
+    assert row["comm_state"] == "Communication Started"
+    assert row["retention_state"] == "Retention time Warning"
+    assert row["service_state"] == "Service Available Critical"
+
+    # Communication wins over the Config API flag: `running` was False, yet the
+    # ESS says the VMS is talking to it, and the ESS is the live view.
+    st = db.fetch_one(engine, "SELECT value, severity, source FROM device_state "
+                              "WHERE dimension='source_status'")
+    assert st["value"] == "up" and st["source"] == "milestone-ess"
+
+    # And the Critical service state did NOT become a crit anywhere.
+    assert db.fetch_one(
+        engine, "SELECT COUNT(*) n FROM device_state WHERE severity='crit'")["n"] == 0
+
+
+def test_recording_server_falls_back_to_the_config_flag_without_the_ess(tmp_path):
+    """No ESS → the Config API flag still decides, and the state columns stay
+    NULL rather than being guessed. A NULL renders "—"; a guess renders a claim.
+    """
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.servers = [{"id": "RS1", "hostName": "nvr-1.tcs", "running": False}]
+    fake.cameras_data = []
+    col = MilestoneCollector(engine, fake, ess_enabled=False)
+    asyncio.run(col.run_once())
+
+    st = db.fetch_one(engine, "SELECT value, source FROM device_state "
+                              "WHERE dimension='source_status'")
+    assert st["value"] == "down" and st["source"] == "milestone"
+    row = db.fetch_one(engine, "SELECT comm_state, service_state FROM recording_servers")
+    assert row["comm_state"] is None and row["service_state"] is None
+
+
+def test_environment_facts_reach_the_overview(tmp_path):
+    """Management server, version and device licences (spec 20 S2).
+
+    There is no licence *total* in either licence response — Professional+ is
+    licensed per activated device — so the snapshot carries what exists and
+    nothing derived from a total that does not.
+    """
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.servers = []
+    fake.cameras_data = []
+    fake.site_data = {"displayName": "CO-MILESTONE", "version": "25.2.0.1",
+                      "timeZone": "Central Standard Time"}
+    fake.license_data = [{"licenseType": "Device License", "displayName": "Device License",
+                          "activated": "2491", "notLicensed": "0", "inGrace": 0}]
+    col = MilestoneCollector(engine, fake)
+    asyncio.run(col.run_once())
+
+    p = read_snapshot(engine, "milestone.overview")["payload"]
+    assert p["management_server"] == "CO-MILESTONE"
+    assert p["version"] == "25.2.0.1"
+    # `activated` arrives as a string and must be coerced, or the UI formats
+    # "2491" as a string and any comparison against it is a string comparison.
+    assert p["license_activated"] == 2491
+    assert p["license_not_licensed"] == 0
+    assert "license_total" not in p
+
+
+def test_environment_facts_fail_soft_and_say_so(tmp_path):
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.servers = []
+    fake.cameras_data = []
+    fake.site_fail = MilestoneError("sites HTTP 404")
+    fake.license_fail = MilestoneError("licenseDetails HTTP 404")
+    col = MilestoneCollector(engine, fake)
+    asyncio.run(col.run_once())
+
+    p = read_snapshot(engine, "milestone.overview")["payload"]
+    assert p["management_server"] is None and p["version"] is None
+    # Both degradations are named, so a missing version is visibly missing
+    # rather than looking like a version nobody set.
+    assert "site" in p["degraded"] and "license" in p["degraded"]
+
+
+def test_camera_channel_and_tls_fields(tmp_path):
+    """The two fields D7's snapshot proxy needs (migration 027).
+
+    `httpSEnabled` is the STRING 'Yes'/'No'. A truthiness test on the raw value
+    marks every camera TLS-enabled, and the proxy then talks https to a camera
+    serving http — the correction spec 11 D7 recorded.
+    """
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.servers = []
+    fake.cameras_data = [{"id": "CAM1", "channel": 3, "recordingEnabled": True,
+                          "relations": {"parent": {"type": "hardware", "id": "HW1"}}}]
+    fake.hardware_data = [{"id": "HW1", "address": "http://10.1.2.3/"}]
+    fake.settings_data = {"HW1": {"httpSEnabled": "Yes", "httpSPort": 443,
+                                  "macAddress": "00:11:22:33:44:55"}}
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE devices SET milestone_hardware_id='CAM1' "
+                          "WHERE device_type='camera'"))
+    col = MilestoneCollector(engine, fake)
+    asyncio.run(col.run_once())
+
+    row = db.fetch_one(engine, "SELECT channel, https_enabled, https_port, ip "
+                               "FROM cameras")
+    assert row["channel"] == 3
+    assert row["https_enabled"] == 1          # 'Yes' → 1, not a truthy string
+    assert row["https_port"] == 443
+    assert row["ip"] == "10.1.2.3"
+
+
+def test_https_enabled_no_is_zero_not_none(tmp_path):
+    """'No' must be 0, and anything unrecognised None — "we were not told" has
+    to stay distinct from "no", because the proxy picks a scheme from it."""
+    from netmon.collectors.milestone import _yes_no
+    assert _yes_no("Yes") == 1 and _yes_no("yes") == 1 and _yes_no(True) == 1
+    assert _yes_no("No") == 0 and _yes_no(False) == 0
+    assert _yes_no("") is None and _yes_no(None) is None and _yes_no("maybe") is None
+
+
+def test_ess_timestamp_parsing_and_comm_naming():
+    """Two live traps, both of which cost a whole table on first contact.
+
+    Milestone emits seven fractional digits and a trailing Z, which
+    `fromisoformat` rejects and MariaDB rejects harder — the unparsed string
+    failed the entire recording_servers upsert with "Incorrect datetime value".
+    And Milestone is inconsistent with its own state names: recorders report
+    `CommunicationStarted` (no space) beside `CPU Usage Normal` (spaces), so
+    matching the spaced form marked all 22 recorders down.
+    """
+    from netmon.collectors.milestone import _ess_time, ESS_RS_COLUMNS
+
+    ts = _ess_time("2026-08-15T04:32:51.5226035Z")
+    assert ts is not None and ts.year == 2026 and ts.microsecond == 522603
+    assert ts.tzinfo is not None
+    assert _ess_time("2026-01-01T00:00:00Z") is not None
+    assert _ess_time("") is None and _ess_time(None) is None and _ess_time("junk") is None
+
+    # Both spellings must be recognised as the Communication group…
+    for name in ("CommunicationStarted", "Communication Started"):
+        assert any(name.startswith(prefix) for prefix, _ in ESS_RS_COLUMNS)
+    # …and both must read as "up" under the collector's normalised test.
+    for name in ("CommunicationStarted", "Communication Started"):
+        assert "started" in name.replace(" ", "").lower()
+    for name in ("CommunicationStopped", "Communication Error"):
+        assert "started" not in name.replace(" ", "").lower()
+
+
+def test_stored_identity_is_never_blanked_by_an_unasked_hardware(tmp_path):
+    """The regression the identity marker caused, pinned.
+
+    `replace_rows` rewrites the whole camera row, so every cycle has to
+    re-supply what is already stored. Gating the read-back on the *marker*
+    rather than on "has anything stored" meant a freshly-added marker column —
+    NULL for the whole estate — made the collector supply nothing, and 2,496
+    MACs were wiped on the live database until the backfill came round again.
+
+    Two questions, two answers: what is stored (supply it) and what has been
+    asked (skip it).
+    """
+    e = _identity_engine(tmp_path, ["C1", "C2"])
+    fake = FakeMs()
+    fake.cameras_data = [_cam("C1", "HW1"), _cam("C2", "HW2")]
+    fake.hardware_data = [{"id": "HW1"}, {"id": "HW2"}]
+    fake.settings_data = {"HW1": {"macAddress": "00075FD83950"},
+                          "HW2": {"macAddress": "00075FD83951"}}
+    # One hardware per cycle, so the second is always "not this batch".
+    col = MilestoneCollector(e, fake, identity_batch=1)
+    asyncio.run(col.run_once())
+    first = {r["mac"] for r in db.fetch_all(e, "SELECT mac FROM cameras WHERE mac IS NOT NULL")}
+    assert len(first) == 1
+
+    # Simulate the migration's effect on rows already carrying identity: the
+    # marker is cleared, the MAC is not. The next cycle must keep the MAC.
+    with e.begin() as conn:
+        conn.execute(text("UPDATE cameras SET identity_at = NULL"))
+    asyncio.run(col.run_once())
+    macs = {r["mac"] for r in db.fetch_all(e, "SELECT mac FROM cameras WHERE mac IS NOT NULL")}
+    assert first.issubset(macs), "a stored MAC was blanked by a cycle that did not refetch it"
+
+
+def test_hardware_that_reports_nothing_is_asked_once(tmp_path):
+    """A record with no MAC has nothing to store but has still been asked.
+
+    Keyed on the MAC, such a hardware never became "known" and was re-fetched
+    every cycle forever — one wasted request per cycle per record, invisible
+    because it looked like ordinary backfill traffic.
+    """
+    e = _identity_engine(tmp_path, ["C1"])
+    fake = FakeMs()
+    fake.cameras_data = [_cam("C1", "HW1")]
+    fake.hardware_data = [{"id": "HW1"}]
+    fake.settings_data = {"HW1": {}}          # answers, but carries nothing
+    col = MilestoneCollector(e, fake)
+    asyncio.run(col.run_once())
+    assert fake.settings_calls == ["HW1"]
+
+    fake.settings_calls.clear()
+    asyncio.run(col.run_once())
+    assert fake.settings_calls == [], "a hardware with no MAC was asked twice"
+
+
+def test_camera_links_to_its_recorder_through_the_hardware(tmp_path):
+    """The camera→recorder link is two hops, and it was never made.
+
+    `/cameras` carries no recording-server reference — the chain is camera →
+    relations.parent (hardware) → hardware's relations.parent
+    (recordingServers). The old code looked for a `recordingServerId` on the
+    camera, found nothing, and left `recording_server_device_id` NULL for all
+    2,651 cameras: the detail page showed "—" for the recorder and per-recorder
+    camera counts could not be computed at all.
+    """
+    e = db.make_engine(f"sqlite:///{tmp_path / 'link.db'}")
+    create_core_tables(e)
+    with e.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO devices (name, site, device_type, enabled, milestone_hardware_id) "
+            "VALUES ('NVR-1','S','recording_server',1,'RS1'),"
+            "       ('CAM-1','S','camera',1,'CAM1')"))
+    fake = FakeMs()
+    fake.servers = [{"id": "RS1", "hostName": "nvr-1", "running": True}]
+    fake.cameras_data = [{"id": "CAM1", "recordingEnabled": True,
+                          "relations": {"parent": {"type": "hardware", "id": "HW1"}}}]
+    fake.hardware_data = [{"id": "HW1", "address": "http://10.0.0.5/",
+                           "relations": {"parent": {"type": "recordingServers", "id": "RS1"}}}]
+    asyncio.run(MilestoneCollector(e, fake).run_once())
+
+    rs_devid = db.fetch_one(e, "SELECT id FROM devices WHERE device_type='recording_server'")["id"]
+    assert db.fetch_one(e, "SELECT recording_server_device_id FROM cameras"
+                        )["recording_server_device_id"] == rs_devid
+
+
+def test_relation_id_checks_the_type(tmp_path):
+    """A parent of the wrong type must not be mistaken for the right one."""
+    from netmon.collectors.milestone import _relation_id
+    hw = {"relations": {"parent": {"type": "recordingServers", "id": "RS9"},
+                        "self": {"type": "hardware", "id": "HW9"}}}
+    assert _relation_id(hw, "recordingServers") == "RS9"
+    assert _relation_id(hw, "hardware") == ""          # self is not parent
+    assert _relation_id({}, "recordingServers") == ""
+    assert _relation_id({"relations": None}, "recordingServers") == ""

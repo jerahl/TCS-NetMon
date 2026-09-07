@@ -226,6 +226,34 @@ class MilestoneClient:
                 return settings
         return {}
 
+    async def site_info(self) -> dict:
+        """The management server's own record — name and XProtect version.
+
+        `/sites` returns one row on a single-site deployment, carrying
+        `displayName`, `computerName`, `domainName`, `timeZone` and `version`
+        ("25.2.0.1" here, i.e. 2025 R2 — the version spec 19 §8 had to infer).
+        """
+        async with await self._mkclient() as client:
+            data = await self._get(client, "/api/rest/v1/sites")
+        rows = _items(data)
+        return rows[0] if rows else {}
+
+    async def license_details(self) -> list[dict]:
+        """Per-licence-type activation counts.
+
+        `/licenseDetails` returns one row per licence type — "Device License"
+        is the one that counts cameras — with `activated`, `notLicensed` and
+        `inGrace`. Note `activated` arrives as a STRING ("2491").
+
+        There is no *total* anywhere in this response, and none in
+        `/licenseInformations` either: XProtect Professional+ is licensed per
+        activated device, so "used of total" — the ratio ZCD draws as a bar —
+        does not exist to be read. The caller reports what is there.
+        """
+        async with await self._mkclient() as client:
+            data = await self._get(client, "/api/rest/v1/licenseDetails")
+        return _items(data)
+
     async def camera_groups(self) -> list[dict]:
         """The Smart Client organisational tree — one record per group, child
         cameras inline (migration 026).

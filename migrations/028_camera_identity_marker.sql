@@ -1,0 +1,32 @@
+-- 028: a marker for "hardwareDriverSettings has been asked for this hardware".
+--
+-- Split from 027 rather than folded into it because 027 had already been
+-- applied when this need surfaced. Editing an applied migration leaves this
+-- server without the column and a fresh install with it — the drift that breaks
+-- the next deploy, not a tidier history.
+--
+-- The identity backfill decided what to fetch by looking for a NULL `mac`. That
+-- is the wrong question in two ways, and both cost real work:
+--
+--   * a hardware record that reports no MAC at all never becomes "known", so it
+--     was re-fetched every cycle, forever, at one request each;
+--   * when 027 added `https_enabled`/`https_port` from the same response, every
+--     hardware already had a MAC — so the whole estate counted as done and the
+--     two new columns were collected for exactly zero cameras. The fields were
+--     there, the code was right, and nothing happened.
+--
+-- The right question is "have we asked", which needs its own marker. Set on
+-- every cycle where settings for that hardware are in hand; NULL means ask.
+--
+-- Deliberately NULL for the whole estate on apply: that re-runs the backfill
+-- once (~2,489 records at 150/cycle ≈ 17 cycles ≈ 34 minutes at the default
+-- interval) and collects the 027 fields for cameras whose MAC was already
+-- stored. A future field from this same response needs the same one-line reset
+-- in its own migration — that is now the documented pattern.
+--
+-- rollback: ALTER TABLE cameras DROP COLUMN identity_at;
+--   Safe. The backfill reverts to the MAC test, which re-fetches MAC-less
+--   hardware every cycle but is otherwise correct.
+
+ALTER TABLE cameras
+  ADD COLUMN identity_at TIMESTAMP NULL AFTER vendor;

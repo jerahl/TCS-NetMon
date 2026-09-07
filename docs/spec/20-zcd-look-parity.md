@@ -211,7 +211,71 @@ Fonts: if the owner approves, vendor Inter (400/500/600/700) and JetBrains Mono
 (400/500/600) woff2 under `frontend/fonts/` and add the `@font-face` block ahead
 of the PORT marker in `styles.css`; esbuild copies them to `netmon/web/`.
 
-### S2 — The numbers the header and overview need (1 session, collector + API)
+### S2 — The numbers the header and overview need — **done 2026-09-07**
+
+Probed read-only first, which changed most of the plan and turned up four
+defects that had nothing to do with the new work.
+
+**What the gateway actually holds:**
+
+| Wanted | Endpoint | Result |
+|---|---|---|
+| management server, version | `/api/rest/v1/sites` | one row: `CO-MILESTONE`, `version 25.2.0.1` — the version spec 19 §8 had to infer |
+| licence | `/licenseDetails` | Device License, **2,491 activated, 0 not licensed**. There is **no total** in this response or in `/licenseInformations` — Professional+ licenses per activated device, so ZCD's used/total bar has no source. The page reports activated and unlicensed and invents no ratio |
+| camera `channel` | `/cameras` | present on all 2,651; **178 are channels > 0** (multi-imager devices) |
+| TLS scheme | `hardwareDriverSettings` | `httpSEnabled` is the STRING `'Yes'`, `httpSPort` an int. **1,695 of 2,651 cameras (64%) have HTTPS enabled** — a proxy assuming either scheme would fail on hundreds |
+| recorder states | ESS | the subscription asked for `resourceTypes: ["cameras"]` only, so **zero** recorder states had ever arrived |
+
+**The ESS subscription was half-blind.** Adding `recordingServers` to the same
+filter (still D5's three read-only verbs) yields 152 states across all 22
+recorders: Communication Started ×22, CPU Usage Normal ×22, Retention time
+Normal ×21 + **Warning ×1**, Service Available Critical ×11 / Normal ×11.
+Communication now drives recorder `source_status` — better than the Config API's
+`running` flag, which describes configuration rather than whether the VMS is
+talking to the box. The other three are **descriptive columns only**: half the
+estate reads "Service Available Critical" with timestamps weeks to months old,
+which looks far more like a state group that was never cleared than eleven
+simultaneous outages, and turning that into eleven alerts would repeat the storm
+spec 19 §12 spent a day undoing.
+
+**Four defects found while building, none of them in the new feature:**
+
+1. **The camera→recorder link never worked.** `/cameras` carries no
+   recording-server reference — the chain is camera → `relations.parent`
+   (hardware) → hardware's `relations.parent` (recordingServers). The code
+   looked for a `recordingServerId` on the camera, found nothing, and left
+   `recording_server_device_id` NULL for **all 2,651 cameras** since Phase 10.4.
+   That is why the detail page showed "—" for the recorder and why per-recorder
+   camera counts were impossible. Now 2,651 of 2,651 link across 22 recorders.
+2. **`chans_total`/`chans_recording` are NULL for all 22 recorders** in the
+   Config API, so the counts come from the cameras table in the API layer, where
+   the link now exists.
+3. **The ESS timestamp broke the whole recorder upsert.** Milestone emits seven
+   fractional digits and a trailing Z; MariaDB rejected the string and failed
+   every recorder row with "Incorrect datetime value" — one unparsed field
+   costing a whole table its refresh.
+4. **Milestone is inconsistent with its own state names** — recorders report
+   `CommunicationStarted` (no space) beside `CPU Usage Normal` (spaces). Matching
+   the spaced form marked all 22 recorders down.
+
+**And one defect I introduced and had to fix properly.** Gating the identity
+backfill on "the new field is non-NULL" looked right and was wrong twice over: a
+hardware that reports no MAC would be re-fetched every cycle forever, and — worse
+— reading back only *asked* hardware meant `replace_rows` re-supplied nothing, so
+**2,496 MACs were wiped from the live database** until the backfill came round
+again. The fix is migration 028's `identity_at`: "have we asked" is a separate
+question from "what do we know", and the read-back has to answer the second on
+every cycle. Both are now pinned by tests, and the estate was refilled in one
+pass rather than 17 cycles.
+
+**Also delivered:** seven `surveillance.*` history series (one per reachability
+tier, not 2,662 per-camera series — D3's ring buffer stays low-cardinality),
+feeding the overview's "Cameras · 24h" panel as one labelled sparkline per tier;
+`/api/surveillance/site-context` for the Sites tab; header chip and licence pill;
+Service / CPU / Retention-state columns on the recorder table with their age in
+the tooltip.
+
+### S2-original — the numbers the header and overview need (superseded)
 
 All GET, all Config API, all into `milestone.overview` / `recording_servers`:
 
@@ -656,5 +720,7 @@ NetMon largely has. Suggested order (spec 15 §3.2 estimates still apply):
 - [x] S1 — shell primitives + fonts. Inter shipped as the single variable file (352 KB, weights 100–900) rather than four statics: smaller, and the design's `font-weight: 500` now renders as a real 500. JetBrains Mono has no variable woff2 upstream, so 400/500/600 are static.
 - [x] The three S8 questions are answered (see §3 S8). One follow-on is open and is the owner's: deferring the setting catalogue means firmware — the irreversible half — would be the first thing S8 ships, so pick the proving ground (lab camera vs. a two-setting minimal catalogue).
 - [x] **S3 done 2026-09-07** (out of order, owner-directed): `#/cameras` with the Milestone group tree. Migration 026 applied live, one collector cycle run — 26 groups, 2,676 memberships, 0 cameras ungrouped, no degradation. 23 render-check cases and 514 tests green.
-- [ ] **S2 next.** Highest-value items, in order: RS service state from the ESS (`_ess_camera_status` reads only `cameras/` today; spec 19 §11 has 9 recording-server states covering all 22 servers, and the Overview's recorder tiles currently colour off the Config API's `running` flag); per-RS camera counts so `chans_total` stops being null; `sites`/version/licence investigation for the header chip; `https_enabled` / `https_port` / `channel` into `cameras` — S4's snapshot proxy needs all three and collecting them now avoids a second migration.
+- [x] **S2 done 2026-09-07.** Migrations 027 + 028 applied live; environment facts, recorder ESS verdicts, camera channel/TLS, seven history series, real per-recorder counts. 546 tests and 34 render-check cases green.
+- [ ] **S4 next** — the snapshot proxy now has everything it was waiting for: `channel` (178 multi-imager cameras), `https_enabled` (1,695 of 2,651 on TLS) and `https_port`. The owner has approved the read-only camera login; it needs provisioning in `netmon.conf` under `[camera_snapshot]`.
+- [ ] ~~**S2 next.** Highest-value items, in order: RS service state from the ESS (`_ess_camera_status` reads only `cameras/` today; spec 19 §11 has 9 recording-server states covering all 22 servers, and the Overview's recorder tiles currently colour off the Config API's `running` flag); per-RS camera counts so `chans_total` stops being null; `sites`/version/licence investigation for the header chip; `https_enabled` / `https_port` / `channel` into `cameras` — S4's snapshot proxy needs all three and collecting them now avoids a second migration.
 - [ ] A restart of `netmon.service` is required for S1's two API additions (`device_type`/`limit` on `/api/alerts`, `milestone_host` on `/api/meta`). Until then the live page's alarm cell counts estate-wide alerts, because FastAPI ignores query params it does not know about — the static bundle updates without a restart but the API does not.

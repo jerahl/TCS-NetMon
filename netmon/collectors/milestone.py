@@ -51,6 +51,23 @@ ESS_COMMUNICATION = {
     "CommunicationStopped": ("down", "crit"),
 }
 
+# Recording-server ESS states → the four columns migration 027 adds. Keyed by
+# the *prefix* of the resolved state name, because the name carries the verdict
+# in its tail ("Retention time Normal" / "Retention time Warning") and the group
+# is what identifies the dimension.
+#
+# Only Communication drives `device_state`. The other three are descriptive:
+# half this estate reads "Service Available Critical" with a timestamp four
+# months old, which looks like a state group that was never cleared rather than
+# eleven simultaneous outages — and turning it into eleven alerts would repeat
+# the storm spec 19 §12 spent a day undoing.
+ESS_RS_COLUMNS = (
+    ("Communication", "comm_state"),
+    ("CPU Usage", "cpu_state"),
+    ("Retention time", "retention_state"),
+    ("Service Available", "service_state"),
+)
+
 log = logging.getLogger("netmon.collectors.milestone")
 
 
@@ -72,6 +89,54 @@ def _num(*vals: Any):
                 return float(v) if "." in v else int(v)
             except ValueError:
                 continue
+    return None
+
+
+def _ess_time(raw: Any) -> datetime | None:
+    """Parse an Events/State timestamp.
+
+    Milestone emits ISO-8601 with **seven** fractional digits and a trailing Z
+    ("2026-08-15T04:32:51.5226035Z"). `datetime.fromisoformat` accepts at most
+    six, and handing the raw string to a TIMESTAMP column fails outright —
+    MariaDB rejected the whole recording-server upsert with "Incorrect datetime
+    value", so one unparsed field cost the entire table its refresh.
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    # Truncate over-long fractional seconds rather than rounding: the extra
+    # digit is 100ns precision nothing here needs.
+    if "." in s:
+        head, _, tail = s.partition(".")
+        digits = "".join(ch for ch in tail if ch.isdigit())[:6]
+        rest = tail[len(digits):] if tail[len(digits):].startswith(("+", "-")) else ""
+        if not rest:
+            plus = max(tail.rfind("+"), tail.rfind("-"))
+            rest = tail[plus:] if plus > 0 else ""
+        s = f"{head}.{digits}{rest}"
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        log.debug("unparseable ESS timestamp %r", raw)
+        return None
+
+
+def _yes_no(v: Any) -> int | None:
+    """Milestone's string booleans: 'Yes'/'No' (hardwareDriverSettings).
+
+    Returns None for anything unrecognised, so "we were not told" stays
+    distinct from "no" — the column feeds the snapshot proxy's scheme choice
+    and a wrong default there is a request to the wrong port.
+    """
+    if isinstance(v, bool):
+        return 1 if v else 0
+    s = str(v or "").strip().lower()
+    if s in ("yes", "true", "1", "enabled"):
+        return 1
+    if s in ("no", "false", "0", "disabled"):
+        return 0
     return None
 
 
@@ -111,6 +176,24 @@ def _hardware_key(cam: dict) -> str:
             if hid:
                 return str(hid)
     return str(_first(cam, "hardwareId", "hardware") or "")
+
+
+def _relation_id(rec: dict, want_type: str) -> str:
+    """The id of a record's parent of a given type.
+
+    Milestone links downward through ``relations.parent = {type, id}``, and the
+    type has to be checked rather than assumed — a camera's parent is a
+    hardware, a hardware's parent is a recording server, and a recording
+    server's parent is the site.
+    """
+    rel = rec.get("relations")
+    if not isinstance(rel, dict):
+        return ""
+    parent = rel.get("parent")
+    for cand in (parent if isinstance(parent, list) else [parent]):
+        if isinstance(cand, dict) and str(cand.get("type") or "").lower() == want_type.lower():
+            return str(cand.get("id") or "")
+    return ""
 
 
 def _host_from_address(raw: Any) -> str | None:
@@ -154,20 +237,39 @@ def _port_from_address(raw: Any) -> int | None:
 
 
 def build_recording_servers(servers: list[dict], reg: dict[str, dict],
-                            storage_by_rs: dict[str, dict], now: datetime) -> list[dict]:
+                            storage_by_rs: dict[str, dict], now: datetime,
+                            ess_rs: dict[str, dict] | None = None) -> list[dict]:
+    """Recording-server rows.
+
+    ``ess_rs`` maps the server's Milestone id to the four state verdicts the
+    Events/State interface publishes (migration 027). Absent when the ESS could
+    not be read, and the columns then stay NULL rather than being guessed from
+    the Config API — a NULL renders "—", a guess renders a claim.
+    """
+    ess_rs = ess_rs or {}
     rows: list[dict] = []
     for srv in servers:
         r = reg.get(str(srv.get("id")))
         if r is None:
             continue
         st = storage_by_rs.get(str(srv.get("id")), {})
+        states = ess_rs.get(str(srv.get("id")), {})
         rows.append({
             "device_id": int(r["id"]),
             "hostname": _first(srv, "hostName", "hostname", "name"),
             "role": _first(srv, "role", "serverType"),
             "version": _first(srv, "productVersion", "version"),
+            # The Config API reports neither on this deployment (both NULL for
+            # all 22), so the real counts come from the cameras table in the
+            # API layer, where the link already exists. Kept for versions that
+            # do populate them.
             "chans_total": _num(srv.get("cameraCount"), srv.get("channels")),
             "chans_recording": _num(srv.get("recordingCameraCount")),
+            "comm_state": states.get("comm_state"),
+            "cpu_state": states.get("cpu_state"),
+            "retention_state": states.get("retention_state"),
+            "service_state": states.get("service_state"),
+            "states_at": states.get("states_at"),
             "storage_used_gb": st.get("used_gb"),
             "storage_total_gb": st.get("total_gb"),
             "retention_days": _num(st.get("retention_days"), srv.get("retentionDays")),
@@ -203,7 +305,15 @@ def build_cameras(cameras: list[dict], reg: dict[str, dict],
         mac = canon_mac(str(_first(cam, "mac", "macAddress")
                             or _first(hw, "mac", "macAddress")
                             or ident.get("macAddress") or ""))
-        rs_id = str(_first(cam, "recordingServerId", "recordingServer") or "")
+        # The camera→recorder link is TWO hops: camera → relations.parent
+        # (hardware) → hardware's relations.parent (recordingServers).
+        # `/cameras` carries no recording-server reference at all, so the old
+        # lookup for `recordingServerId` was always empty and
+        # `recording_server_device_id` has been NULL for every one of the 2,651
+        # cameras since Phase 10.4 — which is why the detail page showed "—"
+        # for the recorder and why per-recorder camera counts were impossible.
+        rs_id = (_relation_id(hw, "recordingServers")
+                 or str(_first(cam, "recordingServerId", "recordingServer") or ""))
         rows.append({
             "device_id": int(r["id"]),
             "model": _first(cam, "model", "shortName") or _first(hw, "model"),
@@ -215,12 +325,23 @@ def build_cameras(cameras: list[dict], reg: dict[str, dict],
             "state_msg": _first(cam, "stateMessage", "state"),
             "ip": _first(cam, "address", "ip") or _host_from_address(_first(hw, "address", "ip")),
             "http_port": _port_from_address(_first(hw, "address", "ip")),
+            # Milestone stores every hardware address as http://, so whether the
+            # camera actually speaks TLS has to come from hardwareDriverSettings
+            # rather than from the address. `httpSEnabled` is the STRING
+            # 'Yes'/'No' — a truthiness test on the raw value would mark every
+            # camera TLS-enabled, which is the D7 correction in one line.
+            "https_enabled": _yes_no(ident.get("httpSEnabled")),
+            "https_port": _num(ident.get("httpSPort")),
             # The physical device. 61 hardware records carry more than one
             # camera here (up to 11 on one AXIS M3007 panoramic), so this is
             # what tells "one device, several cameras" apart from "two devices
             # fighting over an IP" — which the poller's guard cannot otherwise
             # distinguish. See migration 022.
             "hardware_id": hw_id or None,
+            # Which imager on a multi-camera device. D7's snapshot path needs
+            # it: for a camera that is a channel on a shared encoder a bare
+            # /snap.jpg returns the wrong imager (spec 11 D7).
+            "channel": _num(cam.get("channel")),
             "mac": mac or None,
             # Per-hardware identity from hardwareDriverSettings (migration 025).
             # Firmware picks the SNMP profile for D10; serial is the only stable
@@ -228,6 +349,10 @@ def build_cameras(cameras: list[dict], reg: dict[str, dict],
             "firmware": (ident.get("firmwareVersion") or None),
             "serial": (ident.get("serialNumber") or None),
             "vendor": (ident.get("productID") or None),
+            # The marker the backfill gates on. Set whenever settings for this
+            # hardware are in hand — freshly fetched or read back from the row —
+            # so a hardware that reports nothing is asked once, not every cycle.
+            "identity_at": (now if ident else None),   # `ident` non-empty ⇒ asked
             "recording_server_device_id": rs_devid.get(rs_id),
             "enabled": 1 if _truthy(cam.get("enabled"), cam.get("recordingEnabled")) else 0,
             "updated_at": now,
@@ -390,25 +515,56 @@ class MilestoneCollector(Collector):
             log.info("milestone: synced mgmt_ip for %d camera(s)", len(changed))
         return len(changed)
 
-    def _known_identity(self) -> dict[str, dict]:
-        """Identity already in the DB, keyed by hardware id.
+    def _known_identity(self) -> tuple[dict[str, dict], set[str]]:
+        """Identity already stored, and which hardware has been asked.
 
-        Read back each cycle so the batch below only has to fetch what is
-        missing, and so a camera keeps its MAC on cycles where its hardware is
-        not in the batch — ``replace_rows`` rewrites the whole row, so anything
-        not re-supplied would be blanked.
+        Two different questions, and conflating them blanked 2,496 MACs on the
+        live estate for as long as it took the backfill to come round again:
+
+          * **what do we already know** — every hardware with anything stored.
+            ``replace_rows`` rewrites the whole camera row, so this has to be
+            supplied on every cycle or the fields are silently cleared for any
+            hardware not in this cycle's batch.
+          * **what still needs asking** — hardware whose ``identity_at`` is
+            NULL. A record that reports no MAC has nothing stored but has been
+            asked, and must not be asked again every cycle forever.
+
+        Returns ``(stored, asked)``.
         """
         out: dict[str, dict] = {}
+        # Completeness is "we asked and stored the answer" (`identity_at`), not
+        # "a field came back non-empty". Two reasons, both found the hard way:
+        # keying on the MAC meant a hardware that reports none was re-fetched
+        # every cycle forever, and when migration 027 added two more fields from
+        # the same response, a MAC-only gate skipped the whole estate as already
+        # done so the new columns were never collected for a single camera.
+        # Migration 027 leaves the marker NULL, which re-runs the backfill once.
+        asked: set[str] = set()
         for r in db.fetch_all(
                 self.engine,
-                "SELECT hardware_id, mac, firmware, serial, vendor FROM cameras "
-                "WHERE hardware_id IS NOT NULL AND mac IS NOT NULL "
-                "GROUP BY hardware_id, mac, firmware, serial, vendor"):
-            out[str(r["hardware_id"])] = {"macAddress": r["mac"],
-                                          "firmwareVersion": r["firmware"],
-                                          "serialNumber": r["serial"],
-                                          "productID": r["vendor"]}
-        return out
+                "SELECT hardware_id, mac, firmware, serial, vendor, "
+                "       https_enabled, https_port, "
+                "       MAX(identity_at) AS identity_at FROM cameras "
+                "WHERE hardware_id IS NOT NULL "
+                "GROUP BY hardware_id, mac, firmware, serial, vendor, "
+                "         https_enabled, https_port"):
+            if r["identity_at"] is not None:
+                asked.add(str(r["hardware_id"]))
+            if not any(r[k] is not None for k in
+                       ("mac", "firmware", "serial", "vendor", "https_enabled")):
+                continue
+            out[str(r["hardware_id"])] = {
+                "macAddress": r["mac"],
+                "firmwareVersion": r["firmware"],
+                "serialNumber": r["serial"],
+                "productID": r["vendor"],
+                # None stays None: "the device did not tell us" must not be
+                # rewritten as "No", which the proxy would act on.
+                "httpSEnabled": (None if r["https_enabled"] is None
+                                 else ("Yes" if r["https_enabled"] else "No")),
+                "httpSPort": r["https_port"],
+            }
+        return out, asked
 
     async def _device_identity(self, cameras: list[dict],
                                degraded: list[str]) -> dict[str, dict]:
@@ -431,15 +587,17 @@ class MilestoneCollector(Collector):
         read keeps NULL rather than losing the cycle. `identity` is added to
         `degraded` so a stalled backfill is visible instead of looking finished.
         """
-        known = self._known_identity()
+        known, asked = self._known_identity()
         if not self.identity_batch:
             return known
 
+        # Queue on "not asked", not on "nothing stored": a hardware that
+        # reports no MAC has nothing to store and must still count as done.
         pending = []
         seen = set()
         for cam in cameras:
             hw_id = _hardware_key(cam)
-            if hw_id and hw_id not in known and hw_id not in seen:
+            if hw_id and hw_id not in asked and hw_id not in seen:
                 seen.add(hw_id)
                 pending.append(hw_id)
         if not pending:
@@ -457,8 +615,10 @@ class MilestoneCollector(Collector):
                 except MilestoneError:
                     failures += 1
                     return
-            if settings.get("macAddress"):
-                known[hw_id] = settings
+            # Stored whatever came back, including an empty response: the point
+            # of the marker is that this hardware has been asked. The empty dict
+            # would be falsy, so mark it explicitly.
+            known[hw_id] = settings or {"__asked": True}
 
         await asyncio.gather(*(one(h) for h in batch))
         if failures:
@@ -469,37 +629,55 @@ class MilestoneCollector(Collector):
                  max(0, len(pending) - (len(batch) - failures)), len(pending))
         return known
 
-    async def _ess_camera_status(self) -> dict[str, tuple[str, str]] | None:
-        """Per-camera Communication state from the Events/State interface.
+    async def _ess_state(self) -> tuple[dict[str, tuple[str, str]], dict[str, dict]] | None:
+        """One Events/State snapshot → camera verdicts and recorder states.
 
-        The Config API has no per-camera status field at all, which is why
-        cameras carried `source_status = blind` — an honest "cannot tell". The
-        ESS can tell, so this replaces the blind rows with a real verdict.
+        The subscription asked for ``resourceTypes: ["cameras"]``, so recording
+        servers were never delivered and their status came from the Config API's
+        `running` flag. Asking for both in the same filter — still the three
+        approved read-only verbs (D5) — yields 152 recorder states across all 22
+        servers, including a retention warning and a CPU verdict nothing else
+        here can see.
 
-        Returns ``None`` on any failure rather than raising: the ESS is
-        enrichment, and a WebSocket problem must not fail a Config-API cycle
-        that otherwise succeeded. The caller records the degradation so it is
-        visible rather than silent (§4.5).
+        Returns ``(camera_verdicts, rs_states)`` or ``None`` on any failure: the
+        ESS is enrichment, and a WebSocket problem must not fail a Config-API
+        cycle that otherwise succeeded. The caller records the degradation so it
+        is visible rather than silent (§4.5).
         """
         try:
-            ess = MilestoneEss(self.client)
+            ess = MilestoneEss(self.client, resource_types=("cameras", "recordingServers"))
             async with ess.connect() as conn:
                 await ess.handshake(conn)
                 states = (ess.initial_state or {}).get("states") or []
             if not states:
                 return None
             names = await self._event_type_names()
-            out: dict[str, tuple[str, str]] = {}
+            cams: dict[str, tuple[str, str]] = {}
+            servers: dict[str, dict] = {}
             for st in states:
-                verdict = ESS_COMMUNICATION.get(names.get(str(st.get("type"))) or "")
-                if not verdict:
+                source = str(st.get("source") or "")
+                guid = source.split("/")[-1]
+                name = names.get(str(st.get("type"))) or ""
+                if not guid or not name:
                     continue
-                guid = str(st.get("source") or "").split("/")[-1]
-                if guid:
-                    out[guid] = verdict
-            return out or None
+                if source.startswith("recordingServers/"):
+                    row = servers.setdefault(guid, {})
+                    for prefix, column in ESS_RS_COLUMNS:
+                        if name.startswith(prefix):
+                            row[column] = name
+                            break
+                    # Newest state timestamp, so the UI can age the whole set
+                    # rather than implying every verdict is current.
+                    when = _ess_time(st.get("time"))
+                    if when and (row.get("states_at") is None or when > row["states_at"]):
+                        row["states_at"] = when
+                elif source.startswith("cameras/"):
+                    verdict = ESS_COMMUNICATION.get(name)
+                    if verdict:
+                        cams[guid] = verdict
+            return cams, servers
         except Exception as exc:                      # noqa: BLE001 — enrichment
-            log.warning("milestone ESS state unavailable, camera status left "
+            log.warning("milestone ESS state unavailable, status left "
                         "as-is rather than guessed: %s", exc)
             return None
 
@@ -551,6 +729,20 @@ class MilestoneCollector(Collector):
         # runs before the Config-API enrichment block that used to own this.
         degraded: list[str] = []
 
+        # Per-camera status, which the Config API cannot answer at all. Cameras
+        # carried `source_status = blind` for exactly that reason — an honest
+        # "cannot tell" — but nothing on the success path ever cleared it, so
+        # 2,659 rows sat two days stale and held 2,659 open alerts. The ESS can
+        # tell; None means it could not be reached, and prior state is then left
+        # untouched rather than downgraded to a guess.
+        ess = await self._ess_state() if self.ess_enabled else None
+        if self.ess_enabled and ess is None:
+            degraded.append("ess")
+        ess_status, ess_rs = (ess if ess else ({}, {}))
+        # An empty camera map means the ESS could not be read at all; prior
+        # state is then left untouched rather than downgraded to a guess.
+        ess_status = ess_status or None
+
         # State writes (unchanged contract) + RS device-id map for camera links.
         rs_devid: dict[str, int] = {}
         linked_servers = linked_cameras = 0
@@ -560,20 +752,28 @@ class MilestoneCollector(Collector):
                 continue
             linked_servers += 1
             rs_devid[str(srv.get("id"))] = int(r["id"])
-            running = _truthy(srv.get("running"), srv.get("state"), srv.get("enabled"))
-            write_state(self.engine, int(r["id"]), "source_status",
-                        "up" if running else "down", "ok" if running else "crit", "milestone")
+            # The ESS's Communication state is the better verdict where it is
+            # available: the Config API's `running` flag describes the server
+            # object's configuration, not whether the VMS is currently talking
+            # to it. Falls back to the flag when the ESS could not be read.
+            states = ess_rs.get(str(srv.get("id"))) or {}
+            comm = states.get("comm_state") or ""
+            if comm:
+                # Milestone is inconsistent with its own state names: cameras
+                # and recorders both report "CommunicationStarted" with no
+                # space, while the sibling groups are "CPU Usage Normal" and
+                # "Retention time Normal" *with* spaces. Matching the spaced
+                # form alone marked all 22 recorders down.
+                up = "started" in comm.replace(" ", "").lower()
+                write_state(self.engine, int(r["id"]), "source_status",
+                            "up" if up else "down", "ok" if up else "crit",
+                            "milestone-ess")
+            else:
+                running = _truthy(srv.get("running"), srv.get("state"), srv.get("enabled"))
+                write_state(self.engine, int(r["id"]), "source_status",
+                            "up" if running else "down",
+                            "ok" if running else "crit", "milestone")
             written += 1
-        # Per-camera status, which the Config API cannot answer at all. Cameras
-        # carried `source_status = blind` for exactly that reason — an honest
-        # "cannot tell" — but nothing on the success path ever cleared it, so
-        # 2,659 rows sat two days stale and held 2,659 open alerts. The ESS can
-        # tell; None means it could not be reached, and prior state is then left
-        # untouched rather than downgraded to a guess.
-        ess_status = await self._ess_camera_status() if self.ess_enabled else None
-        if self.ess_enabled and ess_status is None:
-            degraded.append("ess")
-
         for cam in cameras:
             r = registry.get(str(cam.get("id")))
             if r is None:
@@ -648,7 +848,31 @@ class MilestoneCollector(Collector):
 
         identity = await self._device_identity(cameras, degraded)
 
-        rs_rows = build_recording_servers(servers, registry, storage_by_rs, now)
+        # Environment facts for the page header and the XProtect roll-up. Both
+        # are single small GETs; both fail soft, because a missing version
+        # should cost the version and nothing else.
+        site_info: dict = {}
+        try:
+            site_info = await self.client.site_info()
+        except MilestoneError as exc:
+            degraded.append("site")
+            log.warning("milestone /sites unavailable — management server and "
+                        "version will read '—': %s", exc)
+        licences: list[dict] = []
+        try:
+            licences = await self.client.license_details()
+        except MilestoneError as exc:
+            degraded.append("license")
+            log.warning("milestone /licenseDetails unavailable: %s", exc)
+        # "Device License" is the row that counts cameras. `activated` arrives
+        # as a string, and there is NO total in this response or in
+        # /licenseInformations — Professional+ is licensed per activated device,
+        # so the "used of total" ratio ZCD draws as a bar does not exist to be
+        # read. What is here is reported; nothing is inferred.
+        device_lic = next((l for l in licences
+                           if str(l.get("licenseType") or "").lower().startswith("device")), {})
+
+        rs_rows = build_recording_servers(servers, registry, storage_by_rs, now, ess_rs)
         cam_rows = build_cameras(cameras, registry, hw_by_id, rs_devid, now, identity)
         written += db.replace_rows(self.engine, "recording_servers", ["device_id"], rs_rows)
         written += db.replace_rows(self.engine, "cameras", ["device_id"], cam_rows)
@@ -697,6 +921,13 @@ class MilestoneCollector(Collector):
             # The camera tree. `group_memberships` counts registry-linked
             # cameras and `group_cameras` what Milestone reports, so a gap
             # between them is visible rather than inferred.
+            "management_server": _first(site_info, "displayName", "computerName") or None,
+            "version": site_info.get("version") or None,
+            "time_zone": site_info.get("timeZone") or None,
+            "license_product": _first(device_lic, "displayName") or None,
+            "license_activated": _num(device_lic.get("activated")),
+            "license_not_licensed": _num(device_lic.get("notLicensed")),
+            "license_in_grace": _num(device_lic.get("inGrace")),
             "camera_groups": len(group_rows),
             "group_memberships": len(member_rows),
             "group_cameras": sum(r["camera_count"] for r in group_rows),

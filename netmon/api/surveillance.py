@@ -60,6 +60,32 @@ def summary(engine: Engine = Depends(get_engine), _user=Depends(require_role(Rol
         "cameras_by_status": _camera_status_counts(engine),
         "overview": read_snapshot(engine, "milestone.overview"),
         "updated_at": cam.get("updated_at"),
+        # Environment facts the header and the XProtect roll-up show, lifted out
+        # of the overview blob so the page reads fields rather than digging
+        # through a payload. None where Milestone does not expose it — the page
+        # renders "—" and says why (spec 20 §4).
+        **_environment(engine),
+    }
+
+
+def _environment(engine: Engine) -> dict:
+    """Management server, XProtect version and device-licence counts.
+
+    All three come from the `milestone.overview` snapshot the collector writes
+    (`/sites` and `/licenseDetails`). There is deliberately no
+    `license_total`: XProtect Professional+ licenses per activated device, so
+    the "used of total" ratio ZCD draws as a bar does not exist in either
+    licence response. `license_activated` with `license_not_licensed` beside it
+    is the whole truth available.
+    """
+    snap = read_snapshot(engine, "milestone.overview") or {}
+    p = snap.get("payload") or {}
+    return {
+        "management_server": p.get("management_server"),
+        "version": p.get("version"),
+        "license_product": p.get("license_product"),
+        "license_activated": p.get("license_activated"),
+        "license_not_licensed": p.get("license_not_licensed"),
     }
 
 
@@ -139,6 +165,27 @@ def camera_sites(
              AND rec.dimension = 'recording'
         WHERE d.enabled = 1
         GROUP BY d.site ORDER BY d.site""")]
+
+
+@router.get("/site-context")
+def site_context(
+    engine: Engine = Depends(get_engine),
+    _user=Depends(require_role(Role.viewer)),
+) -> list[dict]:
+    """Per-site recorders, configured storage and network device counts.
+
+    Split from `/sites` rather than joined into it: that query already groups
+    2,662 cameras by site, and adding three more aggregates over different
+    tables would make one slow query out of two fast ones. The Sites tab (S6)
+    and the overview both stitch them by site name.
+    """
+    return [dict(r) for r in db.fetch_all(engine, """
+        SELECT d.site AS site,
+               COUNT(DISTINCT rs.device_id) AS recorders,
+               SUM(rs.storage_total_gb) AS storage_total_gb,
+               MAX(rs.retention_days) AS retention_days
+        FROM recording_servers rs JOIN devices d ON d.id = rs.device_id
+        WHERE d.enabled = 1 GROUP BY d.site ORDER BY d.site""")]
 
 
 @router.get("/camera-groups")
@@ -346,13 +393,32 @@ def camera_detail(
 
 @router.get("/servers")
 def servers(engine: Engine = Depends(get_engine), _user=Depends(require_role(Role.viewer))) -> list[dict]:
+    # Channel counts come from the cameras table, not from the Config API:
+    # `cameraCount`/`recordingCameraCount` are NULL for all 22 recorders on this
+    # deployment, and the camera→recorder link is already stored, so counting is
+    # both cheaper and true. COALESCE keeps whatever a future XProtect reports.
     return [dict(r) for r in db.fetch_all(
         engine,
         "SELECT rs.device_id, d.name, d.site, rs.hostname, rs.role, rs.version, "
-        "rs.chans_total, rs.chans_recording, rs.storage_used_gb, rs.storage_total_gb, "
-        "rs.retention_days, rs.updated_at, st.value AS status "
+        "COALESCE(rs.chans_total, cnt.total) AS chans_total, "
+        "COALESCE(rs.chans_recording, cnt.recording) AS chans_recording, "
+        "rs.storage_used_gb, rs.storage_total_gb, rs.retention_days, rs.updated_at, "
+        # The four Events/State verdicts (migration 027). Descriptive: only
+        # comm_state feeds device_state, and `states_at` lets the UI age the set
+        # rather than implying every verdict is current — half the estate reads
+        # "Service Available Critical" with a timestamp months old.
+        "rs.comm_state, rs.cpu_state, rs.retention_state, rs.service_state, rs.states_at, "
+        "st.value AS status "
         "FROM recording_servers rs JOIN devices d ON d.id = rs.device_id "
         "LEFT JOIN device_state st ON st.device_id = rs.device_id AND st.dimension = 'source_status' "
+        "LEFT JOIN (SELECT c.recording_server_device_id AS rsid, COUNT(*) AS total, "
+        "                  SUM(CASE WHEN stx.value = 'up' THEN 1 ELSE 0 END) AS recording "
+        "           FROM cameras c "
+        "           LEFT JOIN device_state stx ON stx.device_id = c.device_id "
+        "                AND stx.dimension = 'recording' "
+        "           WHERE c.recording_server_device_id IS NOT NULL "
+        "           GROUP BY c.recording_server_device_id) cnt "
+        "  ON cnt.rsid = rs.device_id "
         "ORDER BY d.site, d.name")]
 
 

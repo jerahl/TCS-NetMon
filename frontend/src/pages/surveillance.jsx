@@ -2,6 +2,7 @@ import React from "react";
 import { getJSON, qs } from "../api.js";
 import {
   Card, Loading, ErrorMsg, SourceBadge, sevColor, PageHeader, Tabs, StatCell, Dot, SevText,
+  Sparkline,
 } from "../primitives.jsx";
 import { ageOf } from "../format.js";
 
@@ -125,12 +126,23 @@ export function SurveillancePage({ query = {} }) {
     <div className="page">
       <PageHeader
         title="Surveillance NOC"
-        ip={meta?.milestone_host || null}
+        ip={summary.management_server || meta?.milestone_host || null}
+        tag={summary.version ? `XProtect ${summary.version}` : null}
         pills={[
           { label: "recorders", value: `${summary.servers_up} / ${summary.servers_total}`,
             severity: rsAllUp ? "ok" : summary.servers_up > 0 ? "warn" : "crit",
             title: rsAllUp ? "every recording server is up" : `${summary.servers_down} not up` },
           { label: "cameras", value: fmtN(summary.cameras_total) },
+          // Activated device licences. There is no total to divide by —
+          // Professional+ licenses per activated device, so ZCD's used/total
+          // bar has no source (spec 20 S2).
+          summary.license_activated
+            ? { label: "licences", value: `${fmtN(summary.license_activated)} activated`,
+                severity: summary.license_not_licensed ? "warn" : undefined,
+                title: summary.license_not_licensed
+                  ? `${summary.license_not_licensed} device(s) not licensed`
+                  : "no unlicensed devices" }
+            : null,
           { label: "schools", value: sites ? String(sites.length) : "…" },
           // "configured", never "used" — the Config API on 2025 R2 has no
           // consumed-space field (spec 19 §8), and a bare TB figure next to a
@@ -340,7 +352,26 @@ export function OverviewTab({ summary, storagePct, sites, servers, alarms, meta,
             <table className="grid kv">
               <tbody>
                 <tr><td>Management server</td>
-                    <td className="mono">{meta?.milestone_host || <span className="dim">—</span>}</td></tr>
+                    <td className="mono">{summary.management_server || meta?.milestone_host
+                      || <span className="dim">—</span>}</td></tr>
+                <tr><td>XProtect</td><td>
+                  {summary.license_product || <span className="dim">—</span>}
+                  {summary.version && <span className="dim mono"> · {summary.version}</span>}
+                </td></tr>
+                <tr><td>Device licences</td><td>
+                  {summary.license_activated
+                    ? <>
+                        <span className="mono">{fmtN(summary.license_activated)}</span> activated
+                        {summary.license_not_licensed
+                          ? <span style={{ color: sevColor("warn") }}>
+                              {" · "}{summary.license_not_licensed} not licensed</span>
+                          : <span className="dim"> · none unlicensed</span>}
+                      </>
+                    : <span className="dim">—</span>}
+                  {/* No total: Professional+ licenses per activated device, so
+                      the used/total ratio ZCD draws as a bar does not exist in
+                      either licence response. */}
+                </td></tr>
                 <tr><td>Recording servers</td>
                     <td><Dot severity={rsAllUp ? "ok" : "crit"} /> {summary.servers_up} of{" "}
                         {summary.servers_total} online</td></tr>
@@ -389,12 +420,97 @@ export function OverviewTab({ summary, storagePct, sites, servers, alarms, meta,
         </div>
       </div>
 
+      <CameraTrend />
+
       <Card title="Active alarm feed" source="netmon"
             kicker="open NetMon alerts on cameras and recorders"
             link={{ href: "#/problems", label: "Problems console" }} tight>
         <AlarmFeed rows={alarms} limit={10} />
       </Card>
     </React.Fragment>
+  );
+}
+
+// One Events/State verdict. The state NAME is shown, not a severity word,
+// because the name is the VMS's own vocabulary and an operator reading
+// "Retention time Warning" in Smart Client should see the same phrase here.
+// The tone is derived from the tail, and Undefined is dim rather than green —
+// "the VMS has no opinion" is not health.
+export function EssState({ value, at }) {
+  if (!value) return <span className="dim">—</span>;
+  const tail = String(value).split(" ").pop().toLowerCase();
+  const tone = tail === "critical" || tail === "error" ? "crit"
+    : tail === "warning" ? "warn"
+    : tail === "normal" || tail === "started" || tail === "available" ? "ok"
+    : "";
+  const age = ageOf(at);
+  return (
+    <span className={"state-pill " + (tone === "crit" ? "err" : tone === "warn" ? "warn"
+                                      : tone === "ok" ? "ok" : "")}
+          title={`${value}${age ? ` · state set ${age} ago` : ""}`}>
+      {/* The group prefix is the column header, so the cell shows the verdict. */}
+      {String(value).replace(/^(Communication|CPU Usage|Retention time|Service Available)\s*/, "")
+        || value}
+    </span>
+  );
+}
+
+// ZCD's "Live Ingress · 24h" slot. Ingress Gbps, storage write and recorder CPU
+// are agent-domain numbers NetMon does not collect; what it does sample is the
+// estate's reachability shape, one series per tier (D3's ring buffer, 24h).
+// Each tier is its own line because they do not move together: a switch outage
+// moves down_confirmed, a recorder losing its cameras moves down_source_only.
+export function CameraTrend() {
+  const [series, setSeries] = React.useState(null);
+  React.useEffect(() => {
+    let live = true;
+    getJSON("/api/history?series=" + encodeURIComponent(
+      "surveillance.cameras_up,surveillance.down_confirmed,"
+      + "surveillance.down_source_only,surveillance.down_network_only,surveillance.blind"))
+      .then((r) => live && setSeries(r.series || {}))
+      .catch(() => live && setSeries({}));
+    return () => { live = false; };
+  }, []);
+  if (!series) return <Card title="Cameras · 24h"><Loading what="history" /></Card>;
+
+  const LINES = [
+    ["surveillance.cameras_up", "Up", "ok"],
+    ["surveillance.down_confirmed", "Down", "crit"],
+    ["surveillance.down_source_only", "Milestone down", "crit"],
+    ["surveillance.down_network_only", "No ICMP", "warn"],
+    ["surveillance.blind", "Blind", "warn"],
+  ];
+  const have = LINES.filter(([k]) => (series[k] || []).length >= 2);
+  if (have.length === 0) {
+    return (
+      <Card title="Cameras · 24h" source="netmon">
+        <div className="msg">
+          Not enough history yet. The sampler writes one point per series every
+          few minutes into a 24-hour ring buffer, so a chart appears once two
+          points exist — after a restart that takes a few minutes.
+        </div>
+      </Card>
+    );
+  }
+  return (
+    <Card title="Cameras · 24h" source="netmon"
+          kicker="reachability by tier — one line each, they do not move together">
+      <div className="trend-rows">
+        {have.map(([key, label, tone]) => {
+          const pts = series[key];
+          const last = pts[pts.length - 1]?.value;
+          return (
+            <div className="trend-row" key={key}>
+              <div className="trend-label">
+                <Dot severity={tone} /> {label}
+              </div>
+              <Sparkline points={pts} color={sevColor(tone)} width={520} height={34} />
+              <div className="trend-val mono">{last == null ? "—" : fmtN(last)}</div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
   );
 }
 
@@ -470,21 +586,23 @@ export function ServersTab({ rows }) {
           kicker={`${rows.length} recording server(s)`}>
       {rows.length === 0 ? <div className="msg">No recording servers cached.</div> : (
         <table className="grid nvr-tbl">
-          <thead><tr><th></th><th>Server</th><th>Site</th><th>Role</th><th>Version</th>
-                     <th>Cameras</th><th>Recording</th><th>Storage configured</th>
-                     <th>Retention</th></tr></thead>
+          <thead><tr><th></th><th>Server</th><th>Site</th><th>Cameras</th><th>Recording</th>
+                     <th>Service</th><th>CPU</th><th>Retention state</th>
+                     <th>Storage configured</th><th>Retention</th><th>Version</th></tr></thead>
           <tbody>
             {rows.map((s) => (
               <tr key={s.device_id} className={s.status === "down" ? "row-err" : ""}>
                 <td><StateDot value={s.status} /></td>
                 <td>{s.name}<div className="dim mono" style={{ fontSize: 11 }}>{s.hostname || ""}</div></td>
                 <td>{s.site || "—"}</td>
-                <td className="dim">{s.role || "—"}</td>
-                <td className="mono dim">{s.version || "—"}</td>
                 <td className="mono">{s.chans_total ?? "—"}</td>
                 <td className="mono">{s.chans_recording ?? "—"}</td>
+                <td><EssState value={s.service_state} at={s.states_at} /></td>
+                <td><EssState value={s.cpu_state} at={s.states_at} /></td>
+                <td><EssState value={s.retention_state} at={s.states_at} /></td>
                 <td className="mono">{fmtGb(s.storage_total_gb)}</td>
                 <td className="mono dim">{s.retention_days ? `${s.retention_days}d` : "—"}</td>
+                <td className="mono dim">{s.version || "—"}</td>
               </tr>
             ))}
           </tbody>
@@ -493,8 +611,13 @@ export function ServersTab({ rows }) {
       {/* Named, not implied: ZCD's equivalent table has CPU / Mem / RAID /
           uptime columns fed by a Windows agent NetMon does not have. */}
       <div className="msg" style={{ fontSize: 11, marginTop: 10 }}>
-        CPU, memory, disk and RAID come from the recorders' own OS and need WinRM
-        access (OpenProject #111) — not collected, so not shown. Storage is the
+        Service, CPU and retention are the verdicts Milestone's Events/State
+        interface publishes — a state, not a measurement. Hover for how old each
+        set is: on this estate half the recorders carry a
+        <em> Service Available Critical</em> state months old, which reads far
+        more like a state group that was never cleared than like an outage, so
+        none of these three raise alerts. Numeric CPU, memory, disk and RAID need
+        WinRM access to the recorders (OpenProject #111). Storage is the
         <em> configured</em> size; consumed space is not in the Config API.
       </div>
     </Card>

@@ -74,6 +74,67 @@ const cases = [
      if (!text.includes("✓")) throw new Error("a site with nothing wrong scored as a failure");
    }],
 
+
+  // ─── S2: environment facts, ESS verdicts, the 24h trend ─────────────────
+  ["OverviewTab · version and licence known", S.OverviewTab, {
+    summary: { cameras_total: 2662, cameras_recording: 2438, servers_total: 22,
+               servers_up: 22, servers_down: 0, storage_total_gb: 1837600,
+               storage_used_gb: null, storage_used_known: false, overview: null,
+               cameras_by_status: { up: 2422 },
+               management_server: "CO-MILESTONE", version: "25.2.0.1",
+               license_product: "Device License", license_activated: 2491,
+               license_not_licensed: 0 },
+    storagePct: null, sites: [], servers: [], alarms: [], meta: {},
+    onPickSite: () => {} },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (!text.includes("25.2.0.1")) throw new Error("XProtect version not shown");
+     if (!text.includes("2,491")) throw new Error("activated licence count not shown");
+     if (text.includes("/ 2,491") || text.includes("2491 /")) {
+       throw new Error("invented a licence total — there is none to divide by");
+     }
+   }],
+
+  // Half this estate carries a months-old "Service Available Critical". The
+  // pill must show the VMS's own word and carry the age, and must not be
+  // rendered as green just because it is unfamiliar.
+  ["EssState · critical", S.EssState, {
+    value: "Service Available Critical", at: "2026-04-24T07:13:31Z" },
+   (html) => {
+     if (!html.includes("Critical")) throw new Error("verdict not shown");
+     if (!html.includes("state-pill err")) throw new Error("critical not tinted as an error");
+   }],
+  ["EssState · undefined is not health", S.EssState, {
+    value: "GPU Memory Undefined", at: "2026-04-24T07:13:31Z" },
+   (html) => {
+     if (html.includes("state-pill ok")) throw new Error("Undefined rendered as healthy");
+   }],
+  ["EssState · absent", S.EssState, { value: null, at: null },
+   (html) => {
+     if (!html.includes("—")) throw new Error("missing verdict did not render a dash");
+   }],
+
+  ["ServersTab · ESS verdict columns", S.ServersTab, {
+    rows: [{ device_id: 1, name: "BHS-BCD-DVR", hostname: "bhs-bcddvr-ms", site: "Bryant High",
+             version: "25.2", chans_total: 264, chans_recording: 258,
+             storage_total_gb: 100600, retention_days: 61, status: "up",
+             comm_state: "Communication Started", cpu_state: "CPU Usage Normal",
+             retention_state: "Retention time Warning",
+             service_state: "Service Available Critical",
+             states_at: "2026-04-24T07:13:31Z" },
+           { device_id: 2, name: "WFS-BCD-DVR", hostname: null, site: null,
+             version: null, chans_total: null, chans_recording: null,
+             storage_total_gb: null, retention_days: null, status: "blind",
+             comm_state: null, cpu_state: null, retention_state: null,
+             service_state: null, states_at: null }] },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (!text.includes("Warning")) throw new Error("retention warning not surfaced");
+     if (!text.includes("never raise alerts") && !text.includes("none of these three raise alerts")) {
+       throw new Error("the states' non-alerting nature was not stated");
+     }
+   }],
+
   // ─── Camera detail, ZCD's layout (spec 20 S5) ───────────────────────────
   // Everything resolved: the path where the port is known and PoE cycling is
   // offered. Rendered on each of the four tabs, because a card that only
