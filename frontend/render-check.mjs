@@ -9,6 +9,7 @@ const entry = `
 export * as surveillance from "./src/pages/surveillance.jsx";
 export * as cameraDetail from "./src/pages/camera_detail.jsx";
 export * as cameras from "./src/pages/cameras.jsx";
+export * as cameraSnapshot from "./src/pages/camera_snapshot.jsx";
 export * as primitives from "./src/primitives.jsx";
 export { default as React } from "react";
 export { renderToString } from "react-dom/server";
@@ -21,7 +22,8 @@ const res = await build({
 const require = createRequire(import.meta.url);
 const mod = { exports: {} };
 new Function("module", "exports", "require", res.outputFiles[0].text)(mod, mod.exports, require);
-const { surveillance: S, cameraDetail: D, cameras: C, primitives: P, React, renderToString } = mod.exports;
+const { surveillance: S, cameraDetail: D, cameras: C, cameraSnapshot: SNAP,
+        primitives: P, React, renderToString } = mod.exports;
 
 const CAM = (over) => ({ device_id: 1, name: "chs-cam-1", site: "Central High",
   model: "Bosch FLEXIDOME", recording_state: "up", recording_server: "CHS-BCD-DVR",
@@ -211,10 +213,39 @@ const cases = [
      if (!html.includes("No probe changed its verdict")) throw new Error("quiet window not explained");
    }],
 
-  ["CameraPreview · no proxy, no address", D.CameraPreview, {
-    cam: { name: "cam-x", resolution: null, fps_target: null, codec: null }, url: null },
+  // The snapshot components render before (and without) a fetch — which is the
+  // state every viewer sees first, and the one that has to explain itself.
+  ["CameraPreview · nothing fetched yet", SNAP.CameraPreview, {
+    cam: { device_id: 1, name: "cam-x", resolution: null, fps_target: null,
+           codec: null, state: {} }, url: null },
    (html) => {
-     if (!html.includes("No preview")) throw new Error("empty preview did not say so");
+     if (!html.includes("cam-x")) throw new Error("overlay lost the camera name");
+   }],
+  ["CameraPreview · both probes say gone", SNAP.CameraPreview, {
+    cam: { device_id: 1, name: "cam-y", state: { reachability: { value: "down_confirmed" } } },
+    url: null },
+   (html) => {
+     if (!html.includes("No signal")) throw new Error("a confirmed-down camera was still asked");
+   }],
+  ["CamThumb · confirmed down is not fetched", SNAP.CamThumb, {
+    cam: { device_id: 2, name: "cam-z", reachability: "down_confirmed" } },
+   (html) => {
+     if (!html.includes("NO SIGNAL")) throw new Error("tile did not say why it is blank");
+     if (!html.includes("cam-tile err")) throw new Error("down tile not tinted");
+   }],
+  ["ThumbnailWall · capped and says so", C.ThumbnailWall, {
+    rows: Array.from({ length: 60 }, (_, i) => ({
+      device_id: i + 1, name: `cam-${i}`, reachability: "up" })),
+    total: 2662, problems: 0, onProblems: () => {} },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (!text.includes("first 48 of 60")) throw new Error("cap not disclosed");
+   }],
+  ["ThumbnailWall · empty with a way out", C.ThumbnailWall, {
+    rows: [], total: 2662, problems: 229, onProblems: () => {} },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (!text.includes("229")) throw new Error("empty wall offered no next step");
    }],
 
   // ─── Cameras page: the Milestone group tree (spec 20 S3) ────────────────

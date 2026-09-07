@@ -355,11 +355,74 @@ groups above. The collector also had to be reordered — the group walk now runs
 *after* the camera and recording-server writes, because placed before them a
 tree failure skipped the whole inventory refresh.
 
-### S3b — thumbnail wall (deferred with S4)
+### S3b — thumbnail wall — **done 2026-09-07, with S4**
 
-The `.cam-grid` thumbnail view belongs with the snapshot proxy: without D7 there
-is nothing to put in the tiles. It lands as a Table/Thumbnails toggle in the
-Cameras page's right pane once S4 ships.
+Not a Table/Thumbnails toggle in the end. The wall fills the right pane **while
+no camera is selected**, and the detail replaces it on click — which is ZCD's
+own two-pane Cameras tab, and means the pane always shows the most useful thing
+for where you are rather than needing a mode switch. Capped at ZCD's 48 with the
+cap stated, because beyond that it is 48 simultaneous proxied fetches into the
+camera VLAN and nobody reads 2,662 tiles.
+
+### S4 — camera snapshot proxy (D7) — **built 2026-09-07, default-off**
+
+Everything except the credential, which is the owner's to provision. The code
+ships complete and disabled; one config block turns it on with no deploy.
+
+**What made this buildable now** is S2's collection: `https_enabled`,
+`https_port` and `channel` are the three fields the URL cannot be built without,
+and all three arrived in migration 027.
+
+**The findings that shaped it, all live rather than assumed:**
+
+- **The scheme is not in the address.** Milestone stores 100% of hardware
+  addresses as `http://<ip>/`, while `httpSEnabled` says **1,695 of 2,651
+  cameras (64%) speak TLS** and 956 do not. Assuming either fails on hundreds.
+- **178 cameras are one imager of several.** A bare `/snap.jpg` on such a device
+  returns a *different imager's* picture — a plausible image of the wrong place,
+  which nobody notices. So `channel > 0` is **refused** with a reason until
+  `[camera_snapshot] channel_param` is confirmed against a real device. Refusing
+  is the whole point: this is the one failure mode that looks like success.
+- **Six cameras carry an explicit port**, five of them `:443` on an `http`
+  scheme. Kept as stored; the scheme is never inferred from the port.
+- **The vendor field is a driver name**, not a vendor: `Bosch1ch` (2,019),
+  `Bosch` (509), `ONVIF` (91), four Axis variants (32). Profiles match on a
+  lowercase prefix. Bosch's `/snap.jpg?JpegSize=` is verified from ZCD
+  production; Axis uses VAPIX `image.cgi`; **ONVIF is refused with a reason**
+  because it publishes its snapshot URI through the Media service over SOAP and
+  a guessed path would 404 on all 91.
+
+**Shape:** `GET /api/surveillance/cameras/{device_id}/snapshot?size=M`, viewer
+role. The caller passes a `device_id` and nothing else — never a URL, host or
+address — and the target is rebuilt from the `cameras` row joined to
+`devices.device_type = 'camera'`, so the join rather than a separate check is
+what makes a switch impossible to target. `size` is whitelisted exactly as ZCD's
+`normSize` does. `netmon/snapshot.py` holds the URL construction as pure
+functions, which is where every trap above is tested.
+
+**Every failure carries `X-NetMon-Reason`**, and the UI reads it: a tile that
+cannot show a still says *why*. "Proxy disabled", "no profile for this driver",
+"imager 2 of a shared device" and "camera rejected the account" are four
+different problems, and a blank frame conflates all of them with a dead camera —
+which is the thing this page exists not to do. That is also why the components
+fetch the image themselves rather than using `<img src>`: an `<img>` cannot read
+a response header.
+
+**A camera both probes agree is gone is not asked at all** — the fetch would sit
+for the full timeout, and 48 of those stall the wall. A *Milestone-down* camera
+**is** asked, because the network can still reach it and a still is the quickest
+way to tell a platform problem from a dead camera.
+
+**The invariant this knowingly relaxes:** CLAUDE.md §6 says pages read only
+NetMon's DB, with zero source calls at render. This is a device call at render
+time. It is bounded — `max_concurrent = 8`, a 5s browser cache, a 48-tile cap,
+`enabled = false` by default — and turning it off returns the pages to DB-only
+with no deploy. Recorded here rather than left implicit.
+
+**To turn on:** add the read-only camera account to `/etc/netmon/netmon.conf`
+under `[camera_snapshot]` (`enabled = true`, `user`, `pass`) and restart. The
+section is documented in `netmon.conf.example`. Loading a config that enables it
+with no `user` is refused at boot rather than serving silent 503s.
 
 ### S3-original — Cameras tab: navigator + thumbnail wall (superseded)
 
@@ -706,8 +769,8 @@ NetMon largely has. Suggested order (spec 15 §3.2 estimates still apply):
 - [ ] S0 `reference/` synced; `TCS-Dashboard-Functionality.md` in `reference/`; no `etc-zabbix/` content in the repo
 - [x] **S1 done 2026-09-07.** `PageHeader` / `Pill` / `Tabs` (badges) / `StatCell` / `Card{source,link}` in `primitives.jsx`; Inter + JetBrains Mono self-hosted from `frontend/fonts/` (esbuild `.woff2` file loader → `netmon/web/fonts/`, url()s rewritten, no CDN); Surveillance rebuilt on them — header with five meta pills, badged tabs, ZCD's four-cell strip, `ServerMini` tiles, live alarm feed, degraded-cycle banner; `/api/alerts` gained `device_type` (comma list) + `limit`; `/api/meta` gained `milestone_host`; tab lives in the hash so deep-links work. **Deviation from the plan, deliberate: five tabs, not seven.** Sites and Evidence Lock need data S2/S6 collect (per-site recorder + switch/AP roll-ups; the evidence-lock endpoint), and a tab that exists only to say "coming later" is worse than no tab. 20 render-check cases green, 509 tests green.
 - [ ] S2 mgmt server, version, licence, RS ESS state, per-RS camera counts, surveillance history series, sites roll-up fields — each either collected or recorded as "not exposed by Config API on 2025 R2"
-- [ ] S3 navigator + table/thumbnail toggle; 2,651 cameras render without jank
-- [ ] S4 snapshot proxy behind `[camera_snapshot] enabled = false`; owner has provisioned the read-only camera login; allow-list + vendor + size tests green; spec 11 D7 entry updated
+- [x] S3 navigator (tree by Milestone group) + camera wall in the detail pane
+- [x] S4 snapshot proxy behind `[camera_snapshot] enabled = false`; allow-list + vendor + size + scheme + channel tests green; the render-at-source relaxation recorded above. Still needs the owner to provision the account.
 - [x] **S5 done 2026-09-07** — camera detail in ZCD's four-tab layout: sidecar + preview frame, Device Health as probe cells, 24h transition strip, stream/network kv, one PacketFence & uplink card with all four operator buttons, Active Issue with real Ack/Suppress, Recent Events. `state_events` added to the detail payload. Tab lives in the URL for both routes.
 - [ ] S6 Sites / Servers / Storage / Alarms / Evidence Lock tabs; every unavailable metric named, none rendered as 0
 - [ ] S8 (D11) bulk camera ops: `firmware_images` / `camera_batches` / `camera_batch_items` migrations with rollback notes; batch runner as a supervised task; Bosch profile fixture-tested; `[camera_ops]` default-off + dry-run default; canary → rings → abort threshold; verification by read-back; admin-only; open questions above answered in this spec before the first live batch
@@ -721,6 +784,8 @@ NetMon largely has. Suggested order (spec 15 §3.2 estimates still apply):
 - [x] The three S8 questions are answered (see §3 S8). One follow-on is open and is the owner's: deferring the setting catalogue means firmware — the irreversible half — would be the first thing S8 ships, so pick the proving ground (lab camera vs. a two-setting minimal catalogue).
 - [x] **S3 done 2026-09-07** (out of order, owner-directed): `#/cameras` with the Milestone group tree. Migration 026 applied live, one collector cycle run — 26 groups, 2,676 memberships, 0 cameras ungrouped, no degradation. 23 render-check cases and 514 tests green.
 - [x] **S2 done 2026-09-07.** Migrations 027 + 028 applied live; environment facts, recorder ESS verdicts, camera channel/TLS, seven history series, real per-recorder counts. 546 tests and 34 render-check cases green.
-- [ ] **S4 next** — the snapshot proxy now has everything it was waiting for: `channel` (178 multi-imager cameras), `https_enabled` (1,695 of 2,651 on TLS) and `https_port`. The owner has approved the read-only camera login; it needs provisioning in `netmon.conf` under `[camera_snapshot]`.
+- [x] **S3b + S4 done 2026-09-07.** Camera wall in the Cameras page's right pane; snapshot proxy complete and default-off. 560 tests, 38 render-check cases.
+- [ ] **Owner action to finish S4:** add the read-only camera account to `/etc/netmon/netmon.conf` under `[camera_snapshot]` (`enabled = true`, `user`, `pass`) and restart `netmon`. Nothing else is outstanding — the code path is tested against every address shape on the estate.
+- [ ] **One field needs a real camera to confirm:** the vendor query parameter that selects the imager on a multi-camera device (178 cameras). Until `[camera_snapshot] channel_param` is set they report the gap rather than risk serving a different imager's picture. Confirming it is one request against one Bosch multi-imager once the account exists.
 - [ ] ~~**S2 next.** Highest-value items, in order: RS service state from the ESS (`_ess_camera_status` reads only `cameras/` today; spec 19 §11 has 9 recording-server states covering all 22 servers, and the Overview's recorder tiles currently colour off the Config API's `running` flag); per-RS camera counts so `chans_total` stops being null; `sites`/version/licence investigation for the header chip; `https_enabled` / `https_port` / `channel` into `cameras` — S4's snapshot proxy needs all three and collecting them now avoids a second migration.
 - [ ] A restart of `netmon.service` is required for S1's two API additions (`device_type`/`limit` on `/api/alerts`, `milestone_host` on `/api/meta`). Until then the live page's alarm cell counts estate-wide alerts, because FastAPI ignores query params it does not know about — the static bundle updates without a restart but the API does not.

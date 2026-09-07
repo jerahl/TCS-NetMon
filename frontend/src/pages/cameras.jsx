@@ -1,7 +1,8 @@
 import React from "react";
 import { getJSON, qs } from "../api.js";
-import { Loading, ErrorMsg, Dot, SourceBadge, sevColor, PageHeader } from "../primitives.jsx";
+import { Card, Loading, ErrorMsg, Dot, SourceBadge, sevColor, PageHeader } from "../primitives.jsx";
 import { CameraDetailPage } from "./camera_detail.jsx";
+import { CamThumb } from "./camera_snapshot.jsx";
 
 // Cameras — the camera fleet as its own page, navigated by Milestone's own
 // group tree (spec 20 S3, owner-directed 2026-09-07).
@@ -340,18 +341,52 @@ export function CamerasView({ groups, cams, activeId, collapsed, onToggle, onAll
           {activeId ? (
             <CameraDetailPage id={activeId} embedded query={query} />
           ) : (
-            <div className="msg">
-              Select a camera from the tree.
-              {problems > 0 && (
-                <> {problems.toLocaleString()} camera(s) are not simply up —{" "}
-                  <button type="button" className="linkish"
-                          onClick={() => onStatus("problems")}>show only those</button>.
-                </>
-              )}
-            </div>
+            <ThumbnailWall rows={shown} total={cams.length} problems={problems}
+                           onProblems={() => onStatus("problems")} />
           )}
         </div>
       </div>
     </div>
+  );
+}
+
+
+// ZCD's camera wall, in the pane the detail will occupy once a camera is
+// picked: browse the stills, click through to one. Capped at ZCD's 48 — beyond
+// that it is 48 simultaneous proxied fetches into the camera VLAN, and nobody
+// reads a wall of 2,662 tiles anyway.
+const WALL_CAP = 48;
+
+export function ThumbnailWall({ rows, total, problems, onProblems }) {
+  const shown = rows.slice(0, WALL_CAP);
+  return (
+    <Card title="Camera wall" source="milestone"
+          kicker={rows.length > WALL_CAP
+            ? `first ${WALL_CAP} of ${rows.length.toLocaleString()} — narrow the filter to see others`
+            : `${rows.length.toLocaleString()} camera(s)`}
+          tight>
+      {rows.length === 0 ? (
+        <div className="msg" style={{ padding: 14 }}>
+          No cameras match the current filter.
+          {problems > 0 && (
+            <> {problems.toLocaleString()} of {total.toLocaleString()} are not simply up —{" "}
+              <button type="button" className="linkish" onClick={onProblems}>
+                show only those</button>.
+            </>
+          )}
+        </div>
+      ) : (
+        <React.Fragment>
+          <div className="cam-grid">
+            {shown.map((c) => <CamThumb key={c.device_id} cam={c} />)}
+          </div>
+          <div className="msg" style={{ fontSize: 11, padding: "10px 14px 0" }}>
+            Stills are fetched through NetMon so the camera login never reaches
+            the browser. A tile that cannot show one says why rather than going
+            blank — pick a camera for its full detail.
+          </div>
+        </React.Fragment>
+      )}
+    </Card>
   );
 }

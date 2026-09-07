@@ -4,6 +4,7 @@ import {
   Card, Loading, ErrorMsg, sevColor, PageHeader, Tabs, StatCell, Dot, SevText, SourceBadge,
 } from "../primitives.jsx";
 import { ActionButton } from "../actions.jsx";
+import { CameraPreview } from "./camera_snapshot.jsx";
 import { ageOf } from "../format.js";
 
 // Camera detail — ZCD's `tcs.camera.view` layout (spec 20 S5), filled with live
@@ -334,34 +335,6 @@ export function CameraDetailView({ cam, meta, alerts, embedded = false,
           )}
         </div>
       </div>
-    </div>
-  );
-}
-
-// ZCD's `.live-large`: a 16:9 preview with the camera's identity and stream
-// facts overlaid. ZCD fills it from its snapshot proxy; NetMon has no proxy
-// until D7, and rather than ZCD's decorative gradient — which reads as a dark
-// scene, i.e. as if the camera were working — the frame says what it is and
-// offers the click-out that does work.
-export function CameraPreview({ cam, url }) {
-  const stream = [cam.resolution, cam.fps_target ? `${cam.fps_target} fps` : null, cam.codec]
-    .filter(Boolean).join(" · ");
-  return (
-    <div className="live-large" style={{ width: "100%", marginTop: 12 }}>
-      <div className="cam-preview-empty">
-        <div className="cpe-title">No preview</div>
-        <div className="cpe-sub">
-          Still images need the camera snapshot proxy, which is not enabled.
-          {url ? " Use Open live view for the camera's own player." : ""}
-        </div>
-      </div>
-      <div className="cam-preview-overlay tl">{cam.name}</div>
-      {stream && <div className="cam-preview-overlay bl">{stream}</div>}
-      {cam.recording_state === "up" && (
-        <div className="cam-preview-overlay br">
-          <span className="rec-dot" /> REC
-        </div>
-      )}
     </div>
   );
 }

@@ -186,6 +186,48 @@ class EngineConfig:
 
 
 @dataclass(frozen=True)
+class CameraSnapshotConfig:
+    """Camera still-image proxy (spec 11 D7, approved 2026-07-28).
+
+    A credentialed GET to the camera, streamed back same-origin, because
+    browsers strip embedded credentials from `<img>` subrequests — so the
+    picture cannot be fetched directly and the camera login must never reach
+    the browser.
+
+    Default **off**: it needs a shared read-only camera account provisioned in
+    `/etc/netmon/netmon.conf`, and it is the one place NetMon talks to a device
+    at page-render time rather than serving its own database. That relaxation of
+    the zero-source-calls-at-render invariant (CLAUDE.md §6) is deliberate and
+    bounded — `max_concurrent` caps it, `cache_s` lets the browser stop asking,
+    and turning `enabled` off returns the pages to DB-only with no deploy.
+
+    `channel_param` is empty by design. 178 cameras on this estate are one
+    imager of several on a shared device, and a bare snapshot path on such a
+    device returns a *different imager's* picture. The parameter name differs by
+    vendor and firmware, so those cameras report "not configured" until someone
+    confirms it against a real device — a wrong guess would serve a plausible
+    image of the wrong place, which nobody would notice.
+    """
+    enabled: bool = False
+    user: str = ""
+    password: str = ""
+    # Cameras on the VMS network carry self-signed certificates, so verification
+    # is off by default. Named rather than hidden: it is a real trade-off, and
+    # the traffic stays inside the management network.
+    verify_ssl: bool = False
+    connect_timeout_s: float = 3.0
+    timeout_s: float = 6.0
+    # A camera wall asks for up to 48 stills at once. Without a cap that is 48
+    # simultaneous connections from the monitoring host to the camera VLAN.
+    max_concurrent: int = 8
+    # Browser cache lifetime. Short, because a still is only interesting when
+    # it is current, but non-zero so a re-render does not re-fetch every tile.
+    cache_s: int = 5
+    # Vendor query parameter that selects the imager on a multi-camera device.
+    channel_param: str = ""
+
+
+@dataclass(frozen=True)
 class ActionsConfig:
     """Operator write actions (spec 11 D4, approved 2026-07-28).
 
@@ -254,6 +296,7 @@ class Config:
     engine: EngineConfig
     history: HistoryConfig
     actions: ActionsConfig
+    camera_snapshot: CameraSnapshotConfig
     sources: dict[str, SourceToggle]
     path: str
 
@@ -478,6 +521,23 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
     def _abool(key: str, default: bool = True) -> bool:
         return _as_bool(parser.get("actions", key, fallback="true" if default else "false"))
 
+    camera_snapshot = CameraSnapshotConfig(
+        enabled=_as_bool(parser.get("camera_snapshot", "enabled", fallback="false")),
+        user=parser.get("camera_snapshot", "user", fallback="").strip(),
+        password=parser.get("camera_snapshot", "pass", fallback=""),
+        verify_ssl=_as_bool(parser.get("camera_snapshot", "verify_ssl", fallback="false")),
+        connect_timeout_s=parser.getfloat("camera_snapshot", "connect_timeout_s", fallback=3.0),
+        timeout_s=parser.getfloat("camera_snapshot", "timeout_s", fallback=6.0),
+        max_concurrent=parser.getint("camera_snapshot", "max_concurrent", fallback=8),
+        cache_s=parser.getint("camera_snapshot", "cache_s", fallback=5),
+        channel_param=parser.get("camera_snapshot", "channel_param", fallback="").strip(),
+    )
+    if camera_snapshot.enabled and not camera_snapshot.user:
+        # Refuse rather than silently serve 503s: an operator who switched this
+        # on and sees empty tiles should be told the account is missing.
+        raise ConfigError("[camera_snapshot] enabled = true needs `user` (and `pass`) — "
+                          "the shared read-only camera account")
+
     actions = ActionsConfig(
         enabled=_abool("enabled"),
         reevaluate_access=_abool("reevaluate_access"),
@@ -512,5 +572,5 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
 
     return Config(db=db, web=web, auth=auth, security=security, poller=poller,
                   snmp_inventory=snmp_inventory, engine=engine, history=history,
-                  actions=actions,
+                  actions=actions, camera_snapshot=camera_snapshot,
                   sources=sources, path=conf_path)

@@ -315,3 +315,47 @@ poe_snippet_id = 4
 # Minimum role: operator or admin. `viewer` is refused at startup — a read-only
 # role must never be able to reboot an AP.
 min_role = operator
+
+[camera_snapshot]
+# Camera still-image proxy (spec 11 D7, approved 2026-07-28; built spec 20 S4).
+#
+# Browsers strip embedded credentials from <img> subrequests, so a camera still
+# cannot be fetched directly by the page. This proxies it server-side with a
+# shared read-only camera account, which keeps the camera login off the browser
+# entirely.
+#
+# Default OFF. It needs the account below, and it is the one place NetMon talks
+# to a device while rendering a page rather than serving its own database —
+# a deliberate, bounded relaxation of the zero-source-calls-at-render rule
+# (CLAUDE.md §6). Turning `enabled` off returns those pages to DB-only with no
+# deploy.
+#
+# SSRF posture: the proxy takes a NetMon `device_id`, never a URL or address,
+# and resolves the target from the `cameras` row — so it can only ever reach an
+# address Milestone registered for a camera.
+enabled = false
+# The shared read-only camera account (the same one ZCD used as
+# {$TCS.CAM.USER} / {$TCS.CAM.PASS}). Read-only: this account must not be able
+# to change camera configuration.
+# user = netmon-ro
+# pass = REPLACE_WITH_CAMERA_PASSWORD
+#
+# Cameras on the VMS network carry self-signed certificates. Named rather than
+# hidden, because it is a real trade-off; the traffic stays inside the
+# management network.
+verify_ssl = false
+connect_timeout_s = 3
+timeout_s = 6
+# A camera wall asks for up to 48 stills at once; without a cap that is 48
+# simultaneous connections from this host to the camera VLAN.
+max_concurrent = 8
+# Browser cache lifetime for a still, in seconds.
+cache_s = 5
+# Vendor query parameter that selects which imager to photograph on a
+# multi-camera device. EMPTY BY DESIGN: 178 cameras on this estate are one
+# imager of several, and a bare snapshot path on such a device returns a
+# *different imager's* picture — a plausible image of the wrong place, which
+# nobody notices. Those cameras report "not configured" until this is confirmed
+# against a real device. Bosch and Axis both count imagers from 1 while
+# Milestone counts from 0; NetMon applies that offset.
+# channel_param = channel

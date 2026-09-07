@@ -9,14 +9,36 @@ view is NetMon alerts scoped to surveillance devices (served from /api/alerts).
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+import asyncio
+import logging
+
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.engine import Engine
 
 from netmon import db
-from netmon.api.deps import get_engine, require_role
+from netmon.api.deps import get_config, get_engine, require_role
+from netmon.config import Config
 from netmon.models.schemas import Role
+from netmon.snapshot import SnapshotUnavailable, build_url
 from netmon.snapshots import read_snapshot
 from netmon.uplink import uplink_for_mac
+
+log = logging.getLogger("netmon.api.surveillance")
+
+# One semaphore per process, sized from config on first use. A camera wall asks
+# for up to 48 stills at once; uncapped that is 48 simultaneous connections
+# from the monitoring host into the camera VLAN.
+_snap_sem: asyncio.Semaphore | None = None
+_snap_sem_size = 0
+
+
+def _semaphore(limit: int) -> asyncio.Semaphore:
+    global _snap_sem, _snap_sem_size
+    if _snap_sem is None or _snap_sem_size != limit:
+        _snap_sem = asyncio.Semaphore(max(1, limit))
+        _snap_sem_size = max(1, limit)
+    return _snap_sem
 
 router = APIRouter(prefix="/api/surveillance", tags=["surveillance"])
 
@@ -389,6 +411,106 @@ def camera_detail(
             "WHERE c.hardware_id = :hw AND c.device_id != :d ORDER BY d.name",
             {"hw": out["hardware_id"], "d": device_id})]
     return out
+
+
+@router.get("/cameras/{device_id}/snapshot")
+async def camera_snapshot(
+    device_id: int,
+    request: Request,
+    size: str = "M",
+    engine: Engine = Depends(get_engine),
+    cfg: Config = Depends(get_config),
+    _user=Depends(require_role(Role.viewer)),
+) -> Response:
+    """A still from one camera, proxied (spec 11 D7 / spec 20 S4).
+
+    Browsers strip embedded credentials from `<img>` subrequests, so the page
+    cannot fetch this itself; proxying it server-side is also what keeps the
+    camera login off the browser.
+
+    **SSRF posture.** The caller passes a NetMon `device_id` and nothing else —
+    never a URL, host or address. The target is rebuilt from the `cameras` row,
+    so the proxy can only ever reach an address Milestone registered for a
+    camera, and only for a device whose `device_type` is `camera`. `size` is
+    whitelisted (`netmon.snapshot.normalise_size`).
+
+    Every failure answers with a reason in `X-NetMon-Reason` so the tile can say
+    why it is empty instead of showing a broken image: a blank frame that might
+    mean "camera down" and might mean "proxy disabled" is the thing this whole
+    page is built to avoid.
+    """
+    conf = cfg.camera_snapshot
+    if not conf.enabled:
+        return _snap_error(503, "camera snapshot proxy is disabled "
+                                "([camera_snapshot] enabled = false)")
+    if not conf.user:
+        return _snap_error(503, "no camera account configured")
+
+    row = db.fetch_one(
+        engine,
+        "SELECT c.ip, c.http_port, c.https_enabled, c.https_port, c.vendor, c.channel "
+        "FROM cameras c JOIN devices d ON d.id = c.device_id "
+        "WHERE c.device_id = :d AND d.device_type = 'camera' AND d.enabled = 1",
+        {"d": device_id})
+    if row is None:
+        # Also the answer for a device_id that is a switch: the join, not a
+        # separate check, is what makes that impossible to forget.
+        return _snap_error(404, "no such camera")
+
+    try:
+        target = build_url(dict(row), size=size, channel_param=conf.channel_param)
+    except SnapshotUnavailable as exc:
+        return _snap_error(exc.status, exc.reason)
+
+    timeout = httpx.Timeout(conf.timeout_s, connect=conf.connect_timeout_s)
+    async with _semaphore(conf.max_concurrent):
+        try:
+            async with httpx.AsyncClient(timeout=timeout, verify=target.verify,
+                                         follow_redirects=False) as client:
+                # Basic first, then Digest: Bosch and Axis both answer 401 with
+                # a challenge, and httpx picks the scheme from it.
+                resp = await client.get(
+                    target.url,
+                    auth=httpx.DigestAuth(conf.user, conf.password),
+                    headers={"Accept": "image/jpeg,image/*"})
+        except httpx.HTTPError as exc:
+            # The class is the diagnosis: ConnectTimeout means the camera is not
+            # answering, ConnectError means the address is wrong or the port
+            # closed. Both are useful on the tile; neither is "camera down".
+            return _snap_error(504, f"{type(exc).__name__} fetching the still")
+
+    if resp.status_code == 401:
+        return _snap_error(502, "camera rejected the configured account")
+    if resp.status_code >= 400:
+        return _snap_error(502, f"camera answered HTTP {resp.status_code}")
+    ctype = resp.headers.get("content-type", "")
+    if not ctype.lower().startswith("image/"):
+        # A login page returned with 200 is the usual cause, and rendering it as
+        # an image would show a broken tile with no explanation.
+        return _snap_error(502, f"camera returned {ctype or 'no content type'}, not an image")
+
+    return Response(content=resp.content, media_type=ctype,
+                    headers={"Cache-Control": f"private, max-age={conf.cache_s}"})
+
+
+def _snap_error(status: int, reason: str) -> Response:
+    """An empty body plus a reason header.
+
+    Deliberately not JSON: this endpoint sits behind an `<img>`, so the browser
+    discards the body either way. The header is what the page reads to explain
+    the empty frame.
+
+    HTTP headers are latin-1, and these reasons are prose written for an
+    operator — the em dashes and arrows in them raised UnicodeEncodeError
+    inside Starlette, turning an explanatory 501 into a 500 with no
+    explanation. Sanitising here rather than flattening the messages keeps the
+    prose readable everywhere else it is used.
+    """
+    safe = (reason.replace("—", "-").replace("–", "-")
+                  .replace("’", "'").replace("“", '"').replace("”", '"')
+                  .encode("ascii", "replace").decode("ascii"))
+    return Response(status_code=status, content=b"",
+                    headers={"X-NetMon-Reason": safe, "Cache-Control": "no-store"})
 
 
 @router.get("/servers")

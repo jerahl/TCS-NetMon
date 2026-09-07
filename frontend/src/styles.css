@@ -6235,3 +6235,17 @@ kbd.k { font-family: var(--mono); font-size: 10px; background: var(--bg-2); bord
 }
 .trend-row .trend-val { font-size: 12px; text-align: right; color: var(--fg); font-weight: 600; }
 .trend-row .spark { width: 100%; }
+
+/* Camera-wall tile note (spec 20 S4). A tile that cannot show a still says why
+ * — "proxy disabled", "no profile for this driver", "imager 2 of a shared
+ * device" are all different problems and a blank frame conflates them with a
+ * dead camera. */
+.cam-tile-note {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: 10px; text-align: center;
+  font-family: var(--mono); font-size: 9px; line-height: 1.4;
+  color: var(--muted); background: var(--bg-2);
+  text-transform: none; letter-spacing: 0;
+}
+.cam-tile .ts { font-size: 11px; text-shadow: none; }
