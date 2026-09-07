@@ -435,21 +435,49 @@ default), `POST …/batches/{id}/start`, `POST …/batches/{id}/abort`,
 S2/D10 do not yet cover and that verification needs: current firmware and a
 config read-back per catalogue key.
 
-**Open for the owner before code (record answers here):**
-- the initial **setting catalogue** — proposal: NTP server, time zone, device
-  name/hostname, VCA on/off, stream-profile preset, snapshot/service-account
-  password rotation (the last one changes what the snapshot proxy and Milestone
-  authenticate with, so it needs its own sequencing);
-- where firmware images come from (vendor download by the owner, uploaded through
-  NetMon) and who may upload (admin only, proposed);
-- whether Milestone's own device-firmware feature is in use on this estate (XProtect
-  Management Client can push firmware for some Bosch/Axis models) — if it is,
-  NetMon should *not* compete with it, and S8 becomes config-change only.
+**Owner answers 2026-09-07:**
+
+1. **Setting catalogue — deferred** ("later item"). So the catalogue, and with it
+   bulk *config change*, is not designed yet. The batch machinery is built
+   op-agnostic so the catalogue can arrive later without reworking it.
+2. **Firmware images — yes**, provenance as proposed: the owner downloads the
+   vendor image, uploads it through NetMon, admin only, SHA-256 + model
+   allow-list recorded on upload.
+3. **XProtect's own firmware push is not in use** — but the owner asked whether
+   NetMon could *drive* it rather than talking to cameras directly. Recorded as
+   an S8 investigation, because it is genuinely the better shape if it exists:
+   Milestone already holds the device credentials and the hardware inventory, and
+   a VMS-mediated push means the VMS knows recording is about to pause instead of
+   discovering a camera vanished. **It is also a write to Milestone, which every
+   integration is currently forbidden from doing (CLAUDE.md §4.1), so it needs
+   its own sign-off even though D11 is approved** — D11 covers writes to
+   *cameras*, not to the VMS. The investigation is read-only: does the Config API
+   expose a firmware/software-update resource on 2025 R2 at all (`/api/rest/v1`
+   surface walk), and does it cover the Bosch models this estate runs. If yes,
+   compare the two paths before building either; if no, the direct path stands.
+
+**One consequence of (1) worth stating plainly:** deferring the catalogue inverts
+the planned risk order. The design sequenced config-change first *because* it is
+the reversible half — a wrong NTP server is a support ticket, a wrong firmware
+image is a truck roll — and firmware second, after the machinery had proven
+itself on low-stakes batches. With the catalogue deferred, the first thing S8
+would ship is the dangerous half. Two ways to keep the intended safety margin,
+owner's choice:
+- **preferred** — run the firmware machinery in `dry_run` and then against a
+  deliberate lab/spare camera for the first several batches, treating that as the
+  proving ground the config-change half was going to be; or
+- name two or three uncontroversial settings now (NTP + time zone would do) so a
+  minimal catalogue exists purely to exercise the batch runner.
+
+Either way the canary → ring → abort discipline is not optional for firmware, and
+the first live firmware batch should be watched, not scheduled.
 
 **Sequencing:** after S1–S6 and after D7 (S4) has proven the camera-side HTTP
-path and credentials in production; the firmware half after the config-change
-half has run clean through several real batches. Estimate 3–4 sessions for the
-machinery + Bosch profile, 1 per additional vendor.
+path and credentials in production. Then: batch machinery + firmware store +
+Bosch profile in dry-run (2 sessions), the Milestone-mediated investigation above
+(half a session, read-only, can run in parallel), first canary batches, then
+rings. Estimate 3–4 sessions for the machinery + Bosch profile, 1 per additional
+vendor.
 
 ### S7 — Liveness (optional, after S1–S6)
 
@@ -511,7 +539,7 @@ NetMon largely has. Suggested order (spec 15 §3.2 estimates still apply):
 ## 6. Definition of done — cameras
 
 - [ ] S0 `reference/` synced; `TCS-Dashboard-Functionality.md` in `reference/`; no `etc-zabbix/` content in the repo
-- [ ] S1 `PageHeader` / `Tabs` (badges) / `Card{source,link}` primitives; Surveillance uses them; 7 tabs; 4-cell strip; alarm feed live; fonts decision recorded
+- [x] **S1 done 2026-09-07.** `PageHeader` / `Pill` / `Tabs` (badges) / `StatCell` / `Card{source,link}` in `primitives.jsx`; Inter + JetBrains Mono self-hosted from `frontend/fonts/` (esbuild `.woff2` file loader → `netmon/web/fonts/`, url()s rewritten, no CDN); Surveillance rebuilt on them — header with five meta pills, badged tabs, ZCD's four-cell strip, `ServerMini` tiles, live alarm feed, degraded-cycle banner; `/api/alerts` gained `device_type` (comma list) + `limit`; `/api/meta` gained `milestone_host`; tab lives in the hash so deep-links work. **Deviation from the plan, deliberate: five tabs, not seven.** Sites and Evidence Lock need data S2/S6 collect (per-site recorder + switch/AP roll-ups; the evidence-lock endpoint), and a tab that exists only to say "coming later" is worse than no tab. 20 render-check cases green, 509 tests green.
 - [ ] S2 mgmt server, version, licence, RS ESS state, per-RS camera counts, surveillance history series, sites roll-up fields — each either collected or recorded as "not exposed by Config API on 2025 R2"
 - [ ] S3 navigator + table/thumbnail toggle; 2,651 cameras render without jank
 - [ ] S4 snapshot proxy behind `[camera_snapshot] enabled = false`; owner has provisioned the read-only camera login; allow-list + vendor + size tests green; spec 11 D7 entry updated
@@ -524,5 +552,7 @@ NetMon largely has. Suggested order (spec 15 §3.2 estimates still apply):
 ## Next session
 
 - [x] S0 — `reference/` synced from the 2026-09-07 bundle (LF-normalised; `etc-zabbix/`, `httpd/`, `cron/`, `server-scripts/`, `dist/`, `vendor/`, `graphify-out/` excluded). Index in `reference/readme.md`.
-- [ ] S1 — shell primitives + fonts (approved). Vendor Inter 400/500/600/700 and JetBrains Mono 400/500/600 woff2 under `frontend/fonts/`, `@font-face` ahead of the PORT marker, esbuild copies them; then `PageHeader` / `Tabs` / `Card{source,link}` and the Surveillance header/tabs/strip.
-- [ ] Ask the owner the three S8 questions (setting catalogue, firmware provenance, Milestone's own firmware feature) — they gate D11's design, not S1–S7.
+- [x] S1 — shell primitives + fonts. Inter shipped as the single variable file (352 KB, weights 100–900) rather than four statics: smaller, and the design's `font-weight: 500` now renders as a real 500. JetBrains Mono has no variable woff2 upstream, so 400/500/600 are static.
+- [x] The three S8 questions are answered (see §3 S8). One follow-on is open and is the owner's: deferring the setting catalogue means firmware — the irreversible half — would be the first thing S8 ships, so pick the proving ground (lab camera vs. a two-setting minimal catalogue).
+- [ ] **S2 next.** Highest-value items, in order: RS service state from the ESS (`_ess_camera_status` reads only `cameras/` today; spec 19 §11 has 9 recording-server states covering all 22 servers, and the Overview's recorder tiles currently colour off the Config API's `running` flag); per-RS camera counts so `chans_total` stops being null; `sites`/version/licence investigation for the header chip; `https_enabled` / `https_port` / `channel` into `cameras` — S4's snapshot proxy needs all three and collecting them now avoids a second migration.
+- [ ] A restart of `netmon.service` is required for S1's two API additions (`device_type`/`limit` on `/api/alerts`, `milestone_host` on `/api/meta`). Until then the live page's alarm cell counts estate-wide alerts, because FastAPI ignores query params it does not know about — the static bundle updates without a restart but the API does not.

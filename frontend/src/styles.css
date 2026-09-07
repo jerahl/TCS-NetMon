@@ -13,13 +13,61 @@
  * offline-tolerance property). The `--sans`/`--mono` stacks below are ZCD's own,
  * unmodified, so where those faces are installed locally the rendering is
  * identical and elsewhere it falls back exactly as ZCD's stacks specify. No
- * <link> is added. Self-hosted woff2 is the follow-up (spec 18/G0).
+ * <link> is added. **Resolved (spec 20 S1, owner-approved 2026-09-07): the two
+ * families are now self-hosted from `frontend/fonts/` — see the @font-face
+ * block below.** Same faces ZCD renders, no CDN, no runtime fetch off-box.
  *
  * After the port: an alias block mapping NetMon's older token names onto the
  * ported ones, then NetMon's own component CSS — the ~210 classes (⌘K palette,
  * sparklines, action buttons, site map, switch faceplate) that have no ZCD
  * counterpart and so could not be ported from it.
  */
+
+/* ═══════════════ SELF-HOSTED FACES (spec 20 S1) ══════════════════════════
+ * ZCD pulls Inter + JetBrains Mono from fonts.googleapis.com in every
+ * *.view.php. NetMon vendors them instead: the files live in frontend/fonts/
+ * and esbuild copies them to netmon/web/fonts/ with the url()s below rewritten
+ * (build.mjs `.woff2` file loader). Upstream releases, OFL — licences sit
+ * beside the files.
+ *
+ * Inter ships as ONE variable file covering 100–900, which is both smaller
+ * than the four static weights it replaces (352 KB vs ~455 KB) and lets the
+ * `font-weight: 500` the design uses in a dozen places render as an actual
+ * 500 rather than snapping to 400 or 700. JetBrains Mono has no variable
+ * woff2 upstream, so its three used weights are static.
+ *
+ * `font-display: swap` — a NOC page must paint its numbers immediately; a
+ * blocking font fetch on a local file is unlikely but the fallback stacks are
+ * metrically close enough that the swap is not disruptive.
+ */
+@font-face {
+  font-family: "Inter";
+  src: url("../fonts/InterVariable.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("../fonts/JetBrainsMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("../fonts/JetBrainsMono-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("../fonts/JetBrainsMono-SemiBold.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
 
 /* ═══════════════ PORT BEGINS — reference/assets/styles.css verbatim ═══════ */
 
@@ -6063,3 +6111,27 @@ kbd.k { font-family: var(--mono); font-size: 10px; background: var(--bg-2); bord
   margin-right: 6px;
 }
 .dur-bar > div { height: 100%; background: var(--pf); }
+
+/* ───────── Small button (spec 20 S1) ─────────
+ * `.btn.btn-sm` was already used by the camera detail page and the camera
+ * table's row action, but never defined — so a "Detail" affordance inside an
+ * 11.5px table row rendered at full button size and broke the row rhythm.
+ * ZCD writes this variant as `.btn.sm`; both spellings resolve here so a
+ * component ported verbatim from `reference/` keeps working.
+ */
+.btn.btn-sm, .btn.sm {
+  font-size: 9.5px;
+  padding: 3px 8px;
+  gap: 4px;
+}
+
+/* ───────── Alarm feed row (spec 20 S1) ─────────
+ * `.alarm-row` comes from surveillance.css and assumes ZCD's six-column shape
+ * (timestamp, severity label, dot, object, message, site). NetMon's severity
+ * text is rendered by <SevText> rather than ZCD's fixed-width `.sev` chip, so
+ * the second column needs its own width or the grid collapses the label.
+ */
+.alarm-row > *:nth-child(2) { font-size: 10px; font-weight: 600; }
+.alarm-row .msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.alarm-row .obj a { color: var(--accent); text-decoration: none; }
+.alarm-row .obj a:hover { text-decoration: underline; }

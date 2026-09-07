@@ -1,16 +1,27 @@
 import React from "react";
 import { getJSON, qs } from "../api.js";
-import { Card, Loading, ErrorMsg, SourceBadge, sevColor } from "../primitives.jsx";
+import {
+  Card, Loading, ErrorMsg, SourceBadge, sevColor, PageHeader, Tabs, StatCell, Dot, SevText,
+} from "../primitives.jsx";
 import { ageOf } from "../format.js";
 
-// Surveillance (Milestone) — Phase 10.4. NOC overview + cameras + recording
-// servers + storage, all from NetMon's DB (Config-API cadence). Camera detail
-// shows the FDB-linked switch port. Live alarms need the ESS WebSocket (D5);
-// the Alarms view meanwhile is NetMon alerts scoped to surveillance devices
-// (Events/Problems consoles). Camera video is not proxied (D7) — status tiles
-// + deep link to Smart Client.
+// Surveillance (Milestone) — Phase 10.4, given ZCD's shell in spec 20 S1.
+//
+// All of it reads NetMon's DB (Config-API + ESS cadence); no source call
+// happens at render. The page borrows ZCD's *composition* — page header with
+// meta pills, badged tabs, four-cell KPI strip, card-header grammar, server
+// tiles, alarm feed — and fills it with data ZCD's own NOC page never had
+// (reachability tiers, ESS Communication state, real school attribution).
+//
+// What it deliberately does not borrow: any slot ZCD fills with a zero it
+// cannot source. Storage *used*, recorder CPU/mem/RAID and Smart Client
+// sessions are absent here rather than shown as 0 — see §4 of spec 20 and the
+// storage note in OverviewTab.
 
 const REFRESH_MS = 30000;
+
+// The domains whose open alerts are "VMS alarms" for this page's purposes.
+const ALARM_SCOPE = "camera,recording_server";
 
 // Whether Milestone actually told us how much space is used. Module-level
 // because SurveillancePage and OverviewTab both need it and OverviewTab is a
@@ -41,34 +52,69 @@ function StatusPill({ tier, blind }) {
   return <span className={"state-pill " + s.tone} title={s.hint}>{s.label}</span>;
 }
 
-const fmtGb = (gb) => gb === null || gb === undefined ? "—"
-  : gb >= 1000 ? `${(gb / 1024).toFixed(1)} TB` : `${Math.round(gb)} GB`;
+// GB → GB/TB/PB. The estate's configured total is ~1.8 million GB, which reads
+// as noise in GB and as an awkward 1,794 in TB; the owner describes it in PB,
+// so the formatter goes that far too.
+export const fmtGb = (gb) => {
+  if (gb === null || gb === undefined) return "—";
+  const n = Number(gb);
+  if (!Number.isFinite(n)) return "—";
+  if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} PB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(1)} TB`;
+  return `${Math.round(n)} GB`;
+};
 
-const TABS = [
-  { id: "overview", label: "NOC Overview" },
-  { id: "cameras", label: "Cameras" },
-  { id: "servers", label: "Recording Servers" },
-  { id: "storage", label: "Storage" },
-];
+const num = (v) => Number(v) || 0;
+const fmtN = (v) => num(v).toLocaleString();
+
+// Tabs that have real content today. ZCD also has Sites and Evidence Lock;
+// those arrive in spec 20 S6 with the data behind them (per-site recorder and
+// switch/AP roll-ups; the evidence-lock endpoint investigation). An empty tab
+// naming a future phase would be worse than no tab.
+const TAB_IDS = ["overview", "cameras", "servers", "storage", "alarms"];
 
 function StateDot({ value }) {
   const sev = value === "up" ? "ok" : value === "down" ? "crit" : value === "blind" ? "warn" : "unknown";
   return <span className="dot" style={{ background: sevColor(sev) }} title={value || "unknown"} />;
 }
 
-export function SurveillancePage() {
-  const [tab, setTab] = React.useState("overview");
+export function SurveillancePage({ query = {} }) {
   const [summary, setSummary] = React.useState(null);
+  const [sites, setSites] = React.useState(null);
+  const [servers, setServers] = React.useState(null);
+  const [alarms, setAlarms] = React.useState(null);
+  const [meta, setMeta] = React.useState(null);
   const [error, setError] = React.useState(null);
   // Lifted out of CamerasTab so the by-school grid can drive it: clicking a
   // school on the overview is the same gesture as filtering the camera list.
   const [site, setSite] = React.useState("");
 
+  // The URL owns the active tab, not component state — so a deep link, the ⌘K
+  // palette and the browser's back button all land where they say they will.
+  const tab = TAB_IDS.includes(query.tab) ? query.tab : "overview";
+  const setTab = (id) => {
+    location.hash = "#/surveillance" + (id === "overview" ? "" : `?tab=${encodeURIComponent(id)}`);
+  };
+
+  React.useEffect(() => {
+    getJSON("/api/meta").then(setMeta).catch(() => { /* header slot omitted */ });
+  }, []);
+
   React.useEffect(() => {
     let live = true;
-    const load = () => getJSON("/api/surveillance/summary")
-      .then((s) => { if (live) { setSummary(s); setError(null); } })
-      .catch((e) => { if (live) setError(e); });
+    // Four reads, one cadence. Sites and servers are lifted here rather than
+    // fetched per tab because the header, the overview and their own tabs all
+    // want them, and a 26-row and 22-row query is cheaper than the
+    // re-fetch-on-every-tab-switch it replaces.
+    const load = () => {
+      getJSON("/api/surveillance/summary")
+        .then((s) => { if (live) { setSummary(s); setError(null); } })
+        .catch((e) => { if (live) setError(e); });
+      getJSON("/api/surveillance/sites").then((r) => live && setSites(r)).catch(() => live && setSites([]));
+      getJSON("/api/surveillance/servers").then((r) => live && setServers(r)).catch(() => live && setServers([]));
+      getJSON("/api/alerts" + qs({ device_type: ALARM_SCOPE, limit: 200 }))
+        .then((r) => live && setAlarms(r)).catch(() => live && setAlarms([]));
+    };
     load();
     const id = setInterval(load, REFRESH_MS);
     return () => { live = false; clearInterval(id); };
@@ -78,84 +124,107 @@ export function SurveillancePage() {
   if (!summary) return <Loading what="surveillance" />;
 
   const age = ageOf(summary.updated_at);
-  // Consumed space is NOT available from the Config API — it needs WinRM
-  // against the recorders (OpenProject #111). So a percentage cannot be
-  // computed, and computing one from a null `used` would report "0% of
-  // 1.8 PB" across the estate. The tile shows configured capacity, which is
-  // real, and says plainly why the used figure is missing (§4.5).
-  const usedKnown = usedIsKnown(summary);
   const cs = summary.cameras_by_status || {};
+  const usedKnown = usedIsKnown(summary);
   const storagePct = usedKnown && summary.storage_total_gb
     ? Math.round((summary.storage_used_gb / summary.storage_total_gb) * 100) : null;
+  const camsDown = num(cs.down_confirmed) + num(cs.down_source_only);
+  const rsAllUp = summary.servers_total > 0 && summary.servers_up === summary.servers_total;
+
+  const alarmCrit = (alarms || []).filter((a) => a.severity === "crit").length;
+  const alarmWarn = (alarms || []).filter((a) => a.severity === "warn").length;
+
+  const tabs = [
+    { id: "overview", label: "Overview" },
+    { id: "cameras", label: "Cameras", badge: fmtN(summary.cameras_total),
+      kind: camsDown > 0 ? "err" : "", title: camsDown ? `${camsDown} needing attention` : undefined },
+    { id: "servers", label: "Recording Servers", badge: fmtN(summary.servers_total),
+      kind: rsAllUp ? "" : "err" },
+    { id: "storage", label: "Storage" },
+    { id: "alarms", label: "Alarms", badge: alarms ? fmtN(alarms.length) : "",
+      kind: alarmCrit > 0 ? "err" : alarms && alarms.length ? "warn" : "" },
+  ];
 
   return (
     <div className="page">
-      <h1>Surveillance · Milestone</h1>
+      <PageHeader
+        title="Surveillance NOC"
+        ip={meta?.milestone_host || null}
+        pills={[
+          { label: "recorders", value: `${summary.servers_up} / ${summary.servers_total}`,
+            severity: rsAllUp ? "ok" : summary.servers_up > 0 ? "warn" : "crit",
+            title: rsAllUp ? "every recording server is up" : `${summary.servers_down} not up` },
+          { label: "cameras", value: fmtN(summary.cameras_total) },
+          { label: "schools", value: sites ? String(sites.length) : "…" },
+          // "configured", never "used" — the Config API on 2025 R2 has no
+          // consumed-space field (spec 19 §8), and a bare TB figure next to a
+          // percentage would be read as usage.
+          { label: "storage", value: `${fmtGb(summary.storage_total_gb)} configured` },
+          age ? { label: "cache", value: `${age} old` } : null,
+        ]}
+        range="Live · 24h history"
+      />
+
       <div className="subtitle">
-        <SourceBadge source="milestone" /> · Config-API cadence · refreshes every {REFRESH_MS / 1000}s
-        {age && <span> · cache {age} old</span>}
+        <SourceBadge source="milestone" /> Config API + Events/State ·
+        {" "}refreshes every {REFRESH_MS / 1000}s
         {!summary.updated_at && <span style={{ color: sevColor("warn") }}> · no camera data yet</span>}
       </div>
 
       <UnlinkedBanner overview={summary.overview} />
+      <DegradedBanner overview={summary.overview} />
 
-      {/* ZCD's .stat-grid (surveillance.css). Six cells rather than four,
-          because camera health here has three distinct failure shapes and
-          collapsing them loses the one that decides the response. */}
+      {/* ZCD's four-cell strip. The six tiers stay available as filter chips on
+          the Cameras tab; here the sub-line carries them so the headline number
+          answers "how many cameras are working" without hiding which failure
+          shape is in play. */}
       <Card tight>
-        <div className="stat-grid cols-6">
-          <div className="stat-cell">
-            <span className="lbl">Cameras</span>
-            <span className="val">{summary.cameras_total}</span>
-            <span className="sub">{summary.servers_total} recorders</span>
-          </div>
-          <div className="stat-cell">
-            <span className="lbl">Up</span>
-            <span className="val" style={{ color: sevColor("ok") }}>{cs.up ?? "—"}</span>
-            <span className="sub">both probes agree</span>
-          </div>
-          <div className="stat-cell">
-            <span className="lbl">Down</span>
-            <span className="val" style={cs.down_confirmed ? { color: sevColor("crit") } : undefined}>
-              {cs.down_confirmed ?? "—"}</span>
-            <span className="sub">Milestone + ICMP</span>
-          </div>
-          <div className="stat-cell">
-            <span className="lbl">Milestone down</span>
-            <span className="val" style={cs.down_source_only ? { color: sevColor("crit") } : undefined}>
-              {cs.down_source_only ?? "—"}</span>
-            <span className="sub">network reaches them</span>
-          </div>
-          <div className="stat-cell">
-            <span className="lbl">Blind</span>
-            <span className="val" style={cs.blind ? { color: sevColor("warn") } : undefined}>
-              {cs.blind ?? "—"}</span>
-            <span className="sub">no Milestone verdict</span>
-          </div>
-          <div className="stat-cell">
-            <span className="lbl">Storage</span>
-            <span className="val">{storagePct !== null ? `${storagePct}%` : fmtGb(summary.storage_total_gb)}</span>
-            <span className="sub">{usedKnown ? "used" : "configured"}</span>
-          </div>
+        <div className="stat-grid">
+          <StatCell label="Cameras online" source="milestone-ess"
+                    value={cs.up ?? "—"} unit={`/ ${fmtN(summary.cameras_total)}`}
+                    severity={camsDown > 0 ? "crit" : undefined}
+                    sub={camsDown || cs.down_network_only || cs.blind
+                      ? [num(cs.down_confirmed) ? `${cs.down_confirmed} down` : null,
+                         num(cs.down_source_only) ? `${cs.down_source_only} Milestone-down` : null,
+                         num(cs.down_network_only) ? `${cs.down_network_only} no ICMP` : null,
+                         num(cs.blind) ? `${cs.blind} blind` : null].filter(Boolean).join(" · ")
+                      : "every camera reachable"}
+                    subTone={camsDown > 0 ? "err" : cs.down_network_only || cs.blind ? "warn" : "ok"} />
+          <StatCell label="Recording servers" source="milestone"
+                    value={summary.servers_up} unit={`/ ${summary.servers_total}`}
+                    severity={rsAllUp ? undefined : "crit"}
+                    sub={summary.servers_total === 0 ? "none linked yet"
+                      : rsAllUp ? "all online" : `${summary.servers_down} not up`}
+                    subTone={rsAllUp ? "ok" : "err"} />
+          <StatCell label="Active alarms" source="netmon"
+                    value={alarms ? alarms.length : null}
+                    severity={alarmCrit > 0 ? "crit" : undefined}
+                    sub={!alarms ? "loading"
+                      : alarms.length === 0 ? "no open alerts"
+                      : [alarmCrit ? `${alarmCrit} critical` : null,
+                         alarmWarn ? `${alarmWarn} warning` : null].filter(Boolean).join(" · ")}
+                    subTone={alarmCrit > 0 ? "err" : alarms && alarms.length ? "warn" : "ok"} />
+          {/* Recording is motion-triggered on this estate, so "stopped" is the
+              resting state — a count shown as information, never as a fault. */}
+          <StatCell label="Recording now" source="milestone"
+                    value={fmtN(summary.cameras_recording)} unit={`/ ${fmtN(summary.cameras_total)}`}
+                    sub="motion-triggered — stopped is normal" />
         </div>
       </Card>
 
-      <div className="tabs">
-        {TABS.map((t) => (
-          <button key={t.id} type="button" className={"tab" + (tab === t.id ? " active" : "")}
-                  onClick={() => setTab(t.id)}>{t.label}</button>
-        ))}
-      </div>
+      <Tabs tabs={tabs} active={tab} onChange={setTab} />
 
       {tab === "overview" && (
-        <OverviewTab summary={summary} storagePct={storagePct}
+        <OverviewTab summary={summary} storagePct={storagePct} sites={sites}
+                     servers={servers} alarms={alarms} meta={meta}
                      onPickSite={(s) => { setSite(s || ""); setTab("cameras"); }} />
       )}
       {tab === "cameras" && (
         <CamerasTab counts={summary.cameras_by_status} site={site} onSite={setSite} />
       )}
-      {tab === "servers" && <ServersTab />}
+      {tab === "servers" && <ServersTab rows={servers} />}
       {tab === "storage" && <StorageTab />}
+      {tab === "alarms" && <AlarmsTab rows={alarms} />}
     </div>
   );
 }
@@ -163,16 +232,9 @@ export function SurveillancePage() {
 // Cameras by school, the same idiom as the XIQ page's APs-by-site grid. Tinted
 // by the worst thing present rather than by a ratio: one dead camera at a small
 // site matters as much as one at a large one, and a percentage hides that.
-function CameraSiteGrid({ onPick }) {
-  const [rows, setRows] = React.useState(null);
+function SitesCard({ rows, onPick }) {
   const [filter, setFilter] = React.useState("all");
-  React.useEffect(() => {
-    // Rolled up server-side. The XIQ grid groups a list the page already has,
-    // but there are 2,651 cameras here — shipping them all to the browser to
-    // count them by site would be the slowest part of the page.
-    getJSON("/api/surveillance/sites").then(setRows).catch(() => setRows([]));
-  }, []);
-  if (!rows) return <Card kicker="Cameras by school"><Loading what="sites" /></Card>;
+  if (!rows) return <Card title="Cameras by school"><Loading what="sites" /></Card>;
   return <SiteTiles rows={rows} filter={filter} onFilter={setFilter} onPick={onPick} />;
 }
 
@@ -205,7 +267,8 @@ export function SiteTiles({ rows, filter, onFilter, onPick }) {
     : filter === "ok" ? scored.filter((r) => r.worst === "ok") : scored;
 
   return (
-    <Card kicker={`${scored.length} school(s) · ${issues.length} needing attention`}>
+    <Card title="Cameras by school" source="milestone"
+          kicker={`${scored.length} school(s) · ${issues.length} needing attention`}>
       <div className="evt-filters" style={{ marginTop: 0 }}>
         <span className="seg-toggle">
           {[["all", `All ${scored.length}`], ["issues", `Issues ${issues.length}`],
@@ -265,7 +328,7 @@ export function SiteTiles({ rows, filter, onFilter, onPick }) {
           all up
         </span>
         <span className="legend-foot">
-          {scored.reduce((n, r) => n + r.down_confirmed + r.down_source_only, 0)} camera(s) down
+          {scored.reduce((n2, r) => n2 + r.down_confirmed + r.down_source_only, 0)} camera(s) down
           across {scored.length} school(s)
         </span>
       </div>
@@ -273,40 +336,151 @@ export function SiteTiles({ rows, filter, onFilter, onPick }) {
   );
 }
 
-export function OverviewTab({ summary, storagePct, onPickSite }) {
+export function OverviewTab({ summary, storagePct, sites, servers, alarms, meta, onPickSite }) {
   const usedKnown = usedIsKnown(summary);
-  const cs = summary.cameras_by_status || {};
+  // Retention is per recorder and cumulative from the moment of recording
+  // (spec 19 §8) — so the estate figure is a range, not a single number, and
+  // averaging it would describe no recorder that exists.
+  const rets = (servers || []).map((s) => num(s.retention_days)).filter((d) => d > 0);
+  const retLabel = rets.length === 0 ? null
+    : Math.min(...rets) === Math.max(...rets) ? `${rets[0]} days`
+    : `${Math.min(...rets)}–${Math.max(...rets)} days (per recorder)`;
+  const rsAllUp = summary.servers_total > 0 && summary.servers_up === summary.servers_total;
+
   return (
     <React.Fragment>
       {/* First, because "which school has a problem" is the question this page
           gets opened for. The environment roll-up below is context, not the
           lede. */}
-      <CameraSiteGrid onPick={onPickSite} />
-      <Card kicker="XProtect environment">
-        <table className="grid kv">
-          <tbody>
-            <tr><td>Recording servers</td><td>{summary.servers_up} up / {summary.servers_total} total</td></tr>
-            <tr><td>Cameras</td><td>{summary.cameras_recording} recording / {summary.cameras_total} total</td></tr>
-            <tr><td>Storage configured</td><td className="mono">{fmtGb(summary.storage_total_gb)}</td></tr>
-            <tr><td>Storage used</td><td>
-              {usedKnown
-                ? <span className="mono">{fmtGb(summary.storage_used_gb)}{storagePct !== null ? ` (${storagePct}%)` : ""}</span>
-                : <span className="dim">not available — the Config API on XProtect 2025 R2
-                    exposes configured size only, with no used-space field on the storage
-                    object and no storageInformation resource</span>}
-            </td></tr>
-          </tbody>
-        </table>
-      </Card>
-      <Card kicker="Alarms">
-        <div className="msg">
-          Live VMS alarms need the Milestone Events/State WebSocket (owner gate
-          D5). Meanwhile surveillance-device alarms show on the Events and
-          Problems consoles. Camera video is deep-linked to Smart Client, not
-          proxied (D7).
+      <SitesCard rows={sites} onPick={onPickSite} />
+
+      <div className="global-cols">
+        <div className="global-col">
+          <Card title="Milestone XProtect" source="milestone"
+                kicker={meta?.milestone_host || "gateway not configured"}>
+            <table className="grid kv">
+              <tbody>
+                <tr><td>Management server</td>
+                    <td className="mono">{meta?.milestone_host || <span className="dim">—</span>}</td></tr>
+                <tr><td>Recording servers</td>
+                    <td><Dot severity={rsAllUp ? "ok" : "crit"} /> {summary.servers_up} of{" "}
+                        {summary.servers_total} online</td></tr>
+                <tr><td>Cameras</td>
+                    <td>{fmtN(summary.cameras_total)} registered ·{" "}
+                        {fmtN(summary.cameras_recording)} recording now</td></tr>
+                <tr><td>Retention</td>
+                    <td>{retLabel || <span className="dim">—</span>}
+                      {retLabel && <span className="dim"> · cumulative, incl. archive</span>}</td></tr>
+                <tr><td>Storage configured</td><td className="mono">{fmtGb(summary.storage_total_gb)}</td></tr>
+                <tr><td>Storage used</td><td>
+                  {usedKnown
+                    ? <span className="mono">{fmtGb(summary.storage_used_gb)}{storagePct !== null ? ` (${storagePct}%)` : ""}</span>
+                    : <span className="dim">not available — the Config API on XProtect 2025 R2
+                        exposes configured size only, with no used-space field on the storage
+                        object and no storageInformation resource</span>}
+                </td></tr>
+                {/* ZCD shows device licences, failover/mobile servers and Smart
+                    Client sessions here. Nothing NetMon reads today carries
+                    them; the rows arrive in spec 20 S2 if the REST resources
+                    exist on 2025 R2, and stay absent rather than showing 0. */}
+              </tbody>
+            </table>
+          </Card>
         </div>
+
+        <div className="global-col">
+          <Card title="Recording servers" source="milestone"
+                kicker={servers ? `${servers.length} recorder(s)` : "loading"}
+                link={{ href: "#/surveillance?tab=servers", label: "All recorders" }}>
+            {!servers ? <Loading what="recording servers" /> : servers.length === 0 ? (
+              <div className="msg">No recording servers cached.</div>
+            ) : (
+              <div className="stat-grid" style={{ gridTemplateColumns: "repeat(2, 1fr)" }}>
+                {servers.slice(0, 6).map((s) => <ServerMini key={s.device_id} s={s} />)}
+              </div>
+            )}
+            {/* ZCD's tiles show CPU / memory / disk from a Windows agent.
+                NetMon has no agent on the recorders (WinRM, OpenProject #111),
+                so the three slots carry what Milestone does answer for. */}
+            <div className="msg" style={{ fontSize: 11, marginTop: 10 }}>
+              Host metrics (CPU, memory, disk, RAID) need WinRM access to the
+              recorders and are not collected yet.
+            </div>
+          </Card>
+        </div>
+      </div>
+
+      <Card title="Active alarm feed" source="netmon"
+            kicker="open NetMon alerts on cameras and recorders"
+            link={{ href: "#/problems", label: "Problems console" }} tight>
+        <AlarmFeed rows={alarms} limit={10} />
       </Card>
     </React.Fragment>
+  );
+}
+
+// ZCD's `.server-tile`. Three stat slots, filled with what Milestone actually
+// answers for rather than the CPU/Mem/Disk ZCD reads off a Windows agent.
+export function ServerMini({ s }) {
+  const sev = s.status === "up" ? "ok" : s.status === "down" ? "crit" : "warn";
+  return (
+    <div className="server-tile">
+      <div className="head">
+        <Dot severity={sev} />
+        <div className="id">{s.name}</div>
+        {s.role && <span className="role">{String(s.role).replace(/\s*server$/i, "")}</span>}
+      </div>
+      <div className="stats">
+        <div>Cameras<div className="v">{s.chans_total ?? "—"}</div></div>
+        <div>Storage<div className="v">{fmtGb(s.storage_total_gb)}</div></div>
+        <div>Retention<div className="v">{s.retention_days ? `${s.retention_days}d` : "—"}</div></div>
+      </div>
+      <div className="meta">
+        <span>{s.site || "—"}</span>
+        <span>{s.version || ""}</span>
+      </div>
+    </div>
+  );
+}
+
+// Where an alarm's object leads. Cameras have a detail page; recorders do not
+// (ZCD's was mock), so those land on the recorders tab rather than a dead link.
+function alarmHref(a) {
+  if (a.device_type === "camera" && a.device_id) return `#/camera/${a.device_id}`;
+  return "#/surveillance?tab=servers";
+}
+
+export function AlarmFeed({ rows, limit }) {
+  if (!rows) return <Loading what="alarms" />;
+  if (rows.length === 0) {
+    return (
+      <div className="msg" style={{ padding: 14 }}>
+        No open alerts on cameras or recording servers.
+      </div>
+    );
+  }
+  const shown = limit ? rows.slice(0, limit) : rows;
+  return (
+    <div>
+      {shown.map((a) => (
+        <div key={a.id} className={"alarm-row" + (a.acked_by ? " ack" : "")}>
+          <div className="ts">{ageOf(a.opened_at) || "?"} ago</div>
+          <SevText severity={a.severity} />
+          <div><Dot severity={a.severity} /></div>
+          <div className="obj"><a href={alarmHref(a)}>{a.device_name || `device ${a.device_id}`}</a></div>
+          <div className="msg">{a.rule_name}</div>
+          <div className="site">
+            {a.site || "—"}
+            {a.acked_by && <span className="dim"> · ack {a.acked_by}</span>}
+          </div>
+        </div>
+      ))}
+      {limit && rows.length > limit && (
+        <div className="msg" style={{ padding: "8px 14px", fontSize: 11 }}>
+          {rows.length - limit} more open — see the Alarms tab.
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -314,7 +488,6 @@ export function CamerasTab({ counts, site = "", onSite }) {
   const [rows, setRows] = React.useState(null);
   const [q, setQ] = React.useState("");
   const [status, setStatus] = React.useState("");
-  const [detail, setDetail] = React.useState(null);
   React.useEffect(() => {
     setRows(null);
     const id = setTimeout(() =>
@@ -338,139 +511,171 @@ export function CamerasTab({ counts, site = "", onSite }) {
   ];
 
   return (
-    <React.Fragment>
-      <Card kicker={rows ? `${rows.length} shown${site ? ` at ${site}` : ""}` : "Cameras"} tight>
-        <div className="cam-filter-bar">
-          {site && (
-            <div className="cfb-group">
-              <span className="cfb-lbl">School</span>
-              <button type="button" className="cfb-chip active"
-                      title="clear the school filter"
-                      onClick={() => onSite && onSite("")}>{site} ✕</button>
-            </div>
-          )}
+    <Card kicker={rows ? `${rows.length} shown${site ? ` at ${site}` : ""}` : "Cameras"}
+          source="milestone-ess" tight>
+      <div className="cam-filter-bar">
+        {site && (
           <div className="cfb-group">
-            <span className="cfb-lbl">Status</span>
-            {chips.map(([val, label, n]) => (
-              <button key={val || "all"} type="button"
-                      className={"cfb-chip" + (status === val ? " active" : "")}
-                      title={site
-                        ? "counts are estate-wide; the list below is limited to " + site
-                        : (STATUS[val]?.hint || "")}
-                      onClick={() => setStatus(val)}>
-                {/* The counts come from the estate-wide summary, so they stop
-                    describing the list once a school is picked. Dropping them
-                    beats showing a number that belongs to a different set. */}
-                {label}{!site && n !== undefined ? ` ${n}` : ""}
-              </button>
-            ))}
+            <span className="cfb-lbl">School</span>
+            <button type="button" className="cfb-chip active"
+                    title="clear the school filter"
+                    onClick={() => onSite && onSite("")}>{site} ✕</button>
           </div>
-          <div className="cfb-group" style={{ marginLeft: "auto", flex: 1, maxWidth: 320 }}>
-            <span className="cfb-lbl">Search</span>
-            <input type="text" placeholder="name, model, IP, MAC…" value={q}
-                   onChange={(e) => setQ(e.target.value)} style={{ width: "100%" }} />
-          </div>
-        </div>
-        {!rows ? <Loading what="cameras" /> : rows.length === 0 ? (
-          <div className="msg" style={{ padding: 14 }}>
-            {status || q
-              ? "No cameras match this filter."
-              : "No cameras cached — the Milestone collector hasn't populated the camera table."}
-          </div>
-        ) : (
-          <table className="grid nvr-tbl">
-            <thead><tr><th>Status</th><th>Camera</th><th>Site</th><th>Model</th>
-                       <th>Recording</th><th>Server</th><th>IP</th><th></th></tr></thead>
-            <tbody>
-              {rows.map((cam) => {
-                const blind = cam.source_status === "blind";
-                const tier = cam.reachability;
-                const rowCls = blind ? "row-warn"
-                  : tier === "down_confirmed" || tier === "down_source_only" ? "row-err"
-                  : tier === "down_network_only" ? "row-warn" : "";
-                return (
-                  <tr key={cam.device_id} className={rowCls}>
-                    <td><StatusPill tier={tier} blind={blind} /></td>
-                    <td><a href={`#/camera/${cam.device_id}`}>{cam.name}</a></td>
-                    <td>{cam.site || "—"}</td>
-                    <td className="dim">{cam.model || "—"}</td>
-                    {/* Recording here is motion-triggered, so "stopped" is the
-                        ordinary resting state and is shown as information
-                        rather than as a fault. */}
-                    <td><span className={"rec-pill" + (cam.recording_state === "up" ? "" : " off")}>
-                      {cam.recording_state || "unknown"}</span></td>
-                    <td className="dim">{cam.recording_server || "—"}</td>
-                    <td className="mono dim">{cam.ip || "—"}</td>
-                    <td><a className="btn btn-sm" href={`#/camera/${cam.device_id}`}>Detail</a></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
         )}
-      </Card>
-      {detail && <CameraDetail cam={detail} onClose={() => setDetail(null)} />}
-    </React.Fragment>
-  );
-}
-
-function CameraDetail({ cam, onClose }) {
-  const sp = cam.switch_port;
-  return (
-    <Card title={cam.name} kicker={`camera detail · cache ${ageOf(cam.updated_at) || "?"} old`}>
-      <button type="button" className="btn" style={{ float: "right" }} onClick={onClose}>Close</button>
-      <table className="grid kv">
-        <tbody>
-          <tr><td>Recording</td><td><StateDot value={cam.recording_state} /> {cam.recording_state || "unknown"}</td></tr>
-          <tr><td>Model</td><td>{cam.model || "—"}</td></tr>
-          <tr><td>Resolution</td><td className="mono">{cam.resolution || "—"}</td></tr>
-          <tr><td>FPS target</td><td className="mono">{cam.fps_target ?? "—"}</td></tr>
-          <tr><td>Codec</td><td className="mono">{cam.codec || "—"}</td></tr>
-          <tr><td>IP</td><td className="mono">{cam.ip || "—"}</td></tr>
-          <tr><td>MAC</td><td className="mono">{cam.mac || "—"}</td></tr>
-          <tr><td>Recording server</td><td>{cam.recording_server || "—"}</td></tr>
-          <tr><td>Linked switch port</td><td>
-            {sp ? <span><b>{sp.switch}</b> · <span className="mono">{sp.port || "?"}</span>
-                    <span className="dim"> (via FDB, {ageOf(sp.updated_at) || "?"} old)</span></span>
-                : <span className="dim">not seen in any switch FDB table</span>}
-          </td></tr>
-        </tbody>
-      </table>
+        <div className="cfb-group">
+          <span className="cfb-lbl">Status</span>
+          {chips.map(([val, label, n]) => (
+            <button key={val || "all"} type="button"
+                    className={"cfb-chip" + (status === val ? " active" : "")}
+                    title={site
+                      ? "counts are estate-wide; the list below is limited to " + site
+                      : (STATUS[val]?.hint || "")}
+                    onClick={() => setStatus(val)}>
+              {/* The counts come from the estate-wide summary, so they stop
+                  describing the list once a school is picked. Dropping them
+                  beats showing a number that belongs to a different set. */}
+              {label}{!site && n !== undefined ? ` ${n}` : ""}
+            </button>
+          ))}
+        </div>
+        <div className="cfb-group" style={{ marginLeft: "auto", flex: 1, maxWidth: 320 }}>
+          <span className="cfb-lbl">Search</span>
+          <input type="text" placeholder="name, model, IP, MAC…" value={q}
+                 onChange={(e) => setQ(e.target.value)} style={{ width: "100%" }} />
+        </div>
+      </div>
+      {!rows ? <Loading what="cameras" /> : rows.length === 0 ? (
+        <div className="msg" style={{ padding: 14 }}>
+          {status || q
+            ? "No cameras match this filter."
+            : "No cameras cached — the Milestone collector hasn't populated the camera table."}
+        </div>
+      ) : (
+        <table className="grid nvr-tbl">
+          <thead><tr><th>Status</th><th>Camera</th><th>Site</th><th>Model</th>
+                     <th>Recording</th><th>Server</th><th>IP</th><th></th></tr></thead>
+          <tbody>
+            {rows.map((cam) => {
+              const blind = cam.source_status === "blind";
+              const tier = cam.reachability;
+              const rowCls = blind ? "row-warn"
+                : tier === "down_confirmed" || tier === "down_source_only" ? "row-err"
+                : tier === "down_network_only" ? "row-warn" : "";
+              return (
+                <tr key={cam.device_id} className={rowCls}>
+                  <td><StatusPill tier={tier} blind={blind} /></td>
+                  <td><a href={`#/camera/${cam.device_id}`}>{cam.name}</a></td>
+                  <td>{cam.site || "—"}</td>
+                  <td className="dim">{cam.model || "—"}</td>
+                  {/* Recording here is motion-triggered, so "stopped" is the
+                      ordinary resting state and is shown as information
+                      rather than as a fault. */}
+                  <td><span className={"rec-pill" + (cam.recording_state === "up" ? "" : " off")}>
+                    {cam.recording_state || "unknown"}</span></td>
+                  <td className="dim">{cam.recording_server || "—"}</td>
+                  <td className="mono dim">{cam.ip || "—"}</td>
+                  <td><a className="btn btn-sm" href={`#/camera/${cam.device_id}`}>Detail</a></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
     </Card>
   );
 }
 
-function ServersTab() {
-  const [rows, setRows] = React.useState(null);
-  React.useEffect(() => { getJSON("/api/surveillance/servers").then(setRows).catch(() => setRows([])); }, []);
+export function ServersTab({ rows }) {
   if (!rows) return <Loading what="recording servers" />;
   return (
-    <Card kicker={`${rows.length} recording server(s)`}>
+    <Card title="Recording servers" source="milestone"
+          kicker={`${rows.length} recording server(s)`}>
       {rows.length === 0 ? <div className="msg">No recording servers cached.</div> : (
-        <table className="grid">
+        <table className="grid nvr-tbl">
           <thead><tr><th></th><th>Server</th><th>Site</th><th>Role</th><th>Version</th>
-                     <th>Channels</th><th>Storage</th><th>Retention</th></tr></thead>
+                     <th>Cameras</th><th>Recording</th><th>Storage configured</th>
+                     <th>Retention</th></tr></thead>
           <tbody>
             {rows.map((s) => (
-              <tr key={s.device_id}>
+              <tr key={s.device_id} className={s.status === "down" ? "row-err" : ""}>
                 <td><StateDot value={s.status} /></td>
                 <td>{s.name}<div className="dim mono" style={{ fontSize: 11 }}>{s.hostname || ""}</div></td>
                 <td>{s.site || "—"}</td>
                 <td className="dim">{s.role || "—"}</td>
                 <td className="mono dim">{s.version || "—"}</td>
-                <td className="mono">{s.chans_recording ?? "—"}/{s.chans_total ?? "—"}</td>
-                <td className="mono">{s.storage_total_gb
-                  ? (s.storage_used_gb !== null && s.storage_used_gb !== undefined
-                      ? `${Math.round(s.storage_used_gb)}/${Math.round(s.storage_total_gb)} GB`
-                      : fmtGb(s.storage_total_gb))
-                  : "—"}</td>
+                <td className="mono">{s.chans_total ?? "—"}</td>
+                <td className="mono">{s.chans_recording ?? "—"}</td>
+                <td className="mono">{fmtGb(s.storage_total_gb)}</td>
                 <td className="mono dim">{s.retention_days ? `${s.retention_days}d` : "—"}</td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
+      {/* Named, not implied: ZCD's equivalent table has CPU / Mem / RAID /
+          uptime columns fed by a Windows agent NetMon does not have. */}
+      <div className="msg" style={{ fontSize: 11, marginTop: 10 }}>
+        CPU, memory, disk and RAID come from the recorders' own OS and need WinRM
+        access (OpenProject #111) — not collected, so not shown. Storage is the
+        <em> configured</em> size; consumed space is not in the Config API.
+      </div>
     </Card>
+  );
+}
+
+export function AlarmsTab({ rows }) {
+  const [sev, setSev] = React.useState("all");
+  const [ack, setAck] = React.useState("all");
+  if (!rows) return <Loading what="alarms" />;
+
+  const counts = {
+    all: rows.length,
+    crit: rows.filter((a) => a.severity === "crit").length,
+    warn: rows.filter((a) => a.severity === "warn").length,
+    unack: rows.filter((a) => !a.acked_by).length,
+    ack: rows.filter((a) => a.acked_by).length,
+  };
+  const shown = rows.filter((a) =>
+    (sev === "all" || a.severity === sev)
+    && (ack === "all" || (ack === "unack" ? !a.acked_by : !!a.acked_by)));
+
+  return (
+    <React.Fragment>
+      <div className="card-h-bar">
+        <span className="h-title">Open alarms · cameras and recorders</span>
+        <SourceBadge source="netmon" />
+        <div className="h-spacer" />
+        <div className="trig-filter">
+          {[["all", "All", counts.all, ""], ["crit", "Critical", counts.crit, "err"],
+            ["warn", "Warning", counts.warn, "warn"]].map(([k, label, n, cls]) => (
+            <span key={k} className={`tf ${cls} ${sev === k ? "active" : ""}`}
+                  onClick={() => setSev(k)}>{label} <b>{n}</b></span>
+          ))}
+        </div>
+        <span style={{ width: 8 }} />
+        <div className="trig-filter">
+          {[["all", "Any", counts.all, ""], ["unack", "Unacked", counts.unack, "warn"],
+            ["ack", "Acked", counts.ack, ""]].map(([k, label, n, cls]) => (
+            <span key={k} className={`tf ${cls} ${ack === k ? "active" : ""}`}
+                  onClick={() => setAck(k)}>{label} <b>{n}</b></span>
+          ))}
+        </div>
+      </div>
+
+      <Card tight
+            kicker={`${shown.length} of ${rows.length} shown`}
+            link={{ href: "#/problems", label: "Acknowledge and assign on the Problems console" }}>
+        {rows.length === 0 ? (
+          <div className="msg" style={{ padding: 14 }}>
+            No open alerts on cameras or recording servers.
+          </div>
+        ) : shown.length === 0 ? (
+          <div className="msg" style={{ padding: 14 }}>No alarms match this filter.</div>
+        ) : (
+          <AlarmFeed rows={shown} />
+        )}
+      </Card>
+    </React.Fragment>
   );
 }
 
@@ -479,7 +684,7 @@ export function StorageTab() {
   React.useEffect(() => { getJSON("/api/surveillance/storage").then(setRows).catch(() => setRows([])); }, []);
   if (!rows) return <Loading what="storage" />;
   return (
-    <Card kicker={`${rows.length} recorder(s)`}>
+    <Card title="Storage volumes" source="milestone" kicker={`${rows.length} recorder(s)`}>
       {rows.length === 0 ? (
         <div className="msg">
           No storage rows cached yet. The collector walks the per-server
@@ -487,7 +692,7 @@ export function StorageTab() {
           green, check NetMon Status for a degraded storage walk.
         </div>
       ) : (
-        <table className="grid">
+        <table className="grid nvr-tbl">
           <thead><tr><th>Recorder</th><th>Configured</th><th>Used</th><th>Retention</th></tr></thead>
           <tbody>
             {rows.map((s, i) => {
@@ -531,6 +736,28 @@ function UnlinkedBanner({ overview }) {
       {p.discovered_servers || 0} recording server(s), but none are linked to the device registry —
       so nothing can be shown here. Import them in{" "}
       <a href="#/registry">Registry → Import from Milestone</a> (admin).
+    </div>
+  );
+}
+
+// The collector records which enrichments failed on the last cycle. Surfacing
+// it is the whole point of collecting it: a 0 GB storage roll-up and an
+// endpoint that answers HTTP 400 look identical on the glass otherwise
+// (CLAUDE.md §4.5).
+function DegradedBanner({ overview }) {
+  const degraded = overview?.payload?.degraded;
+  if (!Array.isArray(degraded) || degraded.length === 0) return null;
+  const NAMES = {
+    storage: "storage capacity and retention",
+    hardware: "camera hardware model and identity",
+    ess: "live camera status (Events/State)",
+    identity: "camera firmware, serial and MAC",
+  };
+  return (
+    <div className="msg error" style={{ borderLeft: `3px solid ${sevColor("warn")}`, paddingLeft: 10 }}>
+      Last collection cycle degraded: {degraded.map((d) => NAMES[d] || d).join(", ")} could
+      not be read. Figures below are the last good values, not current — see{" "}
+      <a href="#/netmon-status">NetMon Status</a>.
     </div>
   );
 }

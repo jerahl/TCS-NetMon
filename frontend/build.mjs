@@ -29,7 +29,15 @@ const options = {
   outfile: resolve(outdir, "app.js"),
   // Leaflet's CSS references its control PNGs; inline them as data URIs so
   // the bundle stays self-contained (no runtime asset fetches).
-  loader: { ".css": "css", ".png": "dataurl" },
+  //
+  // The two self-hosted font families (spec 20 S1) are emitted as real files
+  // rather than data URIs: at 644 KB they would bloat app.css into the
+  // render-blocking path, and as separate files the browser caches them across
+  // deploys and fetches only what a page uses. `assetNames` puts them in
+  // netmon/web/fonts/ keeping their upstream names, and esbuild rewrites the
+  // url()s in styles.css to match — so the paths are never hand-maintained.
+  loader: { ".css": "css", ".png": "dataurl", ".woff2": "file" },
+  assetNames: "fonts/[name]",
   logLevel: "info",
 };
 

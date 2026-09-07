@@ -21,6 +21,8 @@ def list_alerts(
     _user=Depends(require_role(Role.viewer)),
     include_closed: bool = False,
     device_id: int | None = None,
+    device_type: str | None = None,
+    limit: int | None = None,
 ) -> list[dict]:
     conds = []
     params: dict = {}
@@ -30,7 +32,25 @@ def list_alerts(
         # Device-scoped view (the Switches page Triggers tab).
         conds.append("a.device_id = :device_id")
         params["device_id"] = device_id
+    if device_type:
+        # Domain-scoped view: the Surveillance page's alarm feed asks for
+        # `camera,recording_server`, which is ZCD's "VMS alarms" pane without
+        # a second alert store behind it. A comma list rather than one type
+        # because a domain is rarely one device_type, and filtering in the
+        # browser would mean shipping every open alert in the estate (2,742 at
+        # last count) to render ten rows.
+        wanted = [t.strip() for t in device_type.split(",") if t.strip()]
+        if wanted:
+            keys = [f"dt{i}" for i in range(len(wanted))]
+            conds.append(f"d.device_type IN ({', '.join(':' + k for k in keys)})")
+            params.update(dict(zip(keys, wanted)))
     where = f"WHERE {' AND '.join(conds)}" if conds else ""
+    # `limit` is applied in SQL, not in the caller, so a feed asking for ten
+    # rows costs ten rows.
+    tail = ""
+    if limit is not None and limit > 0:
+        tail = " LIMIT :limit"
+        params["limit"] = int(limit)
     rows = db.fetch_all(
         engine,
         f"SELECT a.id, a.device_id, d.name AS device_name, "
@@ -40,7 +60,7 @@ def list_alerts(
         f"FROM alerts a "
         f"JOIN alert_rules r ON r.id = a.rule_id "
         f"LEFT JOIN devices d ON d.id = a.device_id {where} "
-        f"ORDER BY a.opened_at DESC",
+        f"ORDER BY a.opened_at DESC{tail}",
         params,
     )
     return [dict(r) for r in rows]

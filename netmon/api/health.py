@@ -89,11 +89,15 @@ def ui_meta(
     cfg: Config = Depends(get_config),
     _user=Depends(require_role(Role.viewer)),
 ) -> UiMeta:
+    # Absent [milestone] section → empty host, and the Surveillance header
+    # omits the slot rather than showing a placeholder that looks like a name.
+    milestone = cfg.sources.get("milestone")
     return UiMeta(
         version=__version__,
         zabbix_url=cfg.web.zabbix_url,
         ssheasy_url=cfg.web.ssheasy_url,
         packetfence_url=cfg.web.packetfence_url,
+        milestone_host=(milestone.settings.get("host", "") if milestone else ""),
         can_edit=cfg.security.allow_web_edit,
     )
 

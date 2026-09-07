@@ -320,6 +320,11 @@ class UiMeta(BaseModel):
     ssheasy_url: str = ""
     # PacketFence admin-UI base, for the endpoint deep-link. Empty → hidden.
     packetfence_url: str = ""
+    # The Milestone API Gateway host, shown in the Surveillance page header the
+    # way ZCD shows its management server (spec 20 S1). A hostname, not a
+    # credential; empty when [milestone] is unconfigured, and the header then
+    # omits the slot rather than inventing one.
+    milestone_host: str = ""
     # Whether web edits are enabled at all ([security] allow_web_edit). Lets the
     # UI show/hide edit affordances; the API still enforces it server-side.
     can_edit: bool = False

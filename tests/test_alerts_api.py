@@ -58,6 +58,63 @@ def test_alerts_device_filter(tmp_path):
         assert client.get("/api/alerts?device_id=999").json() == []
 
 
+def _seed_multi_domain(url):
+    """One open alert on each of a camera, a recorder and a switch."""
+    engine = db.make_engine(url)
+    create_core_tables(engine)
+    now = datetime.now(timezone.utc)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO devices (name, site, device_type, enabled) VALUES "
+            "('CAM-Hall','BHS','camera',1),"                 # id 1
+            "('NVR-1','Central','recording_server',1),"      # id 2
+            "('SW1','BHS','switch',1)"))                     # id 3
+        conn.execute(text(
+            "INSERT INTO alert_rules (name, dimension, `condition`, severity, min_duration_s, enabled) "
+            "VALUES ('device_down','ping','{\"op\":\"eq\",\"value\":\"down\"}','crit',0,1)"))
+        for dev in (1, 2, 3):
+            conn.execute(text("INSERT INTO alerts (device_id, rule_id, opened_at, last_seen_at) "
+                              "VALUES (:d,1,:t,:t)"), {"d": dev, "t": now})
+    engine.dispose()
+
+
+def test_alerts_device_type_filter(tmp_path):
+    """device_type scopes the list to a domain — the Surveillance alarm feed.
+
+    A comma list, because "the VMS domain" is two device types and filtering in
+    the browser would mean shipping every open alert in the estate to render
+    ten rows.
+    """
+    url = f"sqlite:///{tmp_path / 'dt.db'}"
+    _seed_multi_domain(url)
+    with TestClient(_app(write_config(tmp_path, db_url=url))) as client:
+        assert len(client.get("/api/alerts").json()) == 3
+
+        vms = client.get("/api/alerts?device_type=camera,recording_server").json()
+        assert len(vms) == 2
+        assert {a["device_type"] for a in vms} == {"camera", "recording_server"}
+
+        # A single type still works, and an unknown one returns nothing rather
+        # than falling back to every alert.
+        assert len(client.get("/api/alerts?device_type=camera").json()) == 1
+        assert client.get("/api/alerts?device_type=bogus").json() == []
+        # Whitespace and empty members are tolerated; an all-empty value is
+        # treated as no filter at all.
+        assert len(client.get("/api/alerts?device_type=camera, switch").json()) == 2
+        assert len(client.get("/api/alerts?device_type=,").json()) == 3
+
+
+def test_alerts_limit_applies_in_sql(tmp_path):
+    url = f"sqlite:///{tmp_path / 'lim.db'}"
+    _seed_multi_domain(url)
+    with TestClient(_app(write_config(tmp_path, db_url=url))) as client:
+        assert len(client.get("/api/alerts?limit=2").json()) == 2
+        # Nonsense limits are ignored rather than returning an empty feed.
+        assert len(client.get("/api/alerts?limit=0").json()) == 3
+        # limit composes with the domain filter.
+        assert len(client.get("/api/alerts?device_type=camera,switch&limit=1").json()) == 1
+
+
 def test_alert_assign(tmp_path):
     url = f"sqlite:///{tmp_path / 'as.db'}"
     _seed(url)

@@ -117,7 +117,7 @@ function App() {
   let page, active;
   if (route.name === "switches") { page = <SwitchesPage id={route.id} query={route.query} />; active = "switches"; }
   else if (route.name === "nac") { page = <NacPage query={route.query} />; active = "nac"; }
-  else if (route.name === "surveillance") { page = <SurveillancePage />; active = "surveillance"; }
+  else if (route.name === "surveillance") { page = <SurveillancePage query={route.query} />; active = "surveillance"; }
   else if (route.name === "events") { page = <EventsPage />; active = "events"; }
   else if (route.name === "problems") { page = <ProblemsPage />; active = "problems"; }
   else if (route.name === "voip") { page = <VoipPage />; active = "voip"; }
