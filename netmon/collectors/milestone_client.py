@@ -226,6 +226,50 @@ class MilestoneClient:
                 return settings
         return {}
 
+    async def camera_groups(self) -> list[dict]:
+        """The Smart Client organisational tree — one record per group, child
+        cameras inline (migration 026).
+
+        ``includeChildren=cameras,cameraGroups`` is what makes this one request
+        instead of one per group. Confirmed live 2026-09-07: 26 groups named by
+        school code, flat, with each child camera carrying ``id``, ``channel``
+        and ``relations`` — so the caller can bucket cameras without a second
+        fetch.
+
+        Two shapes are tolerated because the API has used both: children inline
+        at the top level (``node["cameras"]``, what 2025 R2 returns) and nested
+        under ``node["children"]`` (what the reference collector was written
+        against). :func:`group_children` reads either.
+
+        One oversize page first, proper pagination only if the gateway rejects
+        it — the same strategy the reference implementation uses, and on this
+        estate the fast path is the only one that ever runs.
+        """
+        q = "includeChildren=cameras,cameraGroups"
+        async with await self._mkclient() as client:
+            try:
+                data = await self._get(
+                    client, f"/api/rest/v1/cameraGroups?{q}&page=0&size=10000")
+                return _items(data)
+            except MilestoneError as exc:
+                # Oversize page refused → page properly. Anything else is a
+                # real failure and is left to the caller to record.
+                if not any(code in str(exc) for code in ("400", "404", "413", "414")):
+                    raise
+            out: list[dict] = []
+            page = 0
+            while True:
+                data = await self._get(
+                    client, f"/api/rest/v1/cameraGroups?{q}&page={page}&size=500")
+                batch = _items(data)
+                out.extend(batch)
+                if len(batch) < 500:
+                    return out
+                page += 1
+                if page > 40:  # 20k groups — a runaway, not a real estate
+                    log.warning("cameraGroups pagination exceeded 40 pages; stopping")
+                    return out
+
     async def hardware(self) -> list[dict]:
         """Hardware (a camera's physical host) → model and network address.
 

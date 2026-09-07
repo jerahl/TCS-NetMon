@@ -53,6 +53,23 @@ def _seed(url):
         c.execute(text(
             "INSERT INTO extensions (ext, name, site, registered, dnd, updated_at) VALUES "
             "('1001','Ada Byte','BHS',1,0,:t),('1002','Front Desk','BHS',0,1,:t)"), {"t": now})
+        # Milestone camera groups (migration 026): CAM-Hall is in both groups,
+        # CAM-Gym only in BHS, and OLD reports cameras Milestone has that the
+        # registry never imported.
+        c.execute(text(
+            "INSERT INTO camera_groups (id, name, description, parent_id, path, "
+            "camera_count, updated_at) VALUES "
+            "('g-bhs','BHS',NULL,NULL,'BHS',2,:t),"
+            "('g-sky','SKY',NULL,NULL,'SKY',1,:t),"
+            "('g-old','OLD',NULL,NULL,'OLD',12,:t)"), {"t": now})
+        c.execute(text(
+            "INSERT INTO camera_group_members (group_id, device_id, updated_at) VALUES "
+            "('g-bhs',2,:t),('g-bhs',3,:t),('g-sky',2,:t)"), {"t": now})
+        # sites.name is the school code, which is exactly the group name — the
+        # join that gives the tree its human labels with no new mapping.
+        c.execute(text(
+            "INSERT INTO sites (name, group_key, display_name, tier, lat, lon, enabled) "
+            "VALUES ('BHS','Bryant High','Paul W. Bryant High','high',33.1,-87.4,1)"))
     write_snapshot(engine, "milestone.overview", {"cameras": 2, "recording_servers": 1}, "milestone")
     write_snapshot(engine, "threecx.system", {"Version": "20.0.5", "CallsActive": 4}, "threecx")
     engine.dispose()
@@ -372,3 +389,64 @@ def test_camera_port_on_an_unconfirmed_link_is_not_offered_for_poe_cycle(tmp_pat
         assert sp is not None and sp["port"] == "1:42"      # still shown
         assert sp["poe_cycle_safe"] is False                # but not actionable
         assert "uplink" in sp["why"]
+
+
+def test_camera_groups_tree(tmp_path):
+    """The Milestone group tree with per-group health, labelled from `sites`."""
+    url = f"sqlite:///{tmp_path / 'cg.db'}"
+    _seed(url)
+    with _client(tmp_path, url) as client:
+        rows = client.get("/api/surveillance/camera-groups").json()
+        by = {r["name"]: r for r in rows}
+        assert set(by) == {"BHS", "SKY", "OLD"}
+
+        # BHS holds both cameras; the school name and network site come off the
+        # sites row whose `name` is the group code — no hard-coded mapping.
+        assert by["BHS"]["total"] == 2
+        assert by["BHS"]["site_display_name"] == "Paul W. Bryant High"
+        assert by["BHS"]["site"] == "Bryant High"
+        # CAM-Gym is not recording (device_state seeded 'down'), CAM-Hall is.
+        assert by["BHS"]["recording"] == 1
+
+        # A group with no sites row still renders, just unlabelled — the tree
+        # must not depend on the site table being complete.
+        assert by["SKY"]["site_display_name"] is None
+        assert by["SKY"]["total"] == 1
+
+        # Milestone reports 12 cameras for OLD and the registry has none. The
+        # gap is visible rather than reported as an empty group.
+        assert by["OLD"]["total"] == 0
+        assert by["OLD"]["milestone_camera_count"] == 12
+
+
+def test_cameras_group_filter_and_membership(tmp_path):
+    """`?group=` narrows to a group; every camera carries its group ids."""
+    url = f"sqlite:///{tmp_path / 'cgf.db'}"
+    _seed(url)
+    with _client(tmp_path, url) as client:
+        allcams = client.get("/api/surveillance/cameras").json()
+        assert len(allcams) == 2
+        by = {c["name"]: c for c in allcams}
+        # CAM-Hall is filed under two groups — 25 cameras on the live estate
+        # are, and both memberships have to survive to the browser.
+        assert sorted(by["CAM-Hall"]["group_ids"]) == ["g-bhs", "g-sky"]
+        assert by["CAM-Gym"]["group_ids"] == ["g-bhs"]
+
+        assert len(client.get("/api/surveillance/cameras?group=g-bhs").json()) == 2
+        # A camera in two groups is returned once, not twice — the filter is an
+        # EXISTS, not a join.
+        sky = client.get("/api/surveillance/cameras?group=g-sky").json()
+        assert [c["name"] for c in sky] == ["CAM-Hall"]
+        assert client.get("/api/surveillance/cameras?group=nope").json() == []
+
+        # group composes with the other filters rather than replacing them.
+        assert client.get("/api/surveillance/cameras?group=g-bhs&q=Gym").json()[0]["name"] == "CAM-Gym"
+
+
+def test_camera_detail_lists_its_groups(tmp_path):
+    url = f"sqlite:///{tmp_path / 'cgd.db'}"
+    _seed(url)
+    with _client(tmp_path, url) as client:
+        cam = client.get("/api/surveillance/cameras/2").json()
+        assert [g["name"] for g in cam["groups"]] == ["BHS", "SKY"]
+        assert cam["groups"][0]["site_display_name"] == "Paul W. Bryant High"

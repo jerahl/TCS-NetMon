@@ -449,6 +449,29 @@ CREATE TABLE cameras (
 )
 """
 
+# Milestone camera groups + membership (migration 026).
+CAMERA_GROUPS_DDL_SQLITE = """
+CREATE TABLE camera_groups (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    parent_id TEXT,
+    path TEXT,
+    camera_count INTEGER NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP
+)
+"""
+
+CAMERA_GROUP_MEMBERS_DDL_SQLITE = """
+CREATE TABLE camera_group_members (
+    group_id TEXT NOT NULL,
+    device_id INTEGER NOT NULL,
+    updated_at TIMESTAMP,
+    PRIMARY KEY (group_id, device_id)
+)
+"""
+
+
 TRUNKS_DDL_SQLITE = """
 CREATE TABLE trunks (
     device_id INTEGER PRIMARY KEY,
@@ -535,6 +558,8 @@ def create_core_tables(engine) -> None:
             PF_NODES_DDL_SQLITE,
             RECORDING_SERVERS_DDL_SQLITE,
             CAMERAS_DDL_SQLITE,
+            CAMERA_GROUPS_DDL_SQLITE,
+            CAMERA_GROUP_MEMBERS_DDL_SQLITE,
             TRUNKS_DDL_SQLITE,
             EXTENSIONS_DDL_SQLITE,
             APP_SETTINGS_DDL_SQLITE,

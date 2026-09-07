@@ -235,6 +235,84 @@ def build_cameras(cameras: list[dict], reg: dict[str, dict],
     return rows
 
 
+def group_children(node: dict, key: str) -> list[dict]:
+    """Child records of a camera-group node, whichever shape the API used.
+
+    2025 R2 returns children inline at the top level (``node["cameras"]``); the
+    documented/older shape nests them under ``node["children"]``. Reading only
+    one of the two is how the reference collector ended up with every camera
+    under a single label on some installs.
+    """
+    v = node.get(key)
+    if isinstance(v, list):
+        return [x for x in v if isinstance(x, dict)]
+    kids = node.get("children")
+    if isinstance(kids, dict):
+        v = kids.get(key)
+        if isinstance(v, list):
+            return [x for x in v if isinstance(x, dict)]
+    # A bare list of children means subgroups in the one shape that omits the key.
+    if isinstance(kids, list) and key == "cameraGroups":
+        return [x for x in kids if isinstance(x, dict)]
+    return []
+
+
+def flatten_camera_groups(roots: list[dict], reg: dict[str, dict], now: datetime,
+                          ) -> tuple[list[dict], list[dict]]:
+    """Depth-first walk → (`camera_groups` rows, `camera_group_members` rows).
+
+    Ported from `reference/zabbix/externalscripts-deployed/milestone_groups_state.py`
+    so the tree NetMon renders and the tree Smart Client shows are built by the
+    same rules.
+
+    `camera_count` is what Milestone reports for the group — every child camera,
+    including ones NetMon has no registry device for. The membership rows only
+    cover cameras that *are* in the registry, so a group whose count exceeds its
+    membership rows is a real signal (cameras present in the VMS but never
+    imported), and the API surfaces the gap rather than papering over it.
+    """
+    groups: list[dict] = []
+    members: list[dict] = []
+    seen_members: set[tuple[str, int]] = set()
+
+    def visit(node: dict, parent_id: str | None, parent_path: str) -> None:
+        gid = str(node.get("id") or "")
+        if not gid:
+            return
+        name = str(node.get("displayName") or node.get("name")
+                   or node.get("description") or gid)
+        path = f"{parent_path}/{name}" if parent_path else name
+        cams = group_children(node, "cameras")
+        groups.append({
+            "id": gid,
+            "name": name[:128],
+            "description": (str(node.get("description")) or None) if node.get("description") else None,
+            "parent_id": parent_id,
+            "path": path[:512],
+            "camera_count": len(cams),
+            "updated_at": now,
+        })
+        for cam in cams:
+            r = reg.get(str(cam.get("id")))
+            if r is None:
+                continue
+            # 25 cameras on this estate belong to two groups; the PK tolerates
+            # that. What it must not see twice is the same pair, which a
+            # malformed payload could produce.
+            key = (gid, int(r["id"]))
+            if key in seen_members:
+                continue
+            seen_members.add(key)
+            members.append({"group_id": gid, "device_id": int(r["id"]), "updated_at": now})
+        for sub in group_children(node, "cameraGroups"):
+            visit(sub, gid, path)
+
+    for g in roots or []:
+        if isinstance(g, dict):
+            visit(g, None, "")
+    return groups, members
+
+
 class MilestoneCollector(Collector):
     name = "milestone"
 
@@ -576,6 +654,32 @@ class MilestoneCollector(Collector):
         written += db.replace_rows(self.engine, "cameras", ["device_id"], cam_rows)
         written += self._sync_camera_addresses(cam_rows)
 
+        # The Smart Client organisational tree (migration 026) — how the
+        # surveillance team navigates, as distinct from `devices.site`, which is
+        # how the network is organised.
+        #
+        # Fetched and written AFTER the inventory above, deliberately: this is
+        # one more request against the same gateway, and a tree that fails must
+        # cost only the tree. Doing it earlier meant an error here skipped the
+        # camera and recording-server writes entirely — a navigation aid taking
+        # the estate's inventory down with it.
+        group_rows: list[dict] = []
+        member_rows: list[dict] = []
+        try:
+            group_rows, member_rows = flatten_camera_groups(
+                await self.client.camera_groups(), registry, now)
+        except MilestoneError as exc:
+            degraded.append("groups")
+            log.warning("milestone cameraGroups walk failed — the camera tree "
+                        "will be stale, not empty: %s", exc)
+        # Only on a successful walk: replace_rows prunes what it did not see, so
+        # writing an empty list after a failed fetch would delete the tree —
+        # exactly the "overwrite prior state on error" shape §4.5 forbids.
+        if group_rows:
+            written += db.replace_rows(self.engine, "camera_groups", ["id"], group_rows)
+            written += db.replace_rows(self.engine, "camera_group_members",
+                                       ["group_id", "device_id"], member_rows)
+
         # Environment overview singleton. `discovered_*` is what Milestone
         # returned; `recording_servers`/`cameras` are what actually linked to the
         # registry — a gap between them means devices need importing (surfaced on
@@ -590,6 +694,12 @@ class MilestoneCollector(Collector):
             "linked_cameras": linked_cameras,
             "storage_used_gb": round(sum(r["storage_used_gb"] or 0 for r in rs_rows), 1),
             "storage_total_gb": round(sum(r["storage_total_gb"] or 0 for r in rs_rows), 1),
+            # The camera tree. `group_memberships` counts registry-linked
+            # cameras and `group_cameras` what Milestone reports, so a gap
+            # between them is visible rather than inferred.
+            "camera_groups": len(group_rows),
+            "group_memberships": len(member_rows),
+            "group_cameras": sum(r["camera_count"] for r in group_rows),
             # Which enrichments failed this cycle. Without this a 0 GB storage
             # roll-up is indistinguishable from "the endpoint 400s", and the UI
             # would render an outright absence of data as "nothing used".

@@ -239,7 +239,65 @@ All GET, all Config API, all into `milestone.overview` / `recording_servers`:
 - `/api/surveillance/summary` gains `management_server`, `version`,
   `license_used/total`, `alarms_open`, `alarms_by_severity`.
 
-### S3 — Cameras tab: navigator + thumbnail wall (1–2 sessions)
+### S3 — Cameras as its own page, navigated by the Milestone group tree
+
+**Revised 2026-09-07 on the owner's direction** ("the camera tab should be moved
+to its own page (setup like the AP page) with a tree navigation sorted by
+milestone groups (Schools)"). The plan had this as a tab with a navigator; it is
+a **page** at `#/cameras`, and the tree axis is XProtect's own `cameraGroups`
+rather than `devices.site`.
+
+**Done 2026-09-07.** What the live gateway turned out to hold, checked before the
+schema was designed rather than after:
+
+- `GET /api/rest/v1/cameraGroups?includeChildren=cameras,cameraGroups` →
+  **26 groups**, named by school code (BHS, CHS, NHS, MLK, ARC, CO, BUS…) — the
+  same 26 ZCD's "Sites" tab badged.
+- **Completely flat** on this deployment: zero subgroups. `parent_id`/`path` are
+  still stored and the component still indents, because the API models nesting
+  and a reorganisation must not need a migration.
+- **2,687 memberships over 2,662 cameras** — 25 cameras are in two groups. That
+  is why membership is its own table and why a camera renders under both: a
+  single `group_id` column would silently drop one, and appearing twice is what
+  Smart Client does.
+- **Three groups are empty** (SHEC, OLD TCT, NES) and are rendered as such.
+- The group payload carries each camera's **`channel`** — which is exactly what
+  S4's snapshot proxy needs for shared-encoder channels (spec 11 D7). Noted for
+  S2 rather than taken here.
+
+**The labels needed no new mapping.** `sites.name` already *is* the school code,
+so `camera_groups.name = sites.name` yields `display_name` ("Paul W. Bryant
+High") and `group_key` (the value in `devices.site`). 18 of 26 groups label
+themselves this way; the other 8 (ALB, RQS, OKD, OKH, NES, SHEC, OLD TCT, CNP
+Cameras) have no `sites` row under that code and render the code alone, which
+operators read fine. Adding those rows is a data task, not a code one.
+
+**Delivered:** migration 026 (`camera_groups`, `camera_group_members`);
+`MilestoneClient.camera_groups()` (fast page, then pagination);
+`flatten_camera_groups()` ported from the reference collector, reading children
+in either shape the API uses; `GET /api/surveillance/camera-groups` (tree +
+per-group health, labelled from `sites`), `?group=` on the camera list, and
+`groups` on camera detail; `frontend/src/pages/cameras.jsx` — `#/cameras` and
+`#/cameras/:id`, ZCD/AP two-column shell, collapse memory, groups with problems
+floated to the top, and the six reachability tiers preserved as a select because
+seven chips wrap unreadably in a 380px rail. The Surveillance page's Cameras tab
+is gone; its school tiles navigate here.
+
+**Two things the tree surfaced immediately**, both by design rather than by
+accident: 11 cameras exist in Milestone groups that the registry has never
+imported (`WFS` 92 vs 86, `BHS` 265 vs 264, and four more off by one), shown per
+group as "N camera(s) in Milestone, none imported"; and the eight unlabelled
+groups above. The collector also had to be reordered — the group walk now runs
+*after* the camera and recording-server writes, because placed before them a
+tree failure skipped the whole inventory refresh.
+
+### S3b — thumbnail wall (deferred with S4)
+
+The `.cam-grid` thumbnail view belongs with the snapshot proxy: without D7 there
+is nothing to put in the tiles. It lands as a Table/Thumbnails toggle in the
+Cameras page's right pane once S4 ships.
+
+### S3-original — Cameras tab: navigator + thumbnail wall (superseded)
 
 - `380px 1fr` grid. **Camera Navigator** reuses the Wireless page's `SiteGroup`
   idiom (`host-nav-*`, collapse memory in `localStorage`, collapsed-by-default
@@ -554,5 +612,6 @@ NetMon largely has. Suggested order (spec 15 §3.2 estimates still apply):
 - [x] S0 — `reference/` synced from the 2026-09-07 bundle (LF-normalised; `etc-zabbix/`, `httpd/`, `cron/`, `server-scripts/`, `dist/`, `vendor/`, `graphify-out/` excluded). Index in `reference/readme.md`.
 - [x] S1 — shell primitives + fonts. Inter shipped as the single variable file (352 KB, weights 100–900) rather than four statics: smaller, and the design's `font-weight: 500` now renders as a real 500. JetBrains Mono has no variable woff2 upstream, so 400/500/600 are static.
 - [x] The three S8 questions are answered (see §3 S8). One follow-on is open and is the owner's: deferring the setting catalogue means firmware — the irreversible half — would be the first thing S8 ships, so pick the proving ground (lab camera vs. a two-setting minimal catalogue).
+- [x] **S3 done 2026-09-07** (out of order, owner-directed): `#/cameras` with the Milestone group tree. Migration 026 applied live, one collector cycle run — 26 groups, 2,676 memberships, 0 cameras ungrouped, no degradation. 23 render-check cases and 514 tests green.
 - [ ] **S2 next.** Highest-value items, in order: RS service state from the ESS (`_ess_camera_status` reads only `cameras/` today; spec 19 §11 has 9 recording-server states covering all 22 servers, and the Overview's recorder tiles currently colour off the Config API's `running` flag); per-RS camera counts so `chans_total` stops being null; `sites`/version/licence investigation for the header chip; `https_enabled` / `https_port` / `channel` into `cameras` — S4's snapshot proxy needs all three and collecting them now avoids a second migration.
 - [ ] A restart of `netmon.service` is required for S1's two API additions (`device_type`/`limit` on `/api/alerts`, `milestone_host` on `/api/meta`). Until then the live page's alarm cell counts estate-wide alerts, because FastAPI ignores query params it does not know about — the static bundle updates without a restart but the API does not.

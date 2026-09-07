@@ -8,6 +8,7 @@ import { createRequire } from "module";
 const entry = `
 export * as surveillance from "./src/pages/surveillance.jsx";
 export * as cameraDetail from "./src/pages/camera_detail.jsx";
+export * as cameras from "./src/pages/cameras.jsx";
 export * as primitives from "./src/primitives.jsx";
 export { default as React } from "react";
 export { renderToString } from "react-dom/server";
@@ -20,16 +21,13 @@ const res = await build({
 const require = createRequire(import.meta.url);
 const mod = { exports: {} };
 new Function("module", "exports", "require", res.outputFiles[0].text)(mod, mod.exports, require);
-const { surveillance: S, cameraDetail: D, primitives: P, React, renderToString } = mod.exports;
+const { surveillance: S, cameraDetail: D, cameras: C, primitives: P, React, renderToString } = mod.exports;
 
 const CAM = (over) => ({ device_id: 1, name: "chs-cam-1", site: "Central High",
   model: "Bosch FLEXIDOME", recording_state: "up", recording_server: "CHS-BCD-DVR",
   ip: "10.32.18.4", ...over });
 
 const cases = [
-  ["CamerasTab · every status tier", S.CamerasTab, {
-    counts: { up: 2422, down: 228, down_confirmed: 82, down_source_only: 15,
-              down_network_only: 131, blind: 139, unknown: 1 } }],
   ["OverviewTab · used space unknown", S.OverviewTab, {
     summary: { cameras_total: 2651, cameras_recording: 2651, servers_total: 22,
                servers_up: 22, storage_total_gb: 1837600, storage_used_gb: null,
@@ -103,6 +101,88 @@ const cases = [
            state: { source_status: { value: "blind", source: "milestone" } },
            switch_port: null, pf: null, siblings: [] },
     meta: {} }],
+
+
+  // ─── Cameras page: the Milestone group tree (spec 20 S3) ────────────────
+  ["CamerasView · tree with a school in trouble", C.CamerasView, {
+    groups: [
+      { id: "g-bhs", name: "BHS", path: "BHS", site_display_name: "Paul W. Bryant High",
+        site: "Bryant High", total: 264, up: 240, down_confirmed: 7, down_source_only: 4,
+        down_network_only: 13, blind: 15, recording: 258, milestone_camera_count: 265,
+        updated_at: "2026-09-07T12:00:00Z" },
+      { id: "g-sky", name: "SKY", path: "SKY", site_display_name: "Skyland Elementary",
+        site: "Skyland", total: 59, up: 59, down_confirmed: 0, down_source_only: 0,
+        down_network_only: 0, blind: 0, recording: 59, milestone_camera_count: 59,
+        updated_at: "2026-09-07T12:00:00Z" },
+      // Empty in Milestone — three groups on the live estate are. Must render
+      // as "no cameras", never be hidden.
+      { id: "g-nes", name: "NES", path: "NES", site_display_name: "Northington Elementary",
+        total: 0, milestone_camera_count: 0, updated_at: "2026-09-07T12:00:00Z" },
+      // In Milestone but nothing imported: the gap has to be visible.
+      { id: "g-old", name: "OLD TCT", path: "OLD TCT", total: 0,
+        milestone_camera_count: 12, updated_at: "2026-09-07T12:00:00Z" },
+    ],
+    cams: [
+      { device_id: 1, name: "bhs-cam-01", site: "Bryant High", model: "Bosch FLEXIDOME",
+        ip: "10.32.18.4", reachability: "up", recording_state: "up", group_ids: ["g-bhs"] },
+      { device_id: 2, name: "bhs-cam-02", site: "Bryant High", model: "Bosch FLEXIDOME",
+        ip: "10.32.18.5", reachability: "down_confirmed", recording_state: "down",
+        group_ids: ["g-bhs"] },
+      { device_id: 3, name: "bhs-cam-03", site: "Bryant High", model: "AXIS M3007",
+        ip: "10.32.18.6", source_status: "blind", group_ids: ["g-bhs"] },
+      // Two groups — 25 cameras on the live estate are, and the camera must
+      // appear under both rather than silently under one.
+      { device_id: 4, name: "shared-cam", site: "Bryant High", model: "Bosch",
+        ip: "10.32.18.7", reachability: "down_network_only", group_ids: ["g-bhs", "g-sky"] },
+      { device_id: 5, name: "sky-cam-01", site: "Skyland", model: "Bosch",
+        ip: "10.40.18.4", reachability: "up", recording_state: "up", group_ids: ["g-sky"] },
+      // In no group at all — must not vanish from the navigator.
+      { device_id: 6, name: "orphan-cam", site: null, model: null, ip: null,
+        reachability: "up", group_ids: [] },
+    ],
+    activeId: "2", collapsed: new Set(["g-sky"]), onToggle: () => {},
+    onAllCollapsed: () => {}, status: "", onStatus: () => {}, q: "", onQ: () => {} },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (!text.includes("Paul W. Bryant High")) throw new Error("school name not shown beside the group code");
+     if (!text.includes("Not in any group")) throw new Error("ungrouped cameras were dropped");
+     if (!text.includes("12 camera(s) in Milestone, none imported")) {
+       throw new Error("un-imported cameras not disclosed");
+     }
+     if (!text.includes("no cameras in this group")) throw new Error("empty group not explained");
+     // The shared camera appears under both of its groups.
+     if (text.split("shared-cam").length - 1 < 2) throw new Error("multi-group camera shown once");
+   }],
+
+  // Every group collapsed: the counts must still be visible, or collapsing the
+  // tree would hide an outage.
+  ["CamerasView · all collapsed still shows the down count", C.CamerasView, {
+    groups: [{ id: "g", name: "BHS", path: "BHS", total: 2, down_confirmed: 1,
+               milestone_camera_count: 2 }],
+    cams: [{ device_id: 1, name: "c1", reachability: "down_confirmed", group_ids: ["g"] },
+           { device_id: 2, name: "c2", reachability: "up", group_ids: ["g"] }],
+    activeId: null, collapsed: new Set(["g"]), onToggle: () => {},
+    onAllCollapsed: () => {}, status: "", onStatus: () => {}, q: "", onQ: () => {} },
+   (html) => {
+     if (!html.includes("site-prob")) throw new Error("collapsed group hid its problem count");
+   }],
+
+  ["CamerasView · no groups cached", C.CamerasView, {
+    groups: [], cams: [], activeId: null, collapsed: new Set(), onToggle: () => {},
+    onAllCollapsed: () => {}, status: "", onStatus: () => {}, q: "", onQ: () => {} },
+   (html) => {
+     if (!html.includes("No camera groups cached")) throw new Error("empty tree said nothing");
+   }],
+
+  ["GroupNode · counts arriving as strings", C.GroupNode, {
+    group: { id: "g", name: "MLK", total: "114", down_confirmed: "11",
+             down_source_only: "0", down_network_only: "20", blind: "20",
+             milestone_camera_count: "114" },
+    rows: [{ device_id: 1, name: "c1", reachability: "down_confirmed" }],
+    activeId: null, collapsed: false, onToggle: () => {} },
+   (html) => {
+     if (html.includes(">110<")) throw new Error("string counts concatenated instead of adding");
+   }],
 
   // ─── Shell primitives (spec 20 S1) ──────────────────────────────────────
   // Every slot optional: a page that has no address, no chip and no range must

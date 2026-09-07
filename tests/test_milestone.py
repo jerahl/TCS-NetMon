@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 
 from sqlalchemy import text
 
@@ -21,6 +22,9 @@ class FakeMs:
         self.settings_fail = None
         self.fail = None
         self.storage_fail = None
+        # Camera groups (migration 026) — the Smart Client tree.
+        self.groups_data = []
+        self.groups_fail = None
 
     async def recording_servers(self):
         if self.fail:
@@ -39,6 +43,11 @@ class FakeMs:
 
     async def hardware(self):
         return self.hardware_data
+
+    async def camera_groups(self):
+        if self.groups_fail:
+            raise self.groups_fail
+        return self.groups_data
 
     async def hardware_driver_settings(self, hardware_id):
         self.settings_calls.append(hardware_id)
@@ -724,3 +733,113 @@ def test_bulk_endpoints_get_a_longer_timeout_than_the_default():
     assert BULK_TIMEOUT > TIMEOUT
     assert BULK_TIMEOUT < 120.0
     assert HARDWARE_TIMEOUT > TIMEOUT
+
+
+def test_flatten_camera_groups_flat_and_nested():
+    """The group walk, against both shapes the API uses.
+
+    2025 R2 returns children inline (`node["cameras"]`); the documented shape
+    nests them under `node["children"]`. Reading only one is how the reference
+    collector ended up with every camera under a single label on some installs.
+    """
+    from netmon.collectors.milestone import flatten_camera_groups
+
+    now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)
+    reg = {"cam-1": {"id": 11}, "cam-2": {"id": 12}, "cam-3": {"id": 13}}
+    roots = [
+        # Inline children, the live shape.
+        {"id": "g-bhs", "displayName": "BHS",
+         "cameras": [{"id": "cam-1"}, {"id": "cam-2"}, {"id": "not-imported"}]},
+        # Nested children plus a subgroup, the documented shape.
+        {"id": "g-co", "displayName": "CO",
+         "children": {"cameras": [{"id": "cam-3"}],
+                      "cameraGroups": [{"id": "g-co-a", "displayName": "Annex",
+                                        "cameras": [{"id": "cam-1"}]}]}},
+        # Empty group — three exist on the live estate and must survive.
+        {"id": "g-nes", "displayName": "NES", "cameras": []},
+    ]
+    groups, members = flatten_camera_groups(roots, reg, now)
+
+    by = {g["id"]: g for g in groups}
+    assert set(by) == {"g-bhs", "g-co", "g-co-a", "g-nes"}
+    # camera_count is what Milestone reports, including the camera the registry
+    # has never imported — the gap is a real finding, not something to hide.
+    assert by["g-bhs"]["camera_count"] == 3
+    assert by["g-nes"]["camera_count"] == 0
+    # Nesting: parent and slash-separated lineage.
+    assert by["g-co-a"]["parent_id"] == "g-co"
+    assert by["g-co-a"]["path"] == "CO/Annex"
+    assert by["g-bhs"]["path"] == "BHS"
+
+    # Membership only covers registry-linked cameras, and a camera in two
+    # groups keeps both memberships.
+    pairs = {(m["group_id"], m["device_id"]) for m in members}
+    assert pairs == {("g-bhs", 11), ("g-bhs", 12), ("g-co", 13), ("g-co-a", 11)}
+    assert len(members) == len(pairs)  # no duplicate rows
+
+
+def test_flatten_camera_groups_ignores_junk():
+    """Malformed payloads must not produce rows the DB will reject."""
+    from netmon.collectors.milestone import flatten_camera_groups
+
+    now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)
+    roots = [
+        None,                                   # not a dict
+        {"displayName": "no id"},               # unusable without an id
+        {"id": "g", "displayName": "G",
+         "cameras": [None, "string", {"no": "id"}, {"id": "cam-1"}, {"id": "cam-1"}]},
+    ]
+    groups, members = flatten_camera_groups(roots, {"cam-1": {"id": 5}}, now)
+    assert [g["id"] for g in groups] == ["g"]
+    # The duplicate camera appears once: the PK is (group_id, device_id).
+    assert members == [{"group_id": "g", "device_id": 5, "updated_at": now}]
+
+
+def test_group_walk_failure_costs_only_the_tree(tmp_path):
+    """A failed cameraGroups walk must not take the inventory with it.
+
+    The walk is one more request against the same gateway. Placed before the
+    camera writes it would, on failure, skip them entirely — a navigation aid
+    taking the estate's inventory down with it. It must also never write an
+    empty tree, because replace_rows prunes what it does not see and that would
+    delete the last good one (§4.5).
+    """
+    e = _engine(tmp_path)
+    ms = FakeMs()
+    ms.servers = [{"id": "RS1", "running": True}]
+    ms.cameras_data = [{"id": "CAM1", "recordingEnabled": True}]
+    ms.groups_data = [{"id": "g", "displayName": "BHS", "cameras": [{"id": "CAM1"}]}]
+    c = MilestoneCollector(e, ms)
+
+    asyncio.run(c.run_once())
+    assert db.fetch_one(e, "SELECT COUNT(*) n FROM camera_groups")["n"] == 1
+    assert db.fetch_one(e, "SELECT COUNT(*) n FROM cameras")["n"] == 1
+
+    # Now the walk fails. Cameras still refresh; the tree survives as-is.
+    ms.groups_fail = MilestoneError("cameraGroups HTTP 500")
+    asyncio.run(c.run_once())
+    assert db.fetch_one(e, "SELECT COUNT(*) n FROM camera_groups")["n"] == 1
+    assert db.fetch_one(e, "SELECT COUNT(*) n FROM camera_group_members")["n"] == 1
+    assert db.fetch_one(e, "SELECT COUNT(*) n FROM cameras")["n"] == 1
+    # And the degradation is reported rather than silent.
+    ov = read_snapshot(e, "milestone.overview")
+    assert "groups" in (ov["payload"]["degraded"] or [])
+
+
+def test_group_membership_prunes_on_refresh(tmp_path):
+    """Replace-on-refresh: a camera moved out of a group loses the membership."""
+    e = _engine(tmp_path)
+    ms = FakeMs()
+    ms.cameras_data = [{"id": "CAM1", "recordingEnabled": True}]
+    ms.groups_data = [{"id": "g1", "displayName": "BHS", "cameras": [{"id": "CAM1"}]},
+                      {"id": "g2", "displayName": "SKY", "cameras": [{"id": "CAM1"}]}]
+    c = MilestoneCollector(e, ms)
+    asyncio.run(c.run_once())
+    assert db.fetch_one(e, "SELECT COUNT(*) n FROM camera_group_members")["n"] == 2
+
+    # Re-filed under one group only.
+    ms.groups_data = [{"id": "g1", "displayName": "BHS", "cameras": [{"id": "CAM1"}]},
+                      {"id": "g2", "displayName": "SKY", "cameras": []}]
+    asyncio.run(c.run_once())
+    rows = db.fetch_all(e, "SELECT group_id FROM camera_group_members")
+    assert [r["group_id"] for r in rows] == ["g1"]

@@ -141,6 +141,53 @@ def camera_sites(
         GROUP BY d.site ORDER BY d.site""")]
 
 
+@router.get("/camera-groups")
+def camera_groups(
+    engine: Engine = Depends(get_engine),
+    _user=Depends(require_role(Role.viewer)),
+) -> list[dict]:
+    """The Milestone camera tree with per-group health (migration 026).
+
+    This is the navigation axis the surveillance team actually uses — XProtect's
+    own groups, named by school code — as distinct from `devices.site`, which is
+    how the network is organised. The two agree closely here but are not the
+    same thing, and the tree must show what Milestone says.
+
+    Labels come from the existing site vocabulary with no new mapping:
+    `camera_groups.name` is the school code, which is exactly `sites.name`, so
+    `display_name` ("Paul W. Bryant High") and `group_key` (the value in
+    `devices.site`) join straight off it.
+
+    Health is counted per group the same way the site tiles count it — each
+    failure shape separately, blind apart from down (spec 19 §13) — because a
+    collapsed group still has to confess a problem (CLAUDE.md §4.5).
+    """
+    return [dict(r) for r in db.fetch_all(engine, """
+        SELECT g.id, g.name, g.parent_id, g.path, g.description,
+               g.camera_count AS milestone_camera_count, g.updated_at,
+               s.display_name AS site_display_name, s.group_key AS site,
+               COUNT(m.device_id) AS total,
+               SUM(CASE WHEN reach.value = 'up' THEN 1 ELSE 0 END) AS up,
+               SUM(CASE WHEN reach.value = 'down_confirmed' THEN 1 ELSE 0 END) AS down_confirmed,
+               SUM(CASE WHEN reach.value = 'down_source_only' THEN 1 ELSE 0 END) AS down_source_only,
+               SUM(CASE WHEN reach.value = 'down_network_only' THEN 1 ELSE 0 END) AS down_network_only,
+               SUM(CASE WHEN src.value = 'blind' THEN 1 ELSE 0 END) AS blind,
+               SUM(CASE WHEN rec.value = 'up' THEN 1 ELSE 0 END) AS recording
+        FROM camera_groups g
+        LEFT JOIN camera_group_members m ON m.group_id = g.id
+        LEFT JOIN devices d ON d.id = m.device_id AND d.enabled = 1
+        LEFT JOIN sites s ON s.name = g.name
+        LEFT JOIN device_state reach ON reach.device_id = m.device_id
+             AND reach.dimension = 'reachability'
+        LEFT JOIN device_state src ON src.device_id = m.device_id
+             AND src.dimension = 'source_status'
+        LEFT JOIN device_state rec ON rec.device_id = m.device_id
+             AND rec.dimension = 'recording'
+        GROUP BY g.id, g.name, g.parent_id, g.path, g.description, g.camera_count,
+                 g.updated_at, s.display_name, s.group_key
+        ORDER BY g.path, g.name""")]
+
+
 @router.get("/cameras")
 def cameras(
     engine: Engine = Depends(get_engine),
@@ -148,6 +195,7 @@ def cameras(
     q: str | None = None,
     site: str | None = None,
     status: str | None = None,
+    group: str | None = None,
 ) -> list[dict]:
     """Cameras, optionally narrowed by search, site, or status.
 
@@ -157,6 +205,11 @@ def cameras(
     exists because "show me what is down" is the question an operator actually
     asks, and answering it with only `down_confirmed` would hide the cameras the
     platform cannot reach.
+
+    ``group`` narrows to one Milestone camera group (migration 026); ``site``
+    narrows by the network site resolver. They are different axes and both are
+    offered, because the surveillance team files cameras by group while the
+    network is organised by site.
     """
     conds, params = [], {}
     if q:
@@ -165,6 +218,13 @@ def cameras(
     if site:
         conds.append("d.site = :site")
         params["site"] = site
+    if group:
+        # Milestone group membership (migration 026). An EXISTS rather than a
+        # join because 25 cameras belong to two groups and a join would return
+        # them twice.
+        conds.append("EXISTS (SELECT 1 FROM camera_group_members m "
+                     "WHERE m.device_id = c.device_id AND m.group_id = :group)")
+        params["group"] = group
     if status:
         if status == "down":
             conds.append("reach.value IN ('down_confirmed', 'down_source_only', "
@@ -175,8 +235,21 @@ def cameras(
             conds.append("reach.value = :status")
             params["status"] = status
     where = f"WHERE {' AND '.join(conds)}" if conds else ""
-    return [dict(r) for r in db.fetch_all(
+    rows = [dict(r) for r in db.fetch_all(
         engine, f"SELECT {_CAMERA_COLS} {_CAMERA_FROM} {where} ORDER BY d.site, d.name", params)]
+
+    # Milestone group membership, attached in one extra query rather than a
+    # correlated subquery per row: the Cameras page buckets 2,662 cameras into
+    # the group tree client-side, and 25 of them are in two groups, so the
+    # field is a list. One read of ~2,700 membership rows beats a join that
+    # would duplicate camera rows and a subquery that would run per camera.
+    if rows:
+        members: dict[int, list[str]] = {}
+        for m in db.fetch_all(engine, "SELECT group_id, device_id FROM camera_group_members"):
+            members.setdefault(int(m["device_id"]), []).append(m["group_id"])
+        for r in rows:
+            r["group_ids"] = members.get(int(r["device_id"]), [])
+    return rows
 
 
 @router.get("/cameras/{device_id}")
@@ -235,6 +308,17 @@ def camera_detail(
     # more than one (up to eleven on an AXIS M3007), and they share a network
     # interface — so a fault on one is a fault on all of them, which is only
     # obvious if the page says they exist.
+    # Which Milestone group(s) this camera is filed under — the tree the
+    # Cameras page navigates by, and worth stating on the detail page because a
+    # camera can be in two (25 are here) and because its group is how the
+    # surveillance team refers to it.
+    out["groups"] = [dict(r) for r in db.fetch_all(
+        engine,
+        "SELECT g.id, g.name, s.display_name AS site_display_name "
+        "FROM camera_group_members m JOIN camera_groups g ON g.id = m.group_id "
+        "LEFT JOIN sites s ON s.name = g.name "
+        "WHERE m.device_id = :d ORDER BY g.name", {"d": device_id})]
+
     out["siblings"] = []
     if out.get("hardware_id"):
         out["siblings"] = [dict(r) for r in db.fetch_all(

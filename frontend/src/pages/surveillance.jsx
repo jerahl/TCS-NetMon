@@ -31,27 +31,6 @@ const usedIsKnown = (summary) =>
   Boolean(summary && summary.storage_used_known && summary.storage_used_gb !== null
           && summary.storage_used_gb !== undefined);
 
-// Reachability tiers as an operator reads them. The wording matters more than
-// the colour: "down" alone cannot distinguish a dead camera from one the
-// platform cannot reach, and those need different responses (spec 19 §13).
-const STATUS = {
-  up:                { label: "Up",              tone: "ok",   hint: "platform and network both reach it" },
-  down_confirmed:    { label: "Down",            tone: "err",  hint: "Milestone and ICMP agree it is unreachable" },
-  down_source_only:  { label: "Milestone down",  tone: "err",  hint: "Milestone cannot reach it; the network can — a platform-side problem, not a dead camera" },
-  down_network_only: { label: "No ICMP",         tone: "warn", hint: "does not answer ping while Milestone reports it fine — most camera models never answer ICMP" },
-  unknown:           { label: "Unknown",         tone: "",     hint: "no probe has an opinion" },
-};
-
-function StatusPill({ tier, blind }) {
-  // Blind outranks the tier: if Milestone cannot see the camera at all, saying
-  // anything about agreement between probes would overstate what is known.
-  if (blind) {
-    return <span className="state-pill warn" title="Milestone has no state for this camera — not the same as down">Blind</span>;
-  }
-  const s = STATUS[tier] || STATUS.unknown;
-  return <span className={"state-pill " + s.tone} title={s.hint}>{s.label}</span>;
-}
-
 // GB → GB/TB/PB. The estate's configured total is ~1.8 million GB, which reads
 // as noise in GB and as an awkward 1,794 in TB; the owner describes it in PB,
 // so the formatter goes that far too.
@@ -67,11 +46,14 @@ export const fmtGb = (gb) => {
 const num = (v) => Number(v) || 0;
 const fmtN = (v) => num(v).toLocaleString();
 
-// Tabs that have real content today. ZCD also has Sites and Evidence Lock;
-// those arrive in spec 20 S6 with the data behind them (per-site recorder and
-// switch/AP roll-ups; the evidence-lock endpoint investigation). An empty tab
-// naming a future phase would be worse than no tab.
-const TAB_IDS = ["overview", "cameras", "servers", "storage", "alarms"];
+// Tabs that have real content today. Cameras is no longer among them: it is
+// its own page at #/cameras, navigated by the Milestone group tree, because
+// that is where camera work happens and a fleet of 2,662 needs a persistent
+// navigator rather than a table you leave and return to (owner, 2026-09-07).
+// ZCD also has Sites and Evidence Lock; those arrive in spec 20 S6 with the
+// data behind them. An empty tab naming a future phase would be worse than
+// no tab.
+const TAB_IDS = ["overview", "servers", "storage", "alarms"];
 
 function StateDot({ value }) {
   const sev = value === "up" ? "ok" : value === "down" ? "crit" : value === "blind" ? "warn" : "unknown";
@@ -85,10 +67,6 @@ export function SurveillancePage({ query = {} }) {
   const [alarms, setAlarms] = React.useState(null);
   const [meta, setMeta] = React.useState(null);
   const [error, setError] = React.useState(null);
-  // Lifted out of CamerasTab so the by-school grid can drive it: clicking a
-  // school on the overview is the same gesture as filtering the camera list.
-  const [site, setSite] = React.useState("");
-
   // The URL owns the active tab, not component state — so a deep link, the ⌘K
   // palette and the browser's back button all land where they say they will.
   const tab = TAB_IDS.includes(query.tab) ? query.tab : "overview";
@@ -136,8 +114,6 @@ export function SurveillancePage({ query = {} }) {
 
   const tabs = [
     { id: "overview", label: "Overview" },
-    { id: "cameras", label: "Cameras", badge: fmtN(summary.cameras_total),
-      kind: camsDown > 0 ? "err" : "", title: camsDown ? `${camsDown} needing attention` : undefined },
     { id: "servers", label: "Recording Servers", badge: fmtN(summary.servers_total),
       kind: rsAllUp ? "" : "err" },
     { id: "storage", label: "Storage" },
@@ -168,6 +144,7 @@ export function SurveillancePage({ query = {} }) {
       <div className="subtitle">
         <SourceBadge source="milestone" /> Config API + Events/State ·
         {" "}refreshes every {REFRESH_MS / 1000}s
+        {" · "}<a href="#/cameras">camera fleet →</a>
         {!summary.updated_at && <span style={{ color: sevColor("warn") }}> · no camera data yet</span>}
       </div>
 
@@ -217,10 +194,12 @@ export function SurveillancePage({ query = {} }) {
       {tab === "overview" && (
         <OverviewTab summary={summary} storagePct={storagePct} sites={sites}
                      servers={servers} alarms={alarms} meta={meta}
-                     onPickSite={(s) => { setSite(s || ""); setTab("cameras"); }} />
-      )}
-      {tab === "cameras" && (
-        <CamerasTab counts={summary.cameras_by_status} site={site} onSite={setSite} />
+                     onPickSite={(s) => {
+                       // The camera fleet lives on its own page now, so a
+                       // school tile navigates there pre-filtered rather than
+                       // switching a tab in place.
+                       location.hash = "#/cameras" + (s ? `?q=${encodeURIComponent(s)}` : "");
+                     }} />
       )}
       {tab === "servers" && <ServersTab rows={servers} />}
       {tab === "storage" && <StorageTab />}
@@ -481,107 +460,6 @@ export function AlarmFeed({ rows, limit }) {
         </div>
       )}
     </div>
-  );
-}
-
-export function CamerasTab({ counts, site = "", onSite }) {
-  const [rows, setRows] = React.useState(null);
-  const [q, setQ] = React.useState("");
-  const [status, setStatus] = React.useState("");
-  React.useEffect(() => {
-    setRows(null);
-    const id = setTimeout(() =>
-      getJSON("/api/surveillance/cameras" + qs({ q, site, status }))
-        .then(setRows).catch(() => setRows([])), 250);
-    return () => clearTimeout(id);
-  }, [q, site, status]);
-
-  const c = counts || {};
-  // "down" first and widest, because it is the question being asked. It is the
-  // union of the three down tiers, not just down_confirmed — filtering to the
-  // strictest tier would hide the cameras Milestone cannot reach.
-  const chips = [
-    ["", "All", (c.up || 0) + (c.down || 0) + (c.unknown || 0)],
-    ["down", "Down (any)", c.down],
-    ["down_confirmed", STATUS.down_confirmed.label, c.down_confirmed],
-    ["down_source_only", STATUS.down_source_only.label, c.down_source_only],
-    ["down_network_only", STATUS.down_network_only.label, c.down_network_only],
-    ["blind", "Blind", c.blind],
-    ["up", "Up", c.up],
-  ];
-
-  return (
-    <Card kicker={rows ? `${rows.length} shown${site ? ` at ${site}` : ""}` : "Cameras"}
-          source="milestone-ess" tight>
-      <div className="cam-filter-bar">
-        {site && (
-          <div className="cfb-group">
-            <span className="cfb-lbl">School</span>
-            <button type="button" className="cfb-chip active"
-                    title="clear the school filter"
-                    onClick={() => onSite && onSite("")}>{site} ✕</button>
-          </div>
-        )}
-        <div className="cfb-group">
-          <span className="cfb-lbl">Status</span>
-          {chips.map(([val, label, n]) => (
-            <button key={val || "all"} type="button"
-                    className={"cfb-chip" + (status === val ? " active" : "")}
-                    title={site
-                      ? "counts are estate-wide; the list below is limited to " + site
-                      : (STATUS[val]?.hint || "")}
-                    onClick={() => setStatus(val)}>
-              {/* The counts come from the estate-wide summary, so they stop
-                  describing the list once a school is picked. Dropping them
-                  beats showing a number that belongs to a different set. */}
-              {label}{!site && n !== undefined ? ` ${n}` : ""}
-            </button>
-          ))}
-        </div>
-        <div className="cfb-group" style={{ marginLeft: "auto", flex: 1, maxWidth: 320 }}>
-          <span className="cfb-lbl">Search</span>
-          <input type="text" placeholder="name, model, IP, MAC…" value={q}
-                 onChange={(e) => setQ(e.target.value)} style={{ width: "100%" }} />
-        </div>
-      </div>
-      {!rows ? <Loading what="cameras" /> : rows.length === 0 ? (
-        <div className="msg" style={{ padding: 14 }}>
-          {status || q
-            ? "No cameras match this filter."
-            : "No cameras cached — the Milestone collector hasn't populated the camera table."}
-        </div>
-      ) : (
-        <table className="grid nvr-tbl">
-          <thead><tr><th>Status</th><th>Camera</th><th>Site</th><th>Model</th>
-                     <th>Recording</th><th>Server</th><th>IP</th><th></th></tr></thead>
-          <tbody>
-            {rows.map((cam) => {
-              const blind = cam.source_status === "blind";
-              const tier = cam.reachability;
-              const rowCls = blind ? "row-warn"
-                : tier === "down_confirmed" || tier === "down_source_only" ? "row-err"
-                : tier === "down_network_only" ? "row-warn" : "";
-              return (
-                <tr key={cam.device_id} className={rowCls}>
-                  <td><StatusPill tier={tier} blind={blind} /></td>
-                  <td><a href={`#/camera/${cam.device_id}`}>{cam.name}</a></td>
-                  <td>{cam.site || "—"}</td>
-                  <td className="dim">{cam.model || "—"}</td>
-                  {/* Recording here is motion-triggered, so "stopped" is the
-                      ordinary resting state and is shown as information
-                      rather than as a fault. */}
-                  <td><span className={"rec-pill" + (cam.recording_state === "up" ? "" : " off")}>
-                    {cam.recording_state || "unknown"}</span></td>
-                  <td className="dim">{cam.recording_server || "—"}</td>
-                  <td className="mono dim">{cam.ip || "—"}</td>
-                  <td><a className="btn btn-sm" href={`#/camera/${cam.device_id}`}>Detail</a></td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      )}
-    </Card>
   );
 }
 
