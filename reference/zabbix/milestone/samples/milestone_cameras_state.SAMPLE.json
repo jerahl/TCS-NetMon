@@ -1,0 +1,303 @@
+{
+ "__count": 2662,
+ "__fetched_at": "2026-09-05T03:02:33Z",
+ "__hardware_count": 2489,
+ "__mac_count": 2662,
+ "__array": [
+  {
+   "displayName": "nms-cam-101",
+   "enabled": true,
+   "id": "be637416-3c47-47db-b4e4-ff1a5cc95740",
+   "name": "nms-cam-101",
+   "channel": 0,
+   "description": "",
+   "createdDate": "0001-01-01T00:00:00.0000000",
+   "lastModified": "2024-07-29T20:27:29.3270000Z",
+   "gisPoint": "POINT EMPTY",
+   "shortName": "",
+   "icon": 0,
+   "coverageDirection": 0,
+   "coverageDepth": 0,
+   "coverageFieldOfView": 0,
+   "recordingFramerate": 5,
+   "recordKeyframesOnly": false,
+   "recordOnRelatedDevices": true,
+   "ptzEnabled": false,
+   "recordingEnabled": true,
+   "prebufferEnabled": true,
+   "prebufferInMemory": true,
+   "prebufferSeconds": 3,
+   "edgeStorageEnabled": false,
+   "edgeStoragePlaybackEnabled": false,
+   "manualRecordingTimeoutEnabled": true,
+   "manualRecordingTimeoutMinutes": 5,
+   "recordingStorage": {
+    "type": "storages",
+    "id": "31bf8ed4-005c-4c6b-bb5c-e47d4d51b7a1"
+   },
+   "failoverSetting": "FullSupport",
+   "relations": {
+    "parent": {
+     "type": "hardware",
+     "id": "02054476-a5de-47ca-97a3-28faf45a068a"
+    },
+    "self": {
+     "type": "cameras",
+     "id": "be637416-3c47-47db-b4e4-ff1a5cc95740"
+    }
+   },
+   "address": "10.172.18.101",
+   "mac": "00:07:5F:D8:39:50",
+   "macRaw": "00075FD83950",
+   "hardwareId": "02054476-a5de-47ca-97a3-28faf45a068a",
+   "hardwareName": "nms-cam-101",
+   "hardwareModel": "FLEXIDOME indoor 5100i IR"
+  },
+  {
+   "displayName": "nms-cam-111",
+   "enabled": true,
+   "id": "5391cca7-34f1-4ad1-bfe4-ef1bcdad9299",
+   "name": "nms-cam-111",
+   "channel": 0,
+   "description": "",
+   "createdDate": "0001-01-01T00:00:00.0000000",
+   "lastModified": "2024-07-29T20:25:01.5630000Z",
+   "gisPoint": "POINT EMPTY",
+   "shortName": "",
+   "icon": 0,
+   "coverageDirection": 0,
+   "coverageDepth": 0,
+   "coverageFieldOfView": 0,
+   "recordingFramerate": 5,
+   "recordKeyframesOnly": false,
+   "recordOnRelatedDevices": true,
+   "ptzEnabled": false,
+   "recordingEnabled": true,
+   "prebufferEnabled": true,
+   "prebufferInMemory": true,
+   "prebufferSeconds": 3,
+   "edgeStorageEnabled": false,
+   "edgeStoragePlaybackEnabled": false,
+   "manualRecordingTimeoutEnabled": true,
+   "manualRecordingTimeoutMinutes": 5,
+   "recordingStorage": {
+    "type": "storages",
+    "id": "31bf8ed4-005c-4c6b-bb5c-e47d4d51b7a1"
+   },
+   "failoverSetting": "FullSupport",
+   "relations": {
+    "parent": {
+     "type": "hardware",
+     "id": "04050494-e76a-45f1-a7da-116a6489c283"
+    },
+    "self": {
+     "type": "cameras",
+     "id": "5391cca7-34f1-4ad1-bfe4-ef1bcdad9299"
+    }
+   },
+   "address": "10.172.18.111",
+   "mac": "00:07:5F:D7:C2:F1",
+   "macRaw": "00075FD7C2F1",
+   "hardwareId": "04050494-e76a-45f1-a7da-116a6489c283",
+   "hardwareName": "nms-cam-111",
+   "hardwareModel": "FLEXIDOME indoor 5100i IR"
+  },
+  {
+   "displayName": "nms-cam-79",
+   "enabled": true,
+   "id": "92129b6d-aa0d-4120-992c-b7a6cbb80a92",
+   "name": "nms-cam-79",
+   "channel": 0,
+   "description": "",
+   "createdDate": "0001-01-01T00:00:00.0000000",
+   "lastModified": "2024-07-26T21:20:12.5600000Z",
+   "gisPoint": "POINT EMPTY",
+   "shortName": "",
+   "icon": 0,
+   "coverageDirection": 0,
+   "coverageDepth": 0,
+   "coverageFieldOfView": 0,
+   "recordingFramerate": 5,
+   "recordKeyframesOnly": false,
+   "recordOnRelatedDevices": true,
+   "ptzEnabled": false,
+   "recordingEnabled": true,
+   "prebufferEnabled": true,
+   "prebufferInMemory": true,
+   "prebufferSeconds": 3,
+   "edgeStorageEnabled": false,
+   "edgeStoragePlaybackEnabled": false,
+   "manualRecordingTimeoutEnabled": true,
+   "manualRecordingTimeoutMinutes": 5,
+   "recordingStorage": {
+    "type": "storages",
+    "id": "31bf8ed4-005c-4c6b-bb5c-e47d4d51b7a1"
+   },
+   "failoverSetting": "FullSupport",
+   "relations": {
+    "parent": {
+     "type": "hardware",
+     "id": "04a8c192-dba5-4b33-8173-9e9b1b6c67e1"
+    },
+    "self": {
+     "type": "cameras",
+     "id": "92129b6d-aa0d-4120-992c-b7a6cbb80a92"
+    }
+   },
+   "address": "10.172.18.79",
+   "mac": "00:07:5F:FA:75:EC",
+   "macRaw": "00075FFA75EC",
+   "hardwareId": "04a8c192-dba5-4b33-8173-9e9b1b6c67e1",
+   "hardwareName": "nms-cam-79",
+   "hardwareModel": "FLEXIDOME outdoor 5100i IR"
+  }
+ ],
+ "be637416-3c47-47db-b4e4-ff1a5cc95740": {
+  "displayName": "nms-cam-101",
+  "enabled": true,
+  "id": "be637416-3c47-47db-b4e4-ff1a5cc95740",
+  "name": "nms-cam-101",
+  "channel": 0,
+  "description": "",
+  "createdDate": "0001-01-01T00:00:00.0000000",
+  "lastModified": "2024-07-29T20:27:29.3270000Z",
+  "gisPoint": "POINT EMPTY",
+  "shortName": "",
+  "icon": 0,
+  "coverageDirection": 0,
+  "coverageDepth": 0,
+  "coverageFieldOfView": 0,
+  "recordingFramerate": 5,
+  "recordKeyframesOnly": false,
+  "recordOnRelatedDevices": true,
+  "ptzEnabled": false,
+  "recordingEnabled": true,
+  "prebufferEnabled": true,
+  "prebufferInMemory": true,
+  "prebufferSeconds": 3,
+  "edgeStorageEnabled": false,
+  "edgeStoragePlaybackEnabled": false,
+  "manualRecordingTimeoutEnabled": true,
+  "manualRecordingTimeoutMinutes": 5,
+  "recordingStorage": {
+   "type": "storages",
+   "id": "31bf8ed4-005c-4c6b-bb5c-e47d4d51b7a1"
+  },
+  "failoverSetting": "FullSupport",
+  "relations": {
+   "parent": {
+    "type": "hardware",
+    "id": "02054476-a5de-47ca-97a3-28faf45a068a"
+   },
+   "self": {
+    "type": "cameras",
+    "id": "be637416-3c47-47db-b4e4-ff1a5cc95740"
+   }
+  },
+  "address": "10.172.18.101",
+  "mac": "00:07:5F:D8:39:50",
+  "macRaw": "00075FD83950",
+  "hardwareId": "02054476-a5de-47ca-97a3-28faf45a068a",
+  "hardwareName": "nms-cam-101",
+  "hardwareModel": "FLEXIDOME indoor 5100i IR"
+ },
+ "5391cca7-34f1-4ad1-bfe4-ef1bcdad9299": {
+  "displayName": "nms-cam-111",
+  "enabled": true,
+  "id": "5391cca7-34f1-4ad1-bfe4-ef1bcdad9299",
+  "name": "nms-cam-111",
+  "channel": 0,
+  "description": "",
+  "createdDate": "0001-01-01T00:00:00.0000000",
+  "lastModified": "2024-07-29T20:25:01.5630000Z",
+  "gisPoint": "POINT EMPTY",
+  "shortName": "",
+  "icon": 0,
+  "coverageDirection": 0,
+  "coverageDepth": 0,
+  "coverageFieldOfView": 0,
+  "recordingFramerate": 5,
+  "recordKeyframesOnly": false,
+  "recordOnRelatedDevices": true,
+  "ptzEnabled": false,
+  "recordingEnabled": true,
+  "prebufferEnabled": true,
+  "prebufferInMemory": true,
+  "prebufferSeconds": 3,
+  "edgeStorageEnabled": false,
+  "edgeStoragePlaybackEnabled": false,
+  "manualRecordingTimeoutEnabled": true,
+  "manualRecordingTimeoutMinutes": 5,
+  "recordingStorage": {
+   "type": "storages",
+   "id": "31bf8ed4-005c-4c6b-bb5c-e47d4d51b7a1"
+  },
+  "failoverSetting": "FullSupport",
+  "relations": {
+   "parent": {
+    "type": "hardware",
+    "id": "04050494-e76a-45f1-a7da-116a6489c283"
+   },
+   "self": {
+    "type": "cameras",
+    "id": "5391cca7-34f1-4ad1-bfe4-ef1bcdad9299"
+   }
+  },
+  "address": "10.172.18.111",
+  "mac": "00:07:5F:D7:C2:F1",
+  "macRaw": "00075FD7C2F1",
+  "hardwareId": "04050494-e76a-45f1-a7da-116a6489c283",
+  "hardwareName": "nms-cam-111",
+  "hardwareModel": "FLEXIDOME indoor 5100i IR"
+ },
+ "92129b6d-aa0d-4120-992c-b7a6cbb80a92": {
+  "displayName": "nms-cam-79",
+  "enabled": true,
+  "id": "92129b6d-aa0d-4120-992c-b7a6cbb80a92",
+  "name": "nms-cam-79",
+  "channel": 0,
+  "description": "",
+  "createdDate": "0001-01-01T00:00:00.0000000",
+  "lastModified": "2024-07-26T21:20:12.5600000Z",
+  "gisPoint": "POINT EMPTY",
+  "shortName": "",
+  "icon": 0,
+  "coverageDirection": 0,
+  "coverageDepth": 0,
+  "coverageFieldOfView": 0,
+  "recordingFramerate": 5,
+  "recordKeyframesOnly": false,
+  "recordOnRelatedDevices": true,
+  "ptzEnabled": false,
+  "recordingEnabled": true,
+  "prebufferEnabled": true,
+  "prebufferInMemory": true,
+  "prebufferSeconds": 3,
+  "edgeStorageEnabled": false,
+  "edgeStoragePlaybackEnabled": false,
+  "manualRecordingTimeoutEnabled": true,
+  "manualRecordingTimeoutMinutes": 5,
+  "recordingStorage": {
+   "type": "storages",
+   "id": "31bf8ed4-005c-4c6b-bb5c-e47d4d51b7a1"
+  },
+  "failoverSetting": "FullSupport",
+  "relations": {
+   "parent": {
+    "type": "hardware",
+    "id": "04a8c192-dba5-4b33-8173-9e9b1b6c67e1"
+   },
+   "self": {
+    "type": "cameras",
+    "id": "92129b6d-aa0d-4120-992c-b7a6cbb80a92"
+   }
+  },
+  "address": "10.172.18.79",
+  "mac": "00:07:5F:FA:75:EC",
+  "macRaw": "00075FFA75EC",
+  "hardwareId": "04a8c192-dba5-4b33-8173-9e9b1b6c67e1",
+  "hardwareName": "nms-cam-79",
+  "hardwareModel": "FLEXIDOME outdoor 5100i IR"
+ },
+ "__NOTE": "SAMPLE: first 3 of 2662 cameras. Full file is keyed by camera GUID plus __array list plus __count/__fetched_at/__hardware_count/__mac_count."
+}

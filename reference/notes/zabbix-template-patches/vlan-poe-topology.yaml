@@ -1,0 +1,505 @@
+zabbix_export:
+  version: '7.0'
+  templates:
+    - template: 'Extreme EXOS by SNMP'
+      name: 'Extreme EXOS by SNMP'
+      discovery_rules:
+        # ─────────────────────────────────────────────────────────────
+        # VLAN list — feeds the Switches → VLAN tab table.
+        #
+        # Walks EXTREME-VLAN-MIB::extremeVlanIfTable. {#SNMPINDEX} is the
+        # VLAN's ifIndex; {#VLANID} and {#VLANNAME} are the user-visible
+        # VID and description.
+        # ─────────────────────────────────────────────────────────────
+        - uuid: 8c4f7a1d3b6e4528b1a9e7c0d2f59a4e
+          name: 'VLAN Discovery'
+          type: SNMP_AGENT
+          snmp_oid: 'discovery[{#VLANNAME},1.3.6.1.4.1.1916.1.2.1.2.1.2,{#VLANID},1.3.6.1.4.1.1916.1.2.1.2.1.10]'
+          key: extreme.vlan.discovery
+          delay: 5m
+          description: |
+            EXTREME-VLAN-MIB::extremeVlanIfTable (1.3.6.1.4.1.1916.1.2.1.2)
+            One row per VLAN interface. {#SNMPINDEX} is the VLAN's ifIndex,
+            used by extremeVlanOpaqueTable to look up port membership.
+          item_prototypes:
+            - uuid: 1a3e5c7d9f2b4068b8a4d1c6e0f95237
+              name: 'VLAN {#VLANID} ({#VLANNAME}): VID'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.1916.1.2.1.2.1.10.{#SNMPINDEX}'
+              key: 'extreme.vlan.id[{#SNMPINDEX}]'
+              delay: 5m
+              trends: '0'
+              description: 'extremeVlanIfVlanId — the 802.1Q VLAN ID.'
+              tags:
+                - tag: component
+                  value: vlan
+                - tag: VLAN
+                  value: '{#VLANNAME}'
+            - uuid: 2b4e6d8a0c1f47b3a6c8e9d2f7041523
+              name: 'VLAN {#VLANID} ({#VLANNAME}): description'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.1916.1.2.1.2.1.2.{#SNMPINDEX}'
+              key: 'extreme.vlan.descr[{#SNMPINDEX}]'
+              delay: 1h
+              trends: '0'
+              value_type: CHAR
+              description: 'extremeVlanIfDescr — user-visible VLAN name.'
+              preprocessing:
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 24h
+              tags:
+                - tag: component
+                  value: vlan
+                - tag: VLAN
+                  value: '{#VLANNAME}'
+            - uuid: 3c5f7e9b1d2a48c4b7d9e0c3a8152634
+              name: 'VLAN {#VLANID} ({#VLANNAME}): admin status'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.1916.1.2.1.2.1.12.{#SNMPINDEX}'
+              key: 'extreme.vlan.admin[{#SNMPINDEX}]'
+              delay: 5m
+              trends: '0'
+              description: |
+                extremeVlanIfAdminStatus (TruthValue: 1=enabled, 2=disabled).
+              tags:
+                - tag: component
+                  value: vlan
+                - tag: VLAN
+                  value: '{#VLANNAME}'
+            - uuid: 4d6a8b0c2e3f491d5b8e1a4c9026374f
+              name: 'VLAN {#VLANID} ({#VLANNAME}): encapsulation'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.1916.1.2.1.2.1.11.{#SNMPINDEX}'
+              key: 'extreme.vlan.encaps[{#SNMPINDEX}]'
+              delay: 1h
+              trends: '0'
+              description: |
+                extremeVlanIfEncapsType (1=vlanEncaps8021q, 2=vlanEncapsNone).
+              preprocessing:
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 24h
+              tags:
+                - tag: component
+                  value: vlan
+                - tag: VLAN
+                  value: '{#VLANNAME}'
+
+        # ─────────────────────────────────────────────────────────────
+        # Per-VLAN-per-slot port membership — feeds the Switches → VLAN
+        # tab's port grid.
+        #
+        # Walks EXTREME-VLAN-MIB::extremeVlanOpaqueTable
+        # (1.3.6.1.4.1.1916.1.2.6.1). Index is (vlanIfIndex, slotNumber).
+        # Each value is a PortList octet string (bitmap of ports on that
+        # slot belonging to that VLAN). The dashboard parses the bitmap
+        # to render the per-port matrix.
+        # ─────────────────────────────────────────────────────────────
+        - uuid: 5e7c9d1f3a4b48e2c5a7d0e8b9163842
+          name: 'VLAN Port Membership Discovery'
+          type: SNMP_AGENT
+          snmp_oid: 'discovery[{#SNMPVALUE},1.3.6.1.4.1.1916.1.2.6.1.1.1]'
+          key: extreme.vlan.portmap.discovery
+          delay: 5m
+          description: |
+            EXTREME-VLAN-MIB::extremeVlanOpaqueTable
+            {#SNMPINDEX} is "<vlanIfIndex>.<slotNumber>"; values are
+            PortList bitmaps (hex octets) of ports in that VLAN on that
+            slot.
+          item_prototypes:
+            - uuid: 6f8d0a2b4c5e49f3d6b8c1f0a2174953
+              name: 'VLAN ifIndex {#SNMPINDEX}: tagged ports (bitmap)'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.1916.1.2.6.1.1.1.{#SNMPINDEX}'
+              key: 'extreme.vlan.tagged[{#SNMPINDEX}]'
+              delay: 5m
+              trends: '0'
+              value_type: CHAR
+              description: 'extremeVlanOpaqueTaggedPorts — hex bitmap of tagged member ports.'
+              tags:
+                - tag: component
+                  value: vlan
+            - uuid: 7a9b1c3d5e6f4a04e7c9d2a3b4185064
+              name: 'VLAN ifIndex {#SNMPINDEX}: untagged ports (bitmap)'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.1916.1.2.6.1.1.2.{#SNMPINDEX}'
+              key: 'extreme.vlan.untagged[{#SNMPINDEX}]'
+              delay: 5m
+              trends: '0'
+              value_type: CHAR
+              description: 'extremeVlanOpaqueUntaggedPorts — hex bitmap of untagged member ports.'
+              tags:
+                - tag: component
+                  value: vlan
+
+        # ─────────────────────────────────────────────────────────────
+        # Per-slot PoE budget — feeds the Switches → PoE Budget tab.
+        #
+        # Walks EXTREME-POE-MIB::extremePethPseSlotTable
+        # (1.3.6.1.4.1.1916.1.27.1.2). One row per stack member that has
+        # PoE-capable hardware. Watts unless noted.
+        # ─────────────────────────────────────────────────────────────
+        - uuid: 8b0c2d4e6f7a4b15f8d0e3b4c5295174
+          name: 'PoE Slot Discovery'
+          type: SNMP_AGENT
+          snmp_oid: 'discovery[{#SNMPVALUE},1.3.6.1.4.1.1916.1.27.1.2.1.2]'
+          key: extreme.poe.slot.discovery
+          delay: 1h
+          description: |
+            EXTREME-POE-MIB::extremePethPseSlotTable — per-slot PoE
+            budget / consumption / availability.
+          item_prototypes:
+            - uuid: 9c1d3e5f7a8b4c26a9e1f4c5d6306285
+              name: 'PoE Slot {#SNMPVALUE}: power budget'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.1916.1.27.1.2.1.2.{#SNMPINDEX}'
+              key: 'extreme.poe.budget[{#SNMPINDEX}]'
+              delay: 5m
+              units: W
+              description: 'extremePethSlotPowerLimit — configured slot PoE budget.'
+              tags:
+                - tag: component
+                  value: power
+                - tag: 'Stack Member'
+                  value: '{#SNMPVALUE}'
+            - uuid: 0d2e4f6a8b9c4d37b0a2f5c6e7417396
+              name: 'PoE Slot {#SNMPVALUE}: power consumption (allocated)'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.1916.1.27.1.2.1.3.{#SNMPINDEX}'
+              key: 'extreme.poe.drawn[{#SNMPINDEX}]'
+              delay: 5m
+              units: W
+              description: |
+                extremePethSlotConsumptionPower — power allocated to PoE
+                devices on the slot (per device class).
+              tags:
+                - tag: component
+                  value: power
+                - tag: 'Stack Member'
+                  value: '{#SNMPVALUE}'
+            - uuid: 1e3f5a7b9c0d4e48c1b3a6d7f8528407
+              name: 'PoE Slot {#SNMPVALUE}: measured power'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.1916.1.27.1.2.1.14.{#SNMPINDEX}'
+              key: 'extreme.poe.measured[{#SNMPINDEX}]'
+              delay: 5m
+              units: W
+              description: 'extremePethSlotMeasuredPower — actual measured draw.'
+              tags:
+                - tag: component
+                  value: power
+                - tag: 'Stack Member'
+                  value: '{#SNMPVALUE}'
+            - uuid: 2f4a6b8c0d1e4f59d2c4b7e8a9639518
+              name: 'PoE Slot {#SNMPVALUE}: max available power'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.1916.1.27.1.2.1.10.{#SNMPINDEX}'
+              key: 'extreme.poe.available[{#SNMPINDEX}]'
+              delay: 5m
+              units: W
+              description: |
+                extremePethSlotMaxAvailPower — actual power available given
+                current PSU mode and status (the cap the dashboard treats
+                as the slot's effective budget).
+              tags:
+                - tag: component
+                  value: power
+                - tag: 'Stack Member'
+                  value: '{#SNMPVALUE}'
+            - uuid: 3a5b7c9d1e2f4a6ae3d5c8f9b074a629
+              name: 'PoE Slot {#SNMPVALUE}: max capacity'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.1916.1.27.1.2.1.11.{#SNMPINDEX}'
+              key: 'extreme.poe.capacity[{#SNMPINDEX}]'
+              delay: 1h
+              units: W
+              description: 'extremePethSlotMaxCapacity — hardware limit of the slot.'
+              preprocessing:
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 24h
+              tags:
+                - tag: component
+                  value: power
+                - tag: 'Stack Member'
+                  value: '{#SNMPVALUE}'
+            - uuid: 4b6c8d0e2f3a4b7bf4e6d9a0c185b730
+              name: 'PoE Slot {#SNMPVALUE}: status'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.1916.1.27.1.2.1.8.{#SNMPINDEX}'
+              key: 'extreme.poe.status[{#SNMPINDEX}]'
+              delay: 5m
+              trends: '0'
+              description: |
+                extremePethSlotPoeStatus (1=initializing, 2=operational,
+                3=downloadFail, 4=calibrationRequired, 5=invalidFirmware,
+                6=mismatchVersion, 7=updating, 8=invalidDevice,
+                9=notOperational, 10=other).
+              tags:
+                - tag: component
+                  value: power
+                - tag: 'Stack Member'
+                  value: '{#SNMPVALUE}'
+              trigger_prototypes:
+                - uuid: 5c7d9e1f3a4b4c8ca5f7e0b1d296c841
+                  expression: 'last(/Extreme EXOS by SNMP/extreme.poe.status[{#SNMPINDEX}])<>2 and last(/Extreme EXOS by SNMP/extreme.poe.status[{#SNMPINDEX}])<>0'
+                  name: 'PoE Slot {#SNMPVALUE}: not operational'
+                  event_name: 'PoE Slot {#SNMPVALUE}: status not operational'
+                  priority: AVERAGE
+                  description: 'PoE controller on the slot reports a non-operational state.'
+                  tags:
+                    - tag: scope
+                      value: availability
+
+        # ─────────────────────────────────────────────────────────────
+        # LLDP neighbors — feeds the Switches → Topology tab.
+        #
+        # Walks the standard LLDP-MIB::lldpRemTable (1.0.8802.1.1.2.1.4.1).
+        # The table index is a 3-tuple: <lldpRemTimeMark>.<localPortNum>.
+        # <remIndex>. {#SNMPINDEX} captures all three; the dashboard parses
+        # the index to extract localPortNum (the second component) for
+        # mapping back to a switch port.
+        # ─────────────────────────────────────────────────────────────
+        - uuid: 6d8e0a2b4c5d4e9da6b8c1f2e3a7d952
+          name: 'LLDP Neighbor Discovery'
+          type: SNMP_AGENT
+          snmp_oid: 'discovery[{#SNMPVALUE},1.0.8802.1.1.2.1.4.1.1.9]'
+          key: lldp.neighbor.discovery
+          delay: 5m
+          description: |
+            LLDP-MIB::lldpRemTable — one row per learned neighbor.
+            {#SNMPVALUE} is the neighbor's system name.
+          item_prototypes:
+            - uuid: 7e9f1b3c5d6e4f0eb7c9d2a3f4b8ea63
+              name: 'LLDP {#SNMPINDEX}: neighbor sysname'
+              type: SNMP_AGENT
+              snmp_oid: '1.0.8802.1.1.2.1.4.1.1.9.{#SNMPINDEX}'
+              key: 'lldp.neighbor.sysname[{#SNMPINDEX}]'
+              delay: 5m
+              trends: '0'
+              value_type: CHAR
+              description: 'lldpRemSysName — neighbor''s advertised system name.'
+              tags:
+                - tag: component
+                  value: lldp
+            - uuid: 8f0a2c4d6e7f4a1fc8d0e3b4a5c9fb74
+              name: 'LLDP {#SNMPINDEX}: neighbor portId'
+              type: SNMP_AGENT
+              snmp_oid: '1.0.8802.1.1.2.1.4.1.1.7.{#SNMPINDEX}'
+              key: 'lldp.neighbor.portid[{#SNMPINDEX}]'
+              delay: 5m
+              trends: '0'
+              value_type: CHAR
+              description: 'lldpRemPortId — neighbor''s port identifier.'
+              tags:
+                - tag: component
+                  value: lldp
+            - uuid: 9a1b3d5e7f8a4b2ad9e1f4c5b6d0ac85
+              name: 'LLDP {#SNMPINDEX}: neighbor portDesc'
+              type: SNMP_AGENT
+              snmp_oid: '1.0.8802.1.1.2.1.4.1.1.8.{#SNMPINDEX}'
+              key: 'lldp.neighbor.portdesc[{#SNMPINDEX}]'
+              delay: 5m
+              trends: '0'
+              value_type: CHAR
+              description: 'lldpRemPortDesc — neighbor''s port description.'
+              tags:
+                - tag: component
+                  value: lldp
+            - uuid: 0b2c4e6f8a9b4c3be0f2a5d6c7e1bd96
+              name: 'LLDP {#SNMPINDEX}: neighbor sysDesc'
+              type: SNMP_AGENT
+              snmp_oid: '1.0.8802.1.1.2.1.4.1.1.10.{#SNMPINDEX}'
+              key: 'lldp.neighbor.sysdesc[{#SNMPINDEX}]'
+              delay: 1h
+              trends: '0'
+              value_type: CHAR
+              description: 'lldpRemSysDesc — neighbor''s full system description.'
+              preprocessing:
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 12h
+              tags:
+                - tag: component
+                  value: lldp
+            - uuid: 1c3d5f7a9b0c4d4cf1a3b6e7d8f2ce07
+              name: 'LLDP {#SNMPINDEX}: neighbor chassisId'
+              type: SNMP_AGENT
+              snmp_oid: '1.0.8802.1.1.2.1.4.1.1.5.{#SNMPINDEX}'
+              key: 'lldp.neighbor.chassisid[{#SNMPINDEX}]'
+              delay: 1h
+              trends: '0'
+              value_type: CHAR
+              description: 'lldpRemChassisId — neighbor''s chassis identifier (often a MAC).'
+              preprocessing:
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 12h
+              tags:
+                - tag: component
+                  value: lldp
+
+        # ─────────────────────────────────────────────────────────────
+        # Local LLDP port → ifIndex mapping.
+        #
+        # The lldpRemTable index uses LLDP-MIB local-port-number, which
+        # on EXOS happens to equal ifIndex for physical ports but isn't
+        # guaranteed in the MIB. Walk lldpLocPortDesc so the dashboard
+        # can build a definitive localPortNum → port-name map.
+        # ─────────────────────────────────────────────────────────────
+        - uuid: 2d4e6a8b0c1d4e5da2b4c7e8d9036e18
+          name: 'LLDP Local Port Discovery'
+          type: SNMP_AGENT
+          snmp_oid: 'discovery[{#SNMPVALUE},1.0.8802.1.1.2.1.3.7.1.4]'
+          key: lldp.local.discovery
+          delay: 1h
+          description: |
+            LLDP-MIB::lldpLocPortTable — maps local LLDP port number
+            (the middle component of the lldpRemTable index) to a port
+            description (typically "<slot>:<port>" on EXOS).
+          item_prototypes:
+            - uuid: 3e5f7b9c1d2e4f6eb3c5d8f9a0147f29
+              name: 'LLDP local port {#SNMPINDEX}: description'
+              type: SNMP_AGENT
+              snmp_oid: '1.0.8802.1.1.2.1.3.7.1.4.{#SNMPINDEX}'
+              key: 'lldp.local.portdesc[{#SNMPINDEX}]'
+              delay: 1h
+              trends: '0'
+              value_type: CHAR
+              description: 'lldpLocPortDesc — local port description, e.g. "1:48".'
+              preprocessing:
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 24h
+              tags:
+                - tag: component
+                  value: lldp
+
+        # ─────────────────────────────────────────────────────────────
+        # Per-port PoE class — extends the existing Interfaces POE
+        # Discovery rule. {#SNMPINDEX} is "pethMainPseGroupIndex.pethPsePortIndex"
+        # (same as the existing dstatus / mpower prototypes).
+        # ─────────────────────────────────────────────────────────────
+        - uuid: 60a6bc1035344d139bcee08c9e34ce19  # match base template's snmp.interfaces.poe.discovery
+          name: 'Interfaces POE Discovery'
+          type: SNMP_AGENT
+          snmp_oid: 'discovery[{#POEINDEX},1.3.6.1.2.1.105.1.1.1.3]'
+          key: snmp.interfaces.poe.discovery
+          delay: 1h
+          item_prototypes:
+            - uuid: 4f6a8c0d2e3f4a78c4d6e9b0a1258039
+              name: 'Interface {#SNMPINDEX}: POE class'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.2.1.105.1.1.1.10.{#SNMPINDEX}'
+              key: 'snmp.interfaces.poe.class[{#SNMPINDEX}]'
+              delay: 5m
+              trends: '0'
+              description: |
+                POWER-ETHERNET-MIB::pethPsePortPowerClassifications
+                Reported PoE class of the attached device:
+                  1 = class0  (0.44–12.95 W)
+                  2 = class1  (0.44–3.84 W)
+                  3 = class2  (3.84–6.49 W)
+                  4 = class3  (6.49–12.95 W)
+                  5 = class4  (12.95–25.5 W, .3at "PoE+")
+              tags:
+                - tag: 'Interface POE'
+                  value: '{#NAME}'
+                - tag: 'Item Type'
+                  value: POE
+
+        # ─────────────────────────────────────────────────────────────
+        # Extreme Discovery Protocol (EDP) neighbors.
+        #
+        # Walks EXTREME-EDP-MIB::extremeEdpTable (1.3.6.1.4.1.1916.1.13.2).
+        # Index is (extremeEdpPortIfIndex, extremeEdpNeighborId) where
+        # NeighborId is an 8-octet ExtremeDeviceId; {#SNMPINDEX} therefore
+        # looks like "<ifIndex>.<b1>.<b2>.<b3>.<b4>.<b5>.<b6>.<b7>.<b8>"
+        # (9 sub-OIDs — fixed-size OCTET STRING (SIZE(8)) without IMPLIED
+        # encodes each byte as its own sub-OID with no length prefix per
+        # SMIv2). The dashboard parses the first component to recover the
+        # local port.
+        #
+        # extremeEdpPortIfIndex and extremeEdpNeighborId are themselves
+        # accessible-for-notify (the MIB only exposes them via traps), but
+        # extremeEdpNeighborName / Slot / Port / SoftwareVersion / EntryAge
+        # are read-only, so we discover off NeighborName and read the
+        # other columns by composite index.
+        # ─────────────────────────────────────────────────────────────
+        - uuid: 7c5e9b0a1d3f4628a4b9d2e7c1f0a385
+          name: 'EDP Neighbor Discovery'
+          type: SNMP_AGENT
+          snmp_oid: 'discovery[{#SNMPVALUE},1.3.6.1.4.1.1916.1.13.2.1.3]'
+          key: extreme.edp.discovery
+          delay: 5m
+          description: |
+            EXTREME-EDP-MIB::extremeEdpTable — Extreme-to-Extreme
+            neighbor discovery (Extreme's predecessor to LLDP, still on
+            by default on EXOS). One row per (local port, neighbor)
+            pair. {#SNMPVALUE} is the neighbor's hostname.
+          item_prototypes:
+            - uuid: 8d6f0a1b2c4e4739b5cae0f8d2014b96
+              name: 'EDP {#SNMPINDEX}: neighbor name'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.1916.1.13.2.1.3.{#SNMPINDEX}'
+              key: 'extreme.edp.name[{#SNMPINDEX}]'
+              delay: 5m
+              trends: '0'
+              value_type: CHAR
+              description: 'extremeEdpNeighborName — peer''s system name.'
+              tags:
+                - tag: component
+                  value: edp
+            - uuid: 9e7a1b2c3d5f484ac6dbf1a9e3125ca7
+              name: 'EDP {#SNMPINDEX}: neighbor software version'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.1916.1.13.2.1.4.{#SNMPINDEX}'
+              key: 'extreme.edp.version[{#SNMPINDEX}]'
+              delay: 1h
+              trends: '0'
+              value_type: CHAR
+              description: 'extremeEdpNeighborSoftwareVersion — peer''s EXOS version.'
+              preprocessing:
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 12h
+              tags:
+                - tag: component
+                  value: edp
+            - uuid: 0f8b2c3d4e6a495bd7eca2b0f4236db8
+              name: 'EDP {#SNMPINDEX}: neighbor slot'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.1916.1.13.2.1.5.{#SNMPINDEX}'
+              key: 'extreme.edp.slot[{#SNMPINDEX}]'
+              delay: 5m
+              trends: '0'
+              description: 'extremeEdpNeighborSlot — peer''s slot number.'
+              tags:
+                - tag: component
+                  value: edp
+            - uuid: 1a9c3d4e5f6b40acf8fdb3c1a53472c9
+              name: 'EDP {#SNMPINDEX}: neighbor port'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.1916.1.13.2.1.6.{#SNMPINDEX}'
+              key: 'extreme.edp.port[{#SNMPINDEX}]'
+              delay: 5m
+              trends: '0'
+              description: 'extremeEdpNeighborPort — peer''s port number.'
+              tags:
+                - tag: component
+                  value: edp
+            - uuid: 2b0d4e5f6a7c41bda9aec4d2b6458310
+              name: 'EDP {#SNMPINDEX}: entry age'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.1916.1.13.2.1.7.{#SNMPINDEX}'
+              key: 'extreme.edp.age[{#SNMPINDEX}]'
+              delay: 5m
+              units: s
+              description: |
+                extremeEdpEntryAge — seconds since this entry was last
+                refreshed. The dashboard can flag stale entries (e.g.,
+                > 90s without refresh likely means the neighbor is gone).
+              tags:
+                - tag: component
+                  value: edp

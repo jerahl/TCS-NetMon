@@ -40,7 +40,6 @@ Output (default):
                   "hardwareId": "<hw-guid>",
                   "hardwareName": "AXIS-encoder-01",
                   "hardwareModel": "AXIS Q7411",
-                  "recordingServerId": "<rs-guid>",     # grandparent RS
                   "relations": {...},                    # full original record
                   ...
               },
@@ -55,14 +54,6 @@ that way, we fall back to per-hardware GET /hardware/{id}/settings calls,
 parallelized with a small thread pool. Use --no-mac to skip MAC enrichment
 entirely if the extra round-trips are unwelcome.
 
-The recordingServerId is the camera's grandparent in the XProtect tree
-(ManagementServer > RecordingServer > Hardware > Camera). Neither the camera
-nor its hardware record exposes it directly, so we build a hardware->RS map
-from /recordingServers/{id}/hardware (the same walk milestone_rs_state.py
-uses) and stamp each camera from its hardwareId. Use --no-rs-map to skip the
-extra calls (recordingServerId stays empty; the dashboard's per-camera
-Recording server field then shows "—").
-
 Usage:
     milestone_cameras_state.py <host> <username> <password>
                               [--scheme https] [--verify-tls]
@@ -70,7 +61,7 @@ Usage:
                               [--idp-path /IDP/connect/token]
                               [--api-base /api/rest/v1]
                               [--page-size 500]
-                              [--no-mac] [--mac-workers 8] [--no-rs-map]
+                              [--no-mac] [--mac-workers 8]
 
 Exit codes:
     0  success (JSON on stdout)
@@ -230,149 +221,6 @@ def _http_get_json(
     )
     with urllib.request.urlopen(req, context=ctx, timeout=timeout) as r:
         return json.loads(r.read().decode())
-
-
-# ---------------------------------------------------------------------------
-# Camera-group name map
-#
-# The dashboard's Cameras tab buckets cameras under their Milestone group
-# (the Smart-Client folder tree). The groups snapshot already covers this,
-# but a stripped/stale groups reader leaves the dashboard with no camera→
-# group mapping at all. Walking /cameraGroups here gives the cameras
-# snapshot its own copy of the membership, so the dashboard has a second
-# independent path that survives a broken groups reader.
-# ---------------------------------------------------------------------------
-def fetch_camera_groupname_map(
-    base: str, token: str, ctx: ssl.SSLContext | None,
-    timeout: float, api_base: str,
-) -> dict[str, str]:
-    """Return {camera-guid: group-display-name}. Empty on any error.
-
-    One HTTP call via /cameraGroups?includeChildren=cameras — was 1 + N
-    (one per group) before. The OpenAPI spec lists `cameras` as a valid
-    includeChildren on cameraGroups, so the embedded membership comes
-    back inline. Older API versions that don't honour it get the
-    per-group walk as a fallback.
-    """
-    out: dict[str, str] = {}
-    fast_url = f"{base}{api_base}/cameraGroups?includeChildren=cameras"
-    try:
-        gr = _http_get_json(fast_url, token, ctx, timeout)
-        for g in (gr.get("array") or gr.get("data") or []):
-            if not isinstance(g, dict):
-                continue
-            gid = g.get("id")
-            if not gid:
-                continue
-            gname = (g.get("displayName") or g.get("name")
-                     or g.get("description") or str(gid))
-            for c in (g.get("cameras") or []):
-                cid = c.get("id") if isinstance(c, dict) else None
-                # First group claiming a camera wins (Milestone groups are
-                # effectively exclusive at the leaf folder).
-                if cid and cid not in out:
-                    out[cid] = gname
-        # If at least one group came back with embedded cameras we trust
-        # the fast path. Otherwise fall through to the per-group walk so
-        # an API version that ignored includeChildren doesn't strand us
-        # with an empty map.
-        if out:
-            return out
-    except Exception as e:  # noqa: BLE001
-        print(f"[grpmap] /cameraGroups?includeChildren=cameras failed: {e}; "
-              f"falling back to per-group walk", file=sys.stderr)
-
-    # Fallback: N+1 walk (the original implementation).
-    try:
-        gr = _http_get_json(f"{base}{api_base}/cameraGroups", token, ctx, timeout)
-    except Exception as e:  # noqa: BLE001
-        print(f"[grpmap] cameraGroups fetch failed: {e}", file=sys.stderr)
-        return out
-    for g in (gr.get("array") or gr.get("data") or []):
-        if not isinstance(g, dict):
-            continue
-        gid = g.get("id")
-        if not gid:
-            continue
-        gname = (g.get("displayName") or g.get("name")
-                 or g.get("description") or str(gid))
-        try:
-            ch = _http_get_json(
-                f"{base}{api_base}/cameraGroups/{gid}/cameras",
-                token, ctx, timeout)
-        except Exception as e:  # noqa: BLE001
-            print(f"[grpmap] cameras fetch failed for grp {gid}: {e}",
-                  file=sys.stderr)
-            continue
-        for c in (ch.get("array") or ch.get("data") or []):
-            cid = c.get("id") if isinstance(c, dict) else None
-            if cid and cid not in out:
-                out[cid] = gname
-    return out
-
-
-# ---------------------------------------------------------------------------
-# Recording-server map
-#
-# A camera's relations.parent is its hardware; the recording server is the
-# grandparent (ManagementServer > RecordingServer > Hardware > Camera) and
-# isn't exposed on the camera or hardware record. Walk the RS endpoints —
-# the authoritative source, same as milestone_rs_state.py — to build a
-# hardware GUID -> recording-server GUID map so flatten can stamp each camera.
-# ---------------------------------------------------------------------------
-def fetch_hardware_recordingserver_map(
-    base: str, token: str, ctx: ssl.SSLContext | None,
-    timeout: float, api_base: str,
-) -> dict[str, str]:
-    """Return {hardware-guid: recording-server-guid}.
-
-    One HTTP call via /recordingServers?includeChildren=hardware — was
-    1 + N (one per RS) before. Falls back to the per-RS walk if the
-    server doesn't honour the include. Returns {} and logs on any error
-    so the snapshot still writes (recordingServerId just stays empty).
-    """
-    out: dict[str, str] = {}
-    fast_url = f"{base}{api_base}/recordingServers?includeChildren=hardware"
-    try:
-        rs_resp = _http_get_json(fast_url, token, ctx, timeout)
-        for rs in (rs_resp.get("array") or rs_resp.get("data") or []):
-            rs_id = rs.get("id") if isinstance(rs, dict) else None
-            if not rs_id:
-                continue
-            for hw in (rs.get("hardware") or []):
-                hwid = hw.get("id") if isinstance(hw, dict) else None
-                if hwid:
-                    out[hwid] = rs_id
-        if out:
-            return out
-    except Exception as e:  # noqa: BLE001
-        print(f"[rsid] /recordingServers?includeChildren=hardware failed: {e}; "
-              f"falling back to per-RS walk", file=sys.stderr)
-
-    # Fallback: N+1 walk (the original implementation).
-    try:
-        rs_resp = _http_get_json(
-            f"{base}{api_base}/recordingServers", token, ctx, timeout)
-    except Exception as e:  # noqa: BLE001
-        print(f"[rsid] recordingServers fetch failed: {e}", file=sys.stderr)
-        return out
-    for rs in (rs_resp.get("array") or rs_resp.get("data") or []):
-        rs_id = rs.get("id") if isinstance(rs, dict) else None
-        if not rs_id:
-            continue
-        try:
-            hw_resp = _http_get_json(
-                f"{base}{api_base}/recordingServers/{rs_id}/hardware",
-                token, ctx, timeout)
-        except Exception as e:  # noqa: BLE001
-            print(f"[rsid] hardware fetch failed for RS {rs_id}: {e}",
-                  file=sys.stderr)
-            continue
-        for hw in (hw_resp.get("array") or hw_resp.get("data") or []):
-            hwid = hw.get("id") if isinstance(hw, dict) else None
-            if hwid:
-                out[hwid] = rs_id
-    return out
 
 
 def fetch_hardware_with_cameras(
@@ -724,24 +572,17 @@ def enrich_hardware_with_settings(
 # ---------------------------------------------------------------------------
 # Flatten hardware -> cameras
 # ---------------------------------------------------------------------------
-def flatten_cameras(hw_list: list[dict], hw_to_rs: dict[str, str] | None = None,
-                    cam_groups: dict[str, str] | None = None) -> list[dict]:
+def flatten_cameras(hw_list: list[dict]) -> list[dict]:
     """Walk hardware -> child cameras, injecting hardware fields per camera.
 
     Injected per camera:
-        address           — bare host (URL/port stripped) for ICMP
-        mac               — normalized MAC, "AA:BB:CC:DD:EE:FF" or ""
-        macRaw            — the value as Milestone returned it (for debugging)
-        hardwareId        — parent hardware GUID
-        hardwareName      — parent hardware display name
-        hardwareModel     — parent hardware model string
-        recordingServerId — grandparent recording-server GUID (from
-                            hw_to_rs[hardwareId]); "" when unknown
-        groupName         — Milestone camera-group label (from cam_groups);
-                            "" when the camera isn't in any group / map missing
+        address       — bare host (URL/port stripped) for ICMP
+        mac           — normalized MAC, "AA:BB:CC:DD:EE:FF" or ""
+        macRaw        — the value as Milestone returned it (for debugging)
+        hardwareId    — parent hardware GUID
+        hardwareName  — parent hardware display name
+        hardwareModel — parent hardware model string
     """
-    hw_to_rs = hw_to_rs or {}
-    cam_groups = cam_groups or {}
     cameras: list[dict] = []
     for hw in hw_list or []:
         if not isinstance(hw, dict):
@@ -777,20 +618,6 @@ def flatten_cameras(hw_list: list[dict], hw_to_rs: dict[str, str] | None = None,
         mac_raw = _find_mac(settings_dict)
         mac = mac_norm(mac_raw)
 
-        hw_id = hw.get("id") or ""
-        # The recording server is the hardware's parent. Prefer the
-        # authoritative RS-walk map; fall back to a recordingServerId the
-        # hardware record may carry inline on some API versions.
-        rs_id = hw_to_rs.get(hw_id, "")
-        if not rs_id:
-            rs_id = hw.get("recordingServerId") or ""
-            rel = hw.get("relations") or {}
-            parent = rel.get("parent") if isinstance(rel, dict) else None
-            if not rs_id and isinstance(parent, dict) \
-                    and str(parent.get("type", "")).lower() in (
-                        "recordingservers", "recordingserver"):
-                rs_id = parent.get("id") or ""
-
         for cam in kids:
             if not isinstance(cam, dict):
                 continue
@@ -799,13 +626,11 @@ def flatten_cameras(hw_list: list[dict], hw_to_rs: dict[str, str] | None = None,
             cam["address"] = bare_host(hw.get("address"))
             cam["mac"] = mac
             cam["macRaw"] = mac_raw
-            cam["hardwareId"] = hw_id
+            cam["hardwareId"] = hw.get("id") or ""
             cam["hardwareName"] = (
                 hw.get("name") or hw.get("displayName") or ""
             )
             cam["hardwareModel"] = hw.get("model") or ""
-            cam["recordingServerId"] = rs_id
-            cam["groupName"] = cam_groups.get(cam.get("id") or "", "")
             cameras.append(cam)
     return cameras
 
@@ -851,18 +676,6 @@ def main() -> int:
                          "(default 8, capped at 32). Higher values "
                          "are faster on big installs but put more "
                          "concurrent load on the API Gateway.")
-    ap.add_argument("--no-rs-map", action="store_true",
-                    help="Skip building the hardware->recording-server "
-                         "map (1 + N_recording_servers extra API calls). "
-                         "recordingServerId will be empty on every camera, "
-                         "and the dashboard's per-camera Recording server "
-                         "field will show '—'.")
-    ap.add_argument("--no-group-map", action="store_true",
-                    help="Skip building the camera->group map "
-                         "(1 + N_groups extra API calls via /cameraGroups). "
-                         "groupName will be empty on every camera, and the "
-                         "dashboard's Cameras navigator will fall back to "
-                         "the site host label for grouping.")
     args = ap.parse_args()
 
     base = f"{args.scheme}://{args.host}"
@@ -937,44 +750,14 @@ def main() -> int:
                               "detail": repr(e)}),
                   file=sys.stderr)
 
-    # Step 2c: hardware -> recording-server map, so each camera can be
-    # stamped with the grandparent RS GUID. Failure here is non-fatal —
-    # recordingServerId just stays empty.
-    hw_to_rs: dict[str, str] = {}
-    if not args.no_rs_map:
-        try:
-            hw_to_rs = fetch_hardware_recordingserver_map(
-                base, token, ctx, args.timeout, args.api_base,
-            )
-        except Exception as e:  # noqa: BLE001
-            print(json.dumps({"error": "rs_map_warning",
-                              "detail": repr(e)}),
-                  file=sys.stderr)
-
-    # Step 2d: camera -> group-name map. Gives the cameras snapshot its own
-    # copy of the Smart Client group membership so the dashboard's Cameras
-    # navigator can attribute cameras even when the groups snapshot reader
-    # is stale or strips the cameraIds arrays.
-    cam_groups: dict[str, str] = {}
-    if not args.no_group_map:
-        try:
-            cam_groups = fetch_camera_groupname_map(
-                base, token, ctx, args.timeout, args.api_base,
-            )
-        except Exception as e:  # noqa: BLE001
-            print(json.dumps({"error": "group_map_warning",
-                              "detail": repr(e)}),
-                  file=sys.stderr)
-
     # Step 3: flatten and key by camera GUID.
-    cameras_flat = flatten_cameras(hw_list, hw_to_rs, cam_groups)
+    cameras_flat = flatten_cameras(hw_list)
     keyed: dict[str, dict[str, Any]] = {}
     for cam in cameras_flat:
         keyed[cam["id"]] = cam
 
-    # Diagnostic: how many cameras ended up with a usable MAC / RS id.
+    # Diagnostic: how many cameras ended up with a usable MAC.
     mac_count = sum(1 for c in cameras_flat if c.get("mac"))
-    rsid_count = sum(1 for c in cameras_flat if c.get("recordingServerId"))
 
     # Output shape:
     #   - top-level fields (count, fetched_at, etc.) for diagnostics
@@ -995,7 +778,6 @@ def main() -> int:
                           .strftime("%Y-%m-%dT%H:%M:%SZ"),
         "__hardware_count": len(hw_list),
         "__mac_count": mac_count,
-        "__rsid_count": rsid_count,
         "__array": cameras_flat,
     }
     # Camera GUIDs are added at the root, but we use __-prefixed keys

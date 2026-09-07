@@ -1,0 +1,146 @@
+zabbix_export:
+  version: '7.0'
+  templates:
+    - template: 'Extreme EXOS by SNMP'
+      name: 'Extreme EXOS by SNMP'
+      discovery_rules:
+        # ─────────────────────────────────────────────────────────────
+        # Per-port authenticated sessions — clients currently logged in
+        # on each port via 802.1X / MAC-auth / web-auth / etc.
+        #
+        # Walks ETSYS-MULTI-AUTH-MIB::etsysMultiAuthSessionStationTable
+        # (1.3.6.1.4.1.5624.1.2.46.1.4.1).
+        # Index is the 4-tuple
+        #   (etsysMultiAuthStationAddrType, etsysMultiAuthStationAddr,
+        #    ifIndex, etsysMultiAuthSessionAgentType)
+        # which in OID encoding becomes
+        #   <addrType>.<addrLen>.<addr bytes…>.<ifIndex>.<agentType>
+        # For typical port auth (MAC station, agent type 1=802.1X or
+        # 3=MAC-auth) that's
+        #   3.6.<m1>.<m2>.<m3>.<m4>.<m5>.<m6>.<ifIndex>.<agentType>
+        # — 10 components in {#SNMPINDEX}. The dashboard parses the
+        # second-to-last component to recover the port ifIndex.
+        #
+        # StationAddrType values: 0=unknown, 1=ipv4, 2=ipv6, 3=mac
+        # SessionAgentType values: 1=ieee8021x, 2=pwa (web-auth),
+        #                          3=macAuth, 4=cep,
+        #                          5=radiusSnooping, 6=autoTracking,
+        #                          7=quarantineAgent
+        # AuthStatus values: 1=authSuccess, 2=authFail, 3=authInProgress,
+        #                    4=authIdle, 5=authTerminated
+        #
+        # The LLD filter keeps only authSuccess(1) rows so we don't
+        # create items for terminated / in-progress sessions that the
+        # agent may prune at any time.
+        # ─────────────────────────────────────────────────────────────
+        - uuid: 3d5e7f9a1b0c4d2ea5b7c9e0f2384a16
+          name: 'Port Auth Session Discovery'
+          type: SNMP_AGENT
+          snmp_oid: 'discovery[{#AUTHSTATUS},1.3.6.1.4.1.5624.1.2.46.1.4.1.1.2]'
+          key: extreme.portauth.discovery
+          delay: 5m
+          description: |
+            ETSYS-MULTI-AUTH-MIB::etsysMultiAuthSessionStationTable
+            One row per (MAC, port, auth-method) currently authenticated.
+            Covers 802.1X, MAC-auth, web-auth (PWA), CEP, and a few other
+            EXOS auth agents under one table.
+          filter:
+            evaltype: AND
+            conditions:
+              - macro: '{#AUTHSTATUS}'
+                value: '^1$'
+          item_prototypes:
+            - uuid: 4e6f8a0b1c2d4e3fb6c8da1f035a4b27
+              name: 'Auth session {#SNMPINDEX}: status'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.5624.1.2.46.1.4.1.1.2.{#SNMPINDEX}'
+              key: 'extreme.portauth.status[{#SNMPINDEX}]'
+              delay: 5m
+              trends: '0'
+              description: |
+                etsysMultiAuthSessionStationAuthStatus
+                1=authSuccess  2=authFail  3=authInProgress
+                4=authIdle     5=authTerminated
+              tags:
+                - tag: component
+                  value: portauth
+            - uuid: 5f7a9b1c2d3e4f48c7d9eb2a146b5c38
+              name: 'Auth session {#SNMPINDEX}: agent type'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.5624.1.2.46.1.4.1.1.1.{#SNMPINDEX}'
+              key: 'extreme.portauth.agent[{#SNMPINDEX}]'
+              delay: 5m
+              trends: '0'
+              description: |
+                etsysMultiAuthSessionAgentType
+                1=ieee8021x  2=pwa (web-auth)  3=macAuth  4=cep
+                5=radiusSnooping  6=autoTracking  7=quarantineAgent
+              tags:
+                - tag: component
+                  value: portauth
+            - uuid: 6a8b0c2d3e4f4a59d8eafc3b257c6d49
+              name: 'Auth session {#SNMPINDEX}: duration'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.5624.1.2.46.1.4.1.1.12.{#SNMPINDEX}'
+              key: 'extreme.portauth.duration[{#SNMPINDEX}]'
+              delay: 5m
+              units: s
+              description: 'etsysMultiAuthSessionDuration — current session length.'
+              tags:
+                - tag: component
+                  value: portauth
+            - uuid: 7b9c1d3e4f5a4b6ae9fbd4c2368d7e50
+              name: 'Auth session {#SNMPINDEX}: idle time'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.5624.1.2.46.1.4.1.1.13.{#SNMPINDEX}'
+              key: 'extreme.portauth.idle[{#SNMPINDEX}]'
+              delay: 5m
+              units: s
+              description: 'etsysMultiAuthSessionIdleTime.'
+              tags:
+                - tag: component
+                  value: portauth
+            - uuid: 8c0d2e4f5a6b4c7bfa0ce5d3479e8f61
+              name: 'Auth session {#SNMPINDEX}: assigned VLAN'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.5624.1.2.46.1.4.1.1.14.{#SNMPINDEX}'
+              key: 'extreme.portauth.vlan[{#SNMPINDEX}]'
+              delay: 5m
+              trends: '0'
+              description: |
+                etsysMultiAuthSessionVlanTunnelAttribute — VLAN ID
+                returned by the auth server (RADIUS Tunnel-Private-Group-ID).
+                Zero = none, 4095 = could not apply.
+              tags:
+                - tag: component
+                  value: portauth
+            - uuid: 9d1e3f5a6b7c4d8c0b1df6e448afa072
+              name: 'Auth session {#SNMPINDEX}: policy index'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.5624.1.2.46.1.4.1.1.7.{#SNMPINDEX}'
+              key: 'extreme.portauth.policy[{#SNMPINDEX}]'
+              delay: 5m
+              trends: '0'
+              description: |
+                etsysMultiAuthSessionPolicyIndex — Filter-ID returned by
+                the auth server (Policy Profile applied to the session).
+              tags:
+                - tag: component
+                  value: portauth
+            - uuid: 0e2f4a6b7c8d4e9d1c2ef7f559b0b183
+              name: 'Auth session {#SNMPINDEX}: applied'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.5624.1.2.46.1.4.1.1.8.{#SNMPINDEX}'
+              key: 'extreme.portauth.applied[{#SNMPINDEX}]'
+              delay: 5m
+              trends: '0'
+              description: |
+                etsysMultiAuthSessionIsApplied — TruthValue: 1=true (this
+                session's policy is the one being applied to the station's
+                traffic on this port), 2=false. With multi-auth, multiple
+                rows can exist for the same MAC+port via different agent
+                types; only one is "applied" at a time per multi-auth
+                precedence.
+              tags:
+                - tag: component
+                  value: portauth

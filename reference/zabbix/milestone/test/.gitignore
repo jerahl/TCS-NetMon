@@ -1,0 +1,4 @@
+# Never commit real credentials or captured live data.
+.env
+fixtures/*.json
+!fixtures/.gitkeep

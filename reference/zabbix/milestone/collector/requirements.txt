@@ -1,0 +1,6 @@
+# Pin to versions known to work with milestone_collector.py.
+# aiohttp: REST client + token fetch.
+# websockets: ESS WebSocket client. The collector handles both <13 and >=13
+#   header-kwarg shapes (extra_headers vs additional_headers).
+aiohttp>=3.9,<4.0
+websockets>=11

@@ -100,6 +100,7 @@ $ver = static fn(string $f): string =>
 <script type="text/babel" src="<?= $ver('tweaks-panel.jsx') ?>"></script>
 <script type="text/babel" src="<?= $ver('primitives.jsx') ?>"></script>
 <script type="text/babel" src="<?= $ver('surveillance-bridge.jsx') ?>"></script>
+<script type="text/babel" src="<?= $ver('surveillance-ws.jsx') ?>"></script>
 <script type="text/babel" src="<?= $ver('global-nav.jsx') ?>"></script>
 <script type="text/babel" src="<?= $ver('nvr-shell.jsx') ?>"></script>
 <script type="text/babel" src="<?= $ver('nvr-overview.jsx') ?>"></script>

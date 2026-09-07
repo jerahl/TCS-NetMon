@@ -4,6 +4,7 @@ namespace Modules\TcsDashboard\Actions;
 
 use API;
 use CControllerResponseData;
+use Modules\TcsDashboard\Lib\FortiAnalyzerClient;
 
 /**
  * GET zabbix.php?action=tcs.fortigate.data
@@ -30,6 +31,28 @@ class ActionFortigateData extends ActionDataBase {
 
     private const CACHE_TTL = 30;
     private const CACHE_KEY = 'tcs_dashboard:fortigate:v1';
+
+    /**
+     * FortiAnalyzer log queries are slow (async logsearch), so the FA-derived
+     * fragments are cached on their own, longer TTL and spliced onto every
+     * (cheap) SNMP rebuild. The SNMP page stays snappy; FAZ is hit at most
+     * once per FA_CACHE_TTL.
+     */
+    private const FA_CACHE_TTL = 120;
+    private const FA_CACHE_KEY = 'tcs_dashboard:fortigate:fa:v1';
+
+    /** FortiAnalyzer connection macros (global scope). */
+    private const FA_MACROS = [
+        'url'        => '{$TCS.FORTIANALYZER.URL}',
+        'user'       => '{$TCS.FORTIANALYZER.USER}',
+        'pass'       => '{$TCS.FORTIANALYZER.PASS}',
+        'token'      => '{$TCS.FORTIANALYZER.TOKEN}',
+        'adom'       => '{$TCS.FORTIANALYZER.ADOM}',
+        'verify_ssl' => '{$TCS.FORTIANALYZER.VERIFY.SSL}',
+    ];
+
+    /** Look-back window for FAZ aggregations, in hours. */
+    private const FA_WINDOW_HOURS = 24;
 
     /** Template name. The dashboard expects items keyed by this template. */
     private const TEMPLATE_NAME = 'FortiGate by SNMP';
@@ -98,7 +121,7 @@ class ActionFortigateData extends ActionDataBase {
             'newSessions24h'=> [],
             'throughput24h' => ['ingress' => [], 'egress' => []],
             'events'     => [],
-            'sources'    => ['zbx' => 'unknown'],
+            'sources'    => ['zbx' => 'unknown', 'fa' => 'unknown'],
         ];
     }
 
@@ -203,8 +226,195 @@ class ActionFortigateData extends ActionDataBase {
         $payload['events'] = self::buildEvents(array_column($hosts, 'hostid'), $hosts);
 
         $payload['sources']['zbx'] = 'live';
-        $payload['loading']        = false;
+
+        // 10. FortiAnalyzer enrichment — fills the sections SNMP can't cover
+        //     (top threats, top policies, SSL-VPN users, IPsec byte counters,
+        //     UTM block counts). Never throws into the payload: on any failure
+        //     the SNMP data stands and sources.fa flips to 'error'/'empty'.
+        self::enrichFromFortiAnalyzer($payload, $primary);
+
+        $payload['loading'] = false;
         return $payload;
+    }
+
+    // ── FortiAnalyzer enrichment ─────────────────────────────────────────────
+
+    /**
+     * Splice FortiAnalyzer-derived fragments onto the SNMP payload. The FA
+     * fragments are cached separately (FA_CACHE_TTL) so the slow logsearch
+     * calls don't run on every 30s SNMP refresh.
+     *
+     * @param array $payload modified in place
+     * @param array $primary the primary FortiGate host (for the device serial)
+     */
+    private static function enrichFromFortiAnalyzer(array &$payload, array $primary): void {
+        $cfg = self::resolveFaMacros();
+        if ($cfg === null) {
+            $payload['sources']['fa'] = 'unconfigured';
+            return;
+        }
+
+        $fa = self::faCacheGet();
+        if ($fa === null) {
+            try {
+                $fa = self::queryFortiAnalyzer($cfg, $primary);
+                self::faCacheSet($fa);
+            } catch (\Throwable $e) {
+                error_log('[tcs_dashboard] fortigate.data FAZ enrichment: ' . $e->getMessage());
+                $payload['sources']['fa'] = 'error';
+                return;
+            }
+        }
+
+        if (!empty($fa['topThreats']))  $payload['topThreats']  = $fa['topThreats'];
+        if (!empty($fa['topPolicies'])) $payload['topPolicies'] = $fa['topPolicies'];
+        if (!empty($fa['sslvpn']))      $payload['sslvpn']      = $fa['sslvpn'];
+
+        // Merge per-tunnel byte counters onto the SNMP status rows, matched by
+        // tunnel name. SNMP owns up/down; FAZ owns rx/tx/peer.
+        if (!empty($fa['ipsec'])) {
+            foreach ($payload['ipsec'] as &$row) {
+                $key = strtolower((string) ($row['id'] ?? ''));
+                if ($key !== '' && isset($fa['ipsec'][$key])) {
+                    $row['rxMb'] = $fa['ipsec'][$key]['rxMb'];
+                    $row['txMb'] = $fa['ipsec'][$key]['txMb'];
+                    if (($row['peer'] ?? '—') === '—' && ($fa['ipsec'][$key]['peer'] ?? '—') !== '—') {
+                        $row['peer'] = $fa['ipsec'][$key]['peer'];
+                    }
+                }
+            }
+            unset($row);
+        }
+
+        // UTM block counts: update the av/wf/ac/dns cells and the threat KPIs.
+        if (!empty($fa['utm'])) {
+            foreach ($payload['utm'] as &$cell) {
+                $id = (string) ($cell['id'] ?? '');
+                if (isset($fa['utm'][$id])) {
+                    $cell['blocks'] = $fa['utm'][$id];
+                }
+            }
+            unset($cell);
+            $payload['totals']['threats']['av_blocks_24h']  = (int) ($fa['utm']['av']  ?? 0);
+            $payload['totals']['threats']['web_blocks_24h'] = (int) ($fa['utm']['wf']  ?? 0);
+            $payload['totals']['threats']['app_blocks_24h'] = (int) ($fa['utm']['ac']  ?? 0);
+        }
+
+        // Roll up the live policy count from what FAZ surfaced.
+        if (!empty($fa['topPolicies'])) {
+            $payload['totals']['policies']['active'] = count($fa['topPolicies']);
+        }
+
+        $payload['sources']['fa'] = ($fa['_ok'] ?? false) ? 'live' : 'empty';
+    }
+
+    /**
+     * Run every FortiAnalyzer query once and assemble the cacheable fragment.
+     * @return array<string,mixed>
+     */
+    private static function queryFortiAnalyzer(array $cfg, array $primary): array {
+        $client = FortiAnalyzerClient::fromMacros($cfg);
+        // Filter FAZ logs to this FortiGate by serial when we know it; an empty
+        // device id means "all devices in the ADOM".
+        $serial = (string) ($primary['inventory']['serialno_a'] ?? '');
+        $h = self::FA_WINDOW_HOURS;
+
+        $threats  = $client->topThreats($serial, $h, 12);
+        $policies = $client->topPolicies($serial, $h, 25);
+        $sslvpn   = $client->sslVpnSessions($serial, $h, 40);
+        $ipsec    = $client->ipsecStats($serial, $h);
+        $utm      = $client->utmBlockCounts($serial, $h);
+
+        // Diagnostic: how many rows each aggregator actually produced. If a
+        // logsearch returned rows but the matching count here is 0, the field
+        // mapping for that section is off (vs. simply no source data).
+        error_log(sprintf(
+            '[tcs_dashboard] FAZ produced: threats=%d policies=%d sslvpn=%d ipsec=%d utm=%s (serial=%s)',
+            count($threats), count($policies), count($sslvpn), count($ipsec),
+            json_encode($utm), $serial !== '' ? $serial : '(all)'
+        ));
+
+        return [
+            'topThreats'  => $threats,
+            'topPolicies' => $policies,
+            'sslvpn'      => $sslvpn,
+            'ipsec'       => $ipsec,
+            'utm'         => $utm,
+            // Mark the source live only when something meaningful came back.
+            // ($utm always has its 4 keys, so test for a non-zero count.)
+            '_ok' => (bool) ($threats || $policies || $sslvpn || $ipsec
+                || array_sum(array_map('intval', $utm)) > 0),
+        ];
+    }
+
+    /**
+     * Resolve the FortiAnalyzer connection config from global macros. Returns
+     * null when neither a token nor a user+pass+url is configured.
+     *
+     * @return array{url:string,user:string,pass:string,token:string,adom:string,verify_ssl:bool}|null
+     */
+    private static function resolveFaMacros(): ?array {
+        $rows = API::UserMacro()->get([
+            'output'      => ['macro', 'value'],
+            'globalmacro' => true,
+            'filter'      => ['macro' => array_values(self::FA_MACROS)],
+        ]) ?: [];
+        $bag = [];
+        foreach ($rows as $r) {
+            $bag[(string) $r['macro']] = trim((string) ($r['value'] ?? ''));
+        }
+
+        $url   = $bag[self::FA_MACROS['url']]   ?? '';
+        $user  = $bag[self::FA_MACROS['user']]  ?? '';
+        $pass  = $bag[self::FA_MACROS['pass']]  ?? '';
+        $token = $bag[self::FA_MACROS['token']] ?? '';
+        if ($url === '' || ($token === '' && ($user === '' || $pass === ''))) {
+            return null;
+        }
+
+        return [
+            'url'        => $url,
+            'user'       => $user,
+            'pass'       => $pass,
+            'token'      => $token,
+            'adom'       => ($bag[self::FA_MACROS['adom']] ?? '') ?: 'root',
+            'verify_ssl' => ($bag[self::FA_MACROS['verify_ssl']] ?? '1') !== '0',
+        ];
+    }
+
+    /** Filesystem fallback path for the FA fragment when APCu is unavailable. */
+    private const FA_CACHE_FILE = '/tmp/tcs_dashboard_cache/fortigate_fa_v1.json';
+
+    private static function faCacheGet(): ?array {
+        if (function_exists('apcu_fetch')) {
+            $hit = apcu_fetch(self::FA_CACHE_KEY, $ok);
+            if ($ok && is_array($hit)) return $hit;
+        }
+        // Filesystem fallback — Zabbix frontends often run without APCu, in
+        // which case every page load would otherwise re-run all FAZ searches.
+        if (is_file(self::FA_CACHE_FILE)) {
+            $raw = @file_get_contents(self::FA_CACHE_FILE);
+            if ($raw !== false) {
+                $row = json_decode($raw, true);
+                if (is_array($row) && (int) ($row['_expires'] ?? 0) > time() && is_array($row['data'] ?? null)) {
+                    return $row['data'];
+                }
+            }
+        }
+        return null;
+    }
+
+    private static function faCacheSet(array $fragment): void {
+        if (function_exists('apcu_store')) {
+            apcu_store(self::FA_CACHE_KEY, $fragment, self::FA_CACHE_TTL);
+        }
+        $dir = dirname(self::FA_CACHE_FILE);
+        if (!is_dir($dir)) @mkdir($dir, 0700, true);
+        @file_put_contents(self::FA_CACHE_FILE, json_encode([
+            '_expires' => time() + self::FA_CACHE_TTL,
+            'data'     => $fragment,
+        ], JSON_UNESCAPED_SLASHES));
+        @chmod(self::FA_CACHE_FILE, 0600);
     }
 
     // ── Host discovery ─────────────────────────────────────────────────────

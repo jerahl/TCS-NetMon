@@ -1,0 +1,50 @@
+{"error": "api_error", "detail": "hardware HTTP 504: "}
+2026-09-07T05:16:41-05:00 FAILURE rc=3
+2026-09-07T05:30:02-05:00 starting cameras fetch: co-milestone.tcs.tusc.k12.al.us svczabbix <REDACTED> --scheme https
+{"error": "api_error", "detail": "hardware HTTP 504: "}
+2026-09-07T05:31:42-05:00 FAILURE rc=3
+2026-09-07T05:45:01-05:00 starting cameras fetch: co-milestone.tcs.tusc.k12.al.us svczabbix <REDACTED> --scheme https
+{"error": "api_error", "detail": "hardware HTTP 504: "}
+2026-09-07T05:46:41-05:00 FAILURE rc=3
+2026-09-07T06:00:02-05:00 starting cameras fetch: co-milestone.tcs.tusc.k12.al.us svczabbix <REDACTED> --scheme https
+{"error": "api_error", "detail": "hardware HTTP 504: "}
+2026-09-07T06:01:42-05:00 FAILURE rc=3
+2026-09-07T06:15:01-05:00 starting cameras fetch: co-milestone.tcs.tusc.k12.al.us svczabbix <REDACTED> --scheme https
+{"error": "api_error", "detail": "hardware HTTP 504: "}
+2026-09-07T06:16:42-05:00 FAILURE rc=3
+2026-09-07T06:30:01-05:00 starting cameras fetch: co-milestone.tcs.tusc.k12.al.us svczabbix <REDACTED> --scheme https
+{"error": "api_error", "detail": "hardware HTTP 504: "}
+2026-09-07T06:31:41-05:00 FAILURE rc=3
+2026-09-07T06:45:01-05:00 starting cameras fetch: co-milestone.tcs.tusc.k12.al.us svczabbix <REDACTED> --scheme https
+{"error": "api_error", "detail": "hardware HTTP 504: "}
+2026-09-07T06:46:42-05:00 FAILURE rc=3
+2026-09-07T07:00:01-05:00 starting cameras fetch: co-milestone.tcs.tusc.k12.al.us svczabbix <REDACTED> --scheme https
+{"error": "api_error", "detail": "hardware HTTP 504: "}
+2026-09-07T07:01:41-05:00 FAILURE rc=3
+2026-09-07T07:15:01-05:00 starting cameras fetch: co-milestone.tcs.tusc.k12.al.us svczabbix <REDACTED> --scheme https
+{"error": "api_error", "detail": "hardware HTTP 504: "}
+2026-09-07T07:16:42-05:00 FAILURE rc=3
+2026-09-07T07:30:01-05:00 starting cameras fetch: co-milestone.tcs.tusc.k12.al.us svczabbix <REDACTED> --scheme https
+{"error": "api_error", "detail": "hardware HTTP 504: "}
+2026-09-07T07:31:41-05:00 FAILURE rc=3
+2026-09-07T07:45:01-05:00 starting cameras fetch: co-milestone.tcs.tusc.k12.al.us svczabbix <REDACTED> --scheme https
+{"error": "api_error", "detail": "hardware HTTP 504: "}
+2026-09-07T07:46:42-05:00 FAILURE rc=3
+2026-09-07T08:00:01-05:00 starting cameras fetch: co-milestone.tcs.tusc.k12.al.us svczabbix <REDACTED> --scheme https
+{"error": "api_error", "detail": "hardware HTTP 504: "}
+2026-09-07T08:01:41-05:00 FAILURE rc=3
+2026-09-07T08:15:02-05:00 starting cameras fetch: co-milestone.tcs.tusc.k12.al.us svczabbix <REDACTED> --scheme https
+{"error": "api_error", "detail": "hardware HTTP 504: "}
+2026-09-07T08:16:42-05:00 FAILURE rc=3
+2026-09-07T08:30:01-05:00 starting cameras fetch: co-milestone.tcs.tusc.k12.al.us svczabbix <REDACTED> --scheme https
+{"error": "api_error", "detail": "hardware HTTP 504: "}
+2026-09-07T08:31:42-05:00 FAILURE rc=3
+2026-09-07T08:45:01-05:00 starting cameras fetch: co-milestone.tcs.tusc.k12.al.us svczabbix <REDACTED> --scheme https
+{"error": "api_error", "detail": "hardware HTTP 504: "}
+2026-09-07T08:46:41-05:00 FAILURE rc=3
+2026-09-07T09:00:01-05:00 starting cameras fetch: co-milestone.tcs.tusc.k12.al.us svczabbix <REDACTED> --scheme https
+{"error": "api_error", "detail": "hardware HTTP 504: "}
+2026-09-07T09:01:42-05:00 FAILURE rc=3
+2026-09-07T09:15:01-05:00 starting cameras fetch: co-milestone.tcs.tusc.k12.al.us svczabbix <REDACTED> --scheme https
+{"error": "api_error", "detail": "hardware HTTP 504: "}
+2026-09-07T09:16:41-05:00 FAILURE rc=3
