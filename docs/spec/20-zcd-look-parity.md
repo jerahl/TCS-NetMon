@@ -352,7 +352,50 @@ registered camera addresses. That is now met: spec 19 M0 synced `cameras.ip` /
 - Tests: fake httpx transport; asserts on the address allow-list (a `device_id`
   that is a switch → 404), size whitelist, vendor routing, and the reason headers.
 
-### S5 — Camera Detail parity (1–2 sessions)
+### S5 — Camera detail in ZCD's layout — **done 2026-09-07**
+
+Built as specified below, with the substitutions the data forced. ZCD's own
+camera page is DEMO-bannered — its rings, sparklines and stream fields render
+from `nvr-data.jsx` fixtures and its Smart Client / Restart Stream buttons do
+nothing — so this took the structure and filled the slots that have a source.
+
+**Same structure:** `PageHeader` (name · address · model chip · pills for state,
+Milestone group, site, recording, recorder, MAC, cache age) · four tabs
+(Overview / Live / Events / Configuration, the tab in the URL) · `320px 1fr`
+with the sidecar left (status line, 16:9 preview with ZCD's corner overlays,
+Open-live-view, Location / Hardware / Recording-server blocks) and the tab's
+cards right, in ZCD's order.
+
+**Three slots keep their position and change their mark**, because the data is
+shaped differently:
+
+| ZCD slot | ZCD's mark | Here | Why |
+|---|---|---|---|
+| Device Health | 4 rings: CPU, memory, ICMP latency, packet loss | 4 probe cells: Reachability, Milestone, ICMP, Recording | NetMon has none of ZCD's four per camera (CPU/memory need D10; the poller records up/down without timing). It *does* have four categorical verdicts, which is more than ZCD shows and cannot be drawn as a dial |
+| Live Telemetry · 24h | 4 sparklines | transition strip from `state_events` | per-camera series would be 2,662 series in a ring buffer kept deliberately low-cardinality (D3). Transitions are per-device and real — all 2,651 cameras have history |
+| Live preview | snapshot via the proxy, over a decorative gradient | framed "No preview" + the reason + Open-live-view | there is no proxy until S4/D7, and ZCD's gradient reads as a dark scene, i.e. as though the camera were working |
+
+**Two things this page does that ZCD's cannot:** the Active Issue card runs the
+real alert lifecycle (Ack / Suppress 1h against `/api/alerts`) where ZCD's
+Acknowledge is inert; and the uplink card resolves the port from NetMon's own
+FDB sweep and cross-checks PacketFence, rather than trusting PF alone. ZCD's
+four operator buttons are all present — View in PF, Reevaluate, Restart port,
+Cycle PoE — each self-hiding when its target is unknown, all through the audited
+chokepoint.
+
+**Live coverage after the build:** 2,651 of 2,651 cameras carry transition
+history; 2,465 of 2,662 resolve a switch port by MAC (migration 025's identity
+backfill, against 1,532 when the MAC had to come from PacketFence); 329 open
+camera alerts feed the Active Issue card.
+
+**A finding the transition strip surfaced immediately:** eight cameras changed
+verdict more than 20 times in 24 hours, two of them badly — `bhs-cam-23` 235
+times and `tct-cam-73` 114. Four more are channels of one Bosch multi-imager at
+`10.132.18.198`, which is a single device flapping and being counted four times.
+That is worth chasing on its own; it is also the strongest argument for the
+strip, since a sampled sparkline would have averaged it away.
+
+### S5-original — Camera Detail parity (superseded)
 
 Adopt ZCD's structure, fill it with NetMon's data, drop what nothing feeds:
 
@@ -601,7 +644,7 @@ NetMon largely has. Suggested order (spec 15 §3.2 estimates still apply):
 - [ ] S2 mgmt server, version, licence, RS ESS state, per-RS camera counts, surveillance history series, sites roll-up fields — each either collected or recorded as "not exposed by Config API on 2025 R2"
 - [ ] S3 navigator + table/thumbnail toggle; 2,651 cameras render without jank
 - [ ] S4 snapshot proxy behind `[camera_snapshot] enabled = false`; owner has provisioned the read-only camera login; allow-list + vendor + size tests green; spec 11 D7 entry updated
-- [ ] S5 camera detail in ZCD's four-tab layout with still, active issue, reachability strip, four PF/PoE buttons, recent events
+- [x] **S5 done 2026-09-07** — camera detail in ZCD's four-tab layout: sidecar + preview frame, Device Health as probe cells, 24h transition strip, stream/network kv, one PacketFence & uplink card with all four operator buttons, Active Issue with real Ack/Suppress, Recent Events. `state_events` added to the detail payload. Tab lives in the URL for both routes.
 - [ ] S6 Sites / Servers / Storage / Alarms / Evidence Lock tabs; every unavailable metric named, none rendered as 0
 - [ ] S8 (D11) bulk camera ops: `firmware_images` / `camera_batches` / `camera_batch_items` migrations with rollback notes; batch runner as a supervised task; Bosch profile fixture-tested; `[camera_ops]` default-off + dry-run default; canary → rings → abort threshold; verification by read-back; admin-only; open questions above answered in this spec before the first live batch
 - [ ] Every new component has a `render-check.mjs` case for its no-data shape; API tests for every new query param

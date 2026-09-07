@@ -74,34 +74,87 @@ const cases = [
      if (!text.includes("✓")) throw new Error("a site with nothing wrong scored as a failure");
    }],
 
-  // Camera detail with everything resolved: the path where the port is known
-  // and PoE cycling is offered.
-  ["CameraDetailView · full uplink", D.CameraDetailView, {
-    cam: { ...CAM(), state: {
-             source_status: { value: "up", source: "milestone-ess" },
-             ping: { value: "up", updated_at: "2026-09-06T12:00:00Z" },
-             recording: { value: "up" },
-             reachability: { value: "up" } },
-           switch_port: { switch_device_id: 42, switch_name: "WFS-MDF",
-             switch_site: "Westlawn", port: "4:37", ifindex: 437,
-             oper_state: "up", speed_mbps: 1000, is_sfp: 0, poe_delivering: 1,
-             poe_watts: 6.4, macs_on_port: 1, pf_agrees: true, pf_port: "4:37",
-             candidates: 1, poe_cycle_safe: true,
-             why: "fewest MACs on port, PoE-delivering copper, confirmed by PacketFence" },
-           pf: { mac: "00:11:22:33:44:55", computername: "cam-1", role: "cameras",
-                 reg_status: "reg", vlan: "300", last_switch: "10.0.0.9",
-                 last_port: "4:37", online: 1, updated_at: "2026-09-06T12:00:00Z" },
-           siblings: [{ device_id: 2, name: "chs-cam-1 - Camera 2", recording_state: "up" }] },
-    meta: { packetfence_url: "https://pf.example" } }],
+  // ─── Camera detail, ZCD's layout (spec 20 S5) ───────────────────────────
+  // Everything resolved: the path where the port is known and PoE cycling is
+  // offered. Rendered on each of the four tabs, because a card that only
+  // appears on "config" is otherwise never exercised.
+  ...["overview", "live", "events", "config"].map((tab) => [
+    `CameraDetailView · full uplink · ${tab} tab`, D.CameraDetailView, {
+      cam: { ...CAM(), http_port: null, vendor: "Bosch", firmware: "8.10.0",
+             serial: "0451234567", codec: "H.264", resolution: "1920x1080",
+             fps_target: 15, bitrate_mode: "VBR", recording_mode: "Motion",
+             groups: [{ id: "g", name: "CHS", site_display_name: "Central High School" }],
+             state: {
+               source_status: { value: "up", source: "milestone-ess",
+                                updated_at: "2026-09-07T12:00:00Z" },
+               ping: { value: "up", updated_at: "2026-09-07T12:00:00Z" },
+               recording: { value: "up" },
+               reachability: { value: "up" } },
+             switch_port: { switch_device_id: 42, switch_name: "WFS-MDF",
+               switch_site: "Westlawn", port: "4:37", ifindex: 437,
+               oper_state: "up", speed_mbps: 1000, is_sfp: 0, poe_delivering: 1,
+               poe_watts: 6.4, macs_on_port: 1, pf_agrees: true, pf_port: "4:37",
+               candidates: 1, poe_cycle_safe: true,
+               why: "fewest MACs on port, PoE-delivering copper, confirmed by PacketFence" },
+             pf: { mac: "00:11:22:33:44:55", computername: "cam-1", role: "cameras",
+                   reg_status: "reg", vlan: "300", last_switch: "10.0.0.9",
+                   last_port: "4:37", online: 1, updated_at: "2026-09-07T12:00:00Z" },
+             events: [
+               { dimension: "reachability", old_value: "up", new_value: "down_confirmed",
+                 severity: "crit", source: "netmon", occurred_at: new Date(Date.now() - 3.6e6).toISOString() },
+               { dimension: "source_status", old_value: "down", new_value: "up",
+                 severity: "ok", source: "milestone-ess", occurred_at: new Date(Date.now() - 7.2e6).toISOString() },
+             ],
+             siblings: [{ device_id: 2, name: "chs-cam-1 - Camera 2", recording_state: "up" }] },
+      meta: { packetfence_url: "https://pf.example" },
+      alerts: [], tab },
+    // The tab that owns each card must actually render it.
+    (html) => {
+      const text = html.replace(/<!-- -->/g, "");
+      const want = { overview: "Device health", live: "Stream configuration",
+                     events: "Recent events", config: "Network &amp; identity" }[tab];
+      if (!text.includes(want)) throw new Error(`${tab} tab did not render ${want}`);
+      if (!text.includes("Central High School")) throw new Error("group label missing from the header");
+    },
+  ]),
 
-  // …and the honest-gap path: blind, no port resolved, no PF record. The page
-  // must still render and say why each thing is missing rather than blank out.
+  // …and the honest-gap path: blind, no port, no PF record, no identity, no
+  // history. Every card must still render and say why it is empty.
   ["CameraDetailView · blind, unresolved", D.CameraDetailView, {
-    cam: { ...CAM({ ip: null, recording_state: null }),
+    cam: { ...CAM({ ip: null, recording_state: null, model: null }),
            state: { source_status: { value: "blind", source: "milestone" } },
-           switch_port: null, pf: null, siblings: [] },
-    meta: {} }],
+           switch_port: null, pf: null, siblings: [], groups: [], events: [] },
+    meta: {}, alerts: [] },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (!text.includes("No address")) throw new Error("missing address not stated");
+     if (!text.includes("No state transitions recorded")) throw new Error("empty history not explained");
+   }],
 
+  // An open alert: ZCD's Acknowledge is inert, NetMon's is the real lifecycle.
+  ["CameraDetailView · open alert drives the Active Issue card", D.CameraDetailView, {
+    cam: { ...CAM(), state: { reachability: { value: "down_confirmed" } },
+           switch_port: null, pf: null, siblings: [], groups: [], events: [] },
+    meta: {},
+    alerts: [{ id: 7, rule_name: "unreachable_confirmed", severity: "crit",
+               opened_at: "2026-09-07T10:00:00Z", acked_by: null, closed_at: null }] },
+   (html) => {
+     if (!html.includes("Active issue")) throw new Error("open alert did not surface");
+     if (!html.includes("Suppress 1h")) throw new Error("no lifecycle action offered");
+   }],
+
+  ["ReachabilityStrip · quiet 24h", D.ReachabilityStrip, {
+    events: [{ dimension: "reachability", old_value: "down_confirmed", new_value: "up",
+               severity: "ok", source: "netmon", occurred_at: "2026-09-01T00:00:00Z" }] },
+   (html) => {
+     if (!html.includes("No probe changed its verdict")) throw new Error("quiet window not explained");
+   }],
+
+  ["CameraPreview · no proxy, no address", D.CameraPreview, {
+    cam: { name: "cam-x", resolution: null, fps_target: null, codec: null }, url: null },
+   (html) => {
+     if (!html.includes("No preview")) throw new Error("empty preview did not say so");
+   }],
 
   // ─── Cameras page: the Milestone group tree (spec 20 S3) ────────────────
   ["CamerasView · tree with a school in trouble", C.CamerasView, {

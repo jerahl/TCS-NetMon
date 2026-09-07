@@ -217,7 +217,7 @@ export function CamerasPage({ id, query = {} }) {
   if (!groups || !cams) return <Loading what="camera fleet" />;
 
   return (
-    <CamerasView groups={groups} cams={cams} activeId={activeId}
+    <CamerasView groups={groups} cams={cams} activeId={activeId} query={query}
                  collapsed={collapsed} onToggle={toggle} onAllCollapsed={setAllCollapsed}
                  status={status} onStatus={setStatus}
                  q={q} onQ={setQ} />
@@ -228,7 +228,7 @@ export function CamerasPage({ id, query = {} }) {
 // it with fixed data — a component that only renders after a fetch is never
 // exercised at build time, which is how "usedKnown is not defined" shipped.
 export function CamerasView({ groups, cams, activeId, collapsed, onToggle, onAllCollapsed,
-                              status = "", onStatus, q, onQ }) {
+                              status = "", onStatus, q, onQ, query = {} }) {
   const n = (v) => Number(v) || 0;
   const needle = (q || "").trim().toLowerCase();
   const isProblem = (c) => c.source_status === "blind"
@@ -338,7 +338,7 @@ export function CamerasView({ groups, cams, activeId, collapsed, onToggle, onAll
 
         <div className="sw-main">
           {activeId ? (
-            <CameraDetailPage id={activeId} embedded />
+            <CameraDetailPage id={activeId} embedded query={query} />
           ) : (
             <div className="msg">
               Select a camera from the tree.

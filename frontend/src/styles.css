@@ -6135,3 +6135,85 @@ kbd.k { font-family: var(--mono); font-size: 10px; background: var(--bg-2); bord
 .alarm-row .msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .alarm-row .obj a { color: var(--accent); text-decoration: none; }
 .alarm-row .obj a:hover { text-decoration: underline; }
+
+/* ═══════════ Camera detail (spec 20 S5) ═══════════
+ * ZCD's `tcs.camera.view` lays the page out as `320px 1fr` with an inline
+ * style: preview and physical facts pinned left, the active tab's cards right.
+ * As CSS instead, because this page also renders *inside* the Cameras page's
+ * right pane (behind a 380px navigator) and has to collapse there rather than
+ * squeeze the cards to nothing.
+ */
+.cam-detail-cols {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 14px;
+  align-items: start;
+  margin-top: 14px;
+}
+.cam-detail-side { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.cam-detail-main { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+/* Two rails plus two columns stops fitting well before a phone: the navigator
+ * is 380px and the sidecar 320px, so the sidecar stacks first. */
+@media (max-width: 1500px) {
+  .cam-detail-cols { grid-template-columns: 1fr; }
+}
+
+/* The preview frame. ZCD paints a decorative gradient here, which on a NOC wall
+ * reads as a dark scene — i.e. as though the camera were working. Until the
+ * snapshot proxy exists (D7) the frame says what it is instead. */
+.cam-preview-empty {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; padding: 18px; text-align: center;
+  background:
+    repeating-linear-gradient(135deg, rgba(255,255,255,0.02) 0 8px, transparent 8px 16px),
+    var(--bg-2);
+}
+.cam-preview-empty .cpe-title {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 1.5px;
+  text-transform: uppercase; color: var(--muted);
+}
+.cam-preview-empty .cpe-sub { font-size: 10.5px; color: var(--muted-2); line-height: 1.45; }
+
+/* Overlays carry facts NetMon actually has — the camera's name and its
+ * configured stream — in ZCD's corners. */
+.cam-preview-overlay {
+  position: absolute; font-family: var(--mono); font-size: 9.5px;
+  color: rgba(255,255,255,0.85); text-shadow: 0 1px 2px rgba(0,0,0,0.9);
+  pointer-events: none;
+}
+.cam-preview-overlay.tl { top: 8px; left: 10px; color: #fff; }
+.cam-preview-overlay.bl { bottom: 8px; left: 10px; }
+.cam-preview-overlay.br {
+  bottom: 8px; right: 10px; color: #fff;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.rec-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--err); box-shadow: 0 0 6px var(--err);
+  animation: blink 1.4s infinite;
+}
+
+/* Transition strip — ZCD's "Live Telemetry · 24h" slot. Sparklines there; a
+ * change log here, because `state_events` is per-device and a 2,662-series
+ * ring buffer is not something D3 permits. */
+.tl-strip { display: flex; flex-direction: column; }
+.tl-item {
+  display: grid; grid-template-columns: 10px 90px 1fr;
+  gap: 10px; align-items: center;
+  padding: 7px 14px; border-bottom: 1px solid var(--line);
+  font-size: 11.5px;
+}
+.tl-item:last-child { border-bottom: 0; }
+.tl-item:hover { background: var(--bg-2); }
+.tl-dot { width: 8px; height: 8px; border-radius: 50%; }
+.tl-when { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+.tl-what { color: var(--fg-2); }
+.tl-what b { color: var(--fg); font-weight: 600; }
+
+/* `.stat-grid` already defaults to four columns; naming it makes the intent
+ * explicit alongside the cols-3 / cols-6 variants surveillance.css defines. */
+.stat-grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
+@media (max-width: 1100px) {
+  .stat-grid.cols-4 { grid-template-columns: repeat(2, 1fr); }
+}

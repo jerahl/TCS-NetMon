@@ -450,3 +450,37 @@ def test_camera_detail_lists_its_groups(tmp_path):
         cam = client.get("/api/surveillance/cameras/2").json()
         assert [g["name"] for g in cam["groups"]] == ["BHS", "SKY"]
         assert cam["groups"][0]["site_display_name"] == "Paul W. Bryant High"
+
+
+def test_camera_detail_carries_its_transition_history(tmp_path):
+    """The detail page's 24h strip and events list come from state_events.
+
+    Per-camera *series* would need 2,662 series in a ring buffer kept
+    deliberately low-cardinality (D3), so the transition log is the honest unit
+    — and it is per-device, which the fleet series are not.
+    """
+    url = f"sqlite:///{tmp_path / 'ev.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    now = datetime.now(timezone.utc)
+    with engine.begin() as c:
+        c.execute(text(
+            "INSERT INTO state_events (device_id, dimension, old_value, new_value, "
+            "severity, source, occurred_at) VALUES "
+            "(2,'reachability','up','down_confirmed','crit','netmon',:t1),"
+            "(2,'source_status','up','down','crit','milestone-ess',:t2),"
+            "(3,'recording','up','down','crit','milestone',:t1)"),
+            {"t1": now, "t2": now})
+    engine.dispose()
+    with _client(tmp_path, url) as client:
+        cam = client.get("/api/surveillance/cameras/2").json()
+        # Only this camera's transitions — CAM-Gym's must not leak in.
+        assert len(cam["events"]) == 2
+        assert {e["dimension"] for e in cam["events"]} == {"reachability", "source_status"}
+        assert cam["events"][0]["new_value"] in ("down_confirmed", "down")
+        assert cam["events"][0]["source"] in ("netmon", "milestone-ess")
+
+        # A camera with no history gets an empty list, not a missing key — the
+        # page renders "nothing has changed", which is a real answer.
+        other = client.get("/api/surveillance/cameras/3").json()
+        assert [e["dimension"] for e in other["events"]] == ["recording"]

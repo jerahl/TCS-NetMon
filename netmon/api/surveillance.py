@@ -319,6 +319,18 @@ def camera_detail(
         "LEFT JOIN sites s ON s.name = g.name "
         "WHERE m.device_id = :d ORDER BY g.name", {"d": device_id})]
 
+    # This camera's own transition history. `state_events` is NetMon's real
+    # history (CLAUDE.md §6) and it is per-device, which is what lets the detail
+    # page show a 24h reachability strip and a recent-events list where ZCD's
+    # equivalents render empty sparklines — per-camera *series* would need
+    # 2,662 series in a ring buffer deliberately kept low-cardinality (D3), so
+    # transitions are the honest unit here.
+    out["events"] = [dict(r) for r in db.fetch_all(
+        engine,
+        "SELECT dimension, old_value, new_value, severity, source, occurred_at "
+        "FROM state_events WHERE device_id = :d "
+        "ORDER BY occurred_at DESC LIMIT 60", {"d": device_id})]
+
     out["siblings"] = []
     if out.get("hardware_id"):
         out["siblings"] = [dict(r) for r in db.fetch_all(
