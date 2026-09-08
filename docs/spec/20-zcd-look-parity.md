@@ -1003,9 +1003,64 @@ The doc contains no upload endpoint; it covers RCP+ commands only. So
 `/upload.htm` remains what spec 20 asserts and what the proving camera will
 confirm or refute — which is exactly what a proving camera is for.
 
-**Outstanding before the first canary:** the firmware store upload endpoint (the
-owner has the image), and the admin API/UI. The verification half is done and
-proven against production hardware.
+**7. The platform gate, 2026-09-08 — found before anything was pushed.** The
+owner supplied `CPP14_FW_9.80.0106.fw` and nominated alb-cam-44 as the proving
+camera. Those do not go together, and the model allow-list would not necessarily
+have caught it, because allow-lists are typed by people and this is the mistake
+a person makes.
+
+The camera settles it itself. Every command in the RCP+ reference carries an
+availability row for CPP6/CPP7/CPP7.3, CPP13 and CPP14/CPP15/CPP16, so a command
+that exists on exactly one generation identifies the generation when asked — an
+unsupported command answers HTTP 200 with `<result><err>0x40</err>`, not an HTTP
+error. Probed live:
+
+    | model                      | fw        | 0x0d26 | 0x0d1b | 0x0a08 | platform    |
+    | FLEXIDOME IP 5000i IR      | 7.83.0027 | err    | err    | 4      | CPP6/7/7.3  |
+    | FLEXIDOME IP 4000i         | 7.72.0008 | err    | err    | ok     | CPP6/7/7.3  |
+    | FLEXIDOME indoor 5100i IR  | 9.00.0210 | ok     | ok     | err    | CPP14/15/16 |
+    | FLEXIDOME outdoor 5100i IR | 9.00.0210 | ok     | ok     | err    | CPP14/15/16 |
+    | FLEXIDOME multi 7000i      | 8.00.0155 | err    | err    | err    | unknown     |
+
+So the CPP14 image belongs to the **5100i family** (≈299 cameras on 9.00.0210),
+not to the 5000i/4000i fleet (≈1,900 cameras on 7.x) that includes the proving
+camera. The owner then supplied `CPP7.3_FW_7.93.0024.fw`, which is the right
+pairing: alb-cam-44 is on 7.83.0027 and the image is 7.93.0024.
+
+Migration `030` adds `cameras.platform` and `firmware_images.platform`.
+Pre-flight refuses a stored contradiction so a *preview* can say it before
+anyone approves a batch, and the runner probes again live immediately before
+each upload, storing what it learns. Only a contradiction is fatal: an image
+with no platform recorded falls back to the model allow-list, which is where it
+was before.
+
+**Both images registered, 2026-09-08:**
+
+    #2  7.93.0024  CPP6/7/7.3   CPP7.3_FW_7.93.0024.fw    91 MiB
+        models: FLEXIDOME IP 5000i IR
+    #3  9.80.0106  CPP14/15/16  CPP14_FW_9.80.0106.fw     988 MiB
+        models: FLEXIDOME indoor 5100i IR, FLEXIDOME outdoor 5100i IR
+
+Each allow-list holds only models **probed** on that platform. Widening them is a
+deliberate act against Bosch's release notes, never an assumption. The files live
+in `/var/lib/netmon/firmware/bosch/`, not in the repo — a gigabyte of vendor
+binary does not belong in git, and the store is where `firmware_dir` points.
+
+**Dry-run against the real registry, both images:**
+
+    CPP7.3 image → alb-cam-44   ALLOW   (7.83.0027, would upload 7.93.0024)
+                 → arc-cam-100  REFUSE  model not on this image's allow-list
+    CPP14 image  → alb-cam-44   REFUSE  model not on this image's allow-list
+                 → arc-cam-100  REFUSE  proving_device_id = 1592
+
+**One correctness fix the 988 MiB image forced:** `load_image` returned the whole
+file as bytes and handed the same buffer to every concurrent upload. It now
+verifies the SHA-256 by streaming and returns the *path*, and each upload opens
+its own handle — a gigabyte of resident data per batch bought nothing.
+
+**Outstanding before the first canary:** the admin API and UI (a batch can only
+be created from Python today), and the owner's decision on whether alb-cam-44 —
+a live recording camera at TASPA — is really the one to flash first.
 
 **Fleet shape for the build:** 2,528 of 2,651 cameras are Bosch (2,019
 `Bosch1ch` + 509 `Bosch`) — 95%, confirming Bosch as the pilot vendor; 32 Axis;

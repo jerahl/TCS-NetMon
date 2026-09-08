@@ -447,3 +447,100 @@ def test_a_camera_that_answers_the_old_version_still_fails(tmp_path):
 
     assert result["aborted"] is True
     assert _items(engine, batch_id)[1]["status"] == "failed"
+
+
+# ── the platform gate ─────────────────────────────────────────────────────
+
+def _platform_fleet(platform_by_ip, **kw):
+    """A fleet whose cameras answer the RCP+ platform markers honestly."""
+    fleet = FakeCameraFleet(**kw)
+    markers = {"0x0d26": "CPP14/15/16", "0x0d1b": "CPP13", "0x0a08": "CPP6/7/7.3"}
+
+    def get_body(url):
+        ip = url.split("//", 1)[1].split("/")[0].split(":")[0]
+        cmd = url.split("command=", 1)[1].split("&")[0]
+        if cmd in markers:
+            # A camera answers only its own generation's marker; anything else
+            # comes back as the vendor's "unknown command" error, at HTTP 200.
+            if markers[cmd] == platform_by_ip.get(ip):
+                return "<rcp><result><str>ok</str></result></rcp>"
+            return "<rcp><result><err>0x40</err></result></rcp>"
+        version = fleet.vendor_reads.get(ip)
+        return ("<rcp><result><str>" + version + "</str></result></rcp>" if version
+                else "<rcp><payload></payload></rcp>")
+
+    fleet._get_body = get_body
+    return fleet
+
+
+def _patch_fleet_get(fleet):
+    """Route the fake client's GET through the platform-aware body builder."""
+    original = fleet.client
+
+    def client():
+        c = original()
+
+        async def get(url, auth=None):
+            fleet.version_reads.append(url)
+            return FakeResponse(200, text=fleet._get_body(url))
+
+        c.get = get
+        return c
+
+    fleet.client = client
+    return fleet
+
+
+def test_an_image_for_another_platform_is_refused_at_the_last_moment(tmp_path):
+    """The check that would have saved alb-cam-44.
+
+    A CPP14 image against a CPP7.3 camera meets "flash type incompatible" at
+    best. The model allow-list cannot catch it — allow-lists are typed by
+    people, and this is the mistake a person makes.
+    """
+    engine = _seed(f"sqlite:///{tmp_path/'r20.db'}")
+    db.execute(engine, "UPDATE firmware_images SET platform = 'CPP14/15/16' WHERE id = 1")
+    cfg = _cfg(tmp_path)
+    batch_id = _batch(engine, device_ids=[1, 2])
+    fleet = _patch_fleet_get(_platform_fleet({"10.1.1.1": "CPP6/7/7.3",
+                                              "10.1.1.2": "CPP6/7/7.3"}))
+
+    result, _ = _run(engine, cfg, batch_id, fleet)
+
+    assert fleet.uploads == []               # nothing was sent, to anything
+    assert result["aborted"] is True         # the canary failed, so the batch stopped
+    items = _items(engine, batch_id)
+    assert items[1]["status"] == "failed"
+    assert "built for CPP14/15/16" in items[1]["message"]
+
+
+def test_a_matching_platform_proceeds_and_is_remembered(tmp_path):
+    engine = _seed(f"sqlite:///{tmp_path/'r21.db'}")
+    db.execute(engine, "UPDATE firmware_images SET platform = 'CPP14/15/16' WHERE id = 1")
+    cfg = _cfg(tmp_path)
+    batch_id = _batch(engine, device_ids=[1])
+    fleet = _patch_fleet_get(_platform_fleet({"10.1.1.1": "CPP14/15/16"},
+                                             vendor_reads={"10.1.1.1": "7.90.0123"}))
+
+    result, _ = _run(engine, cfg, batch_id, fleet)
+
+    assert result["verified"] == 1
+    assert len(fleet.uploads) == 1
+    # Probed once, stored — so the next preview can refuse up front rather than
+    # after somebody has approved the batch.
+    row = db.fetch_one(engine, "SELECT platform FROM cameras WHERE device_id = 1")
+    assert row["platform"] == "CPP14/15/16"
+
+
+def test_an_image_that_names_no_platform_leaves_the_gate_open(tmp_path):
+    """Only a contradiction is fatal. An image with no platform recorded falls
+    back to the model allow-list, which is where it was before."""
+    engine = _seed(f"sqlite:///{tmp_path/'r22.db'}")
+    cfg = _cfg(tmp_path)                      # image.platform stays NULL
+    batch_id = _batch(engine, device_ids=[1])
+    fleet = _patch_fleet_get(_platform_fleet({"10.1.1.1": "CPP6/7/7.3"},
+                                             vendor_reads={"10.1.1.1": "7.90.0123"}))
+
+    result, _ = _run(engine, cfg, batch_id, fleet)
+    assert result["verified"] == 1
+    assert len(fleet.uploads) == 1

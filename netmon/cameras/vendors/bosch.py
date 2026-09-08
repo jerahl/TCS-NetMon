@@ -64,6 +64,22 @@ CMD_SOFTWARE_VERSION_FORMATTED = "0x0cd4"
 #: CONF_SOFTWARE_VERSION — the unformatted sibling, kept as a documented
 #: fallback for a device that ever refuses the formatted one.
 CMD_SOFTWARE_VERSION = "0x002f"
+#: Platform markers. Every command in the RCP+ reference carries an availability
+#: row for CPP6/CPP7/CPP7.3, CPP13 and CPP14/CPP15/CPP16, so a command that
+#: exists on exactly one generation identifies the generation when asked: the
+#: camera answers `<err>0x40</err>` for a command its firmware does not know.
+#:
+#: Verified across this estate 2026-09-08 — FLEXIDOME IP 5000i IR and IP 4000i
+#: answer only the legacy marker, while indoor/outdoor 5100i IR answer both
+#: newer ones. That is the difference between an image that installs and one
+#: that meets "flash type incompatible".
+PLATFORM_MARKERS = (
+    # (command, type, platform it proves) — most specific first.
+    ("0x0d26", "T_OCTET", "CPP14/15/16"),   # CONF_BLUR_ENABLED, CPP14+ only
+    ("0x0d1b", "P_STRING", "CPP13"),        # CONF_LICENSE_LOCK_CODE, CPP13+
+    ("0x0a08", "T_DWORD", "CPP6/7/7.3"),    # CONF_CPU_LOAD_VCA, legacy only
+)
+
 #: CONF_UPLOAD_HISTORY / CONF_UPLOAD_PROGRESS. Neither is parsed yet; see the
 #: module docstring for why, and for what they will be worth when the write path
 #: is live.
@@ -142,12 +158,39 @@ def version_read_request(base_url: str) -> dict:
     }
 
 
-def firmware_upload_request(base_url: str, filename: str, blob: bytes) -> dict:
+def platform_probe_requests(base_url: str) -> list[dict]:
+    """Reads that together identify a camera's CPP generation.
+
+    All three are `direction=READ` on commands that only report state. The
+    caller runs them in order and stops at the first that answers.
+    """
+    return [{"platform": platform,
+             "url": rcp_read_url(base_url, command, type_=type_)}
+            for command, type_, platform in PLATFORM_MARKERS]
+
+
+def answered(xml: str) -> bool:
+    """Did the camera answer this command, or reject it as unknown?
+
+    An unsupported command comes back HTTP 200 with `<result><err>0x40</err>`,
+    not an HTTP error — so "did it work" cannot be read from the status code.
+    """
+    body = xml or ""
+    if "<err>" in body:
+        return False
+    return "<result>" in body
+
+
+def firmware_upload_request(base_url: str, filename: str, blob: Any) -> dict:
     """The multipart POST that spec 20 names as the Bosch firmware mechanism.
 
     Returned as a description rather than sent, so it can be asserted against in
     tests and reviewed by eye before it ever reaches hardware. The caller adds
     auth and timeouts.
+
+    ``blob`` is bytes or an open binary file. The runner passes a handle so a
+    988 MiB image streams from disk instead of sitting in memory once per
+    concurrent upload.
 
     **Unverified against a device.** `/upload.htm` is what the spec records;
     nothing here has confirmed it on this fleet, and confirming it is precisely
@@ -155,7 +198,7 @@ def firmware_upload_request(base_url: str, filename: str, blob: bytes) -> dict:
     """
     if not filename or "/" in filename or "\\" in filename:
         raise ValueError("firmware filename must be a bare name from the image store")
-    if not blob:
+    if blob is None or (isinstance(blob, (bytes, bytearray)) and not blob):
         raise ValueError("refusing to upload an empty firmware image")
     return {
         "method": "POST",

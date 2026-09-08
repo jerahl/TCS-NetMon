@@ -95,7 +95,7 @@ def _rows_for(engine: Engine, device_ids: list[int]) -> dict[int, dict]:
     params = {f"d{i}": v for i, v in enumerate(device_ids)}
     rows = db.fetch_all(engine, f"""
         SELECT d.id AS device_id, d.name, d.site, d.enabled, d.device_type,
-               c.model, c.firmware, c.vendor, c.ip,
+               c.model, c.firmware, c.vendor, c.ip, c.platform,
                reach.value AS reachability, src.value AS source_status
         FROM devices d
         LEFT JOIN cameras c ON c.device_id = d.id
@@ -171,6 +171,15 @@ def preflight_firmware(engine: Engine, cfg: Any, device_ids: list[int],
             # The check that stops a 5000i image reaching a multi 7000i. 84
             # model×firmware pairs live on this estate.
             refuse(f"model {row.get('model') or 'unknown'!r} is not on this image's allow-list")
+            continue
+
+        declared = str(image.get("platform") or "").strip()
+        known = str(row.get("platform") or "").strip()
+        if declared and known and declared != known:
+            # Stored from the last probe. The runner checks again live before
+            # every upload — this one is so a preview can say it up front rather
+            # than after somebody has approved the batch.
+            refuse(f"camera is {known}; this image is built for {declared}")
             continue
 
         already = fw.same_release(row.get("firmware"), image.get("version"))

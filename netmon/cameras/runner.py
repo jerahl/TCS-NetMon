@@ -74,12 +74,17 @@ def _set_batch(engine: Engine, batch_id: int, **fields: Any) -> None:
                {**fields, "id": batch_id})
 
 
-def load_image(engine: Engine, cfg: Any, image_id: int) -> tuple[dict, bytes]:
-    """The image row plus its bytes, re-hashed.
+def load_image(engine: Engine, cfg: Any, image_id: int) -> tuple[dict, Path]:
+    """The image row plus its verified path.
 
-    The SHA-256 is checked here rather than trusted from upload: an image that
-    changed on disk between vetting and roll is not the image that was vetted,
-    and the difference is a bricked camera.
+    The SHA-256 is re-computed here rather than trusted from upload: an image
+    that changed on disk between vetting and roll is not the image that was
+    vetted, and the difference is a bricked camera.
+
+    The **path** comes back, not the bytes. These files are not small — the
+    CPP14 image on this estate is 988 MiB — and holding one in memory while
+    three uploads run concurrently is a gigabyte of resident data for no reason.
+    Each upload streams from its own handle instead.
     """
     row = db.fetch_one(engine, "SELECT * FROM firmware_images WHERE id = :i", {"i": image_id})
     if row is None:
@@ -87,13 +92,15 @@ def load_image(engine: Engine, cfg: Any, image_id: int) -> tuple[dict, bytes]:
     path = Path(cfg.camera_ops.firmware_dir) / str(row["rel_path"])
     if not path.is_file():
         raise BatchRefused(f"firmware image {row['filename']} is missing from the store")
-    blob = path.read_bytes()
-    digest = hashlib.sha256(blob).hexdigest()
-    if digest != str(row["sha256"]).lower():
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(8 << 20), b""):
+            digest.update(chunk)
+    if digest.hexdigest() != str(row["sha256"]).lower():
         raise BatchRefused(
             f"firmware image {row['filename']} does not match the SHA-256 recorded at "
             f"upload — refusing to push an image that changed on disk")
-    return dict(row), blob
+    return dict(row), path
 
 
 class BatchRunner:
@@ -147,9 +154,9 @@ class BatchRunner:
         self._guard(batch)
 
         dry = bool(batch["dry_run"])
-        image, blob = (None, b"")
+        image, path = (None, None)
         if not dry:
-            image, blob = load_image(self.engine, self.cfg, int(batch["firmware_id"]))
+            image, path = load_image(self.engine, self.cfg, int(batch["firmware_id"]))
         else:
             row = db.fetch_one(self.engine, "SELECT * FROM firmware_images WHERE id = :i",
                                {"i": batch["firmware_id"]})
@@ -163,7 +170,7 @@ class BatchRunner:
         for ring_index, items in rings:
             if self.aborted:
                 break
-            results = await self._run_ring(items, batch, image, blob, dry=dry)
+            results = await self._run_ring(items, batch, image, path, dry=dry)
             for status in results:
                 summary[status] = summary.get(status, 0) + 1
 
@@ -221,16 +228,16 @@ class BatchRunner:
         self._halt(message)
 
     async def _run_ring(self, items: list[dict], batch: dict, image: dict,
-                        blob: bytes, *, dry: bool) -> list[str]:
+                        path: Path | None, *, dry: bool) -> list[str]:
         sem = asyncio.Semaphore(max(1, int(batch["max_concurrent"])))
 
         async def one(item: dict) -> str:
             async with sem:
-                return await self._run_item(item, batch, image, blob, dry=dry)
+                return await self._run_item(item, batch, image, path, dry=dry)
 
         return list(await asyncio.gather(*(one(i) for i in items)))
 
-    async def _run_item(self, item: dict, batch: dict, image: dict, blob: bytes,
+    async def _run_item(self, item: dict, batch: dict, image: dict, path: Path | None,
                         *, dry: bool) -> str:
         item_id = int(item["id"])
         device_id = int(item["device_id"])
@@ -250,6 +257,27 @@ class BatchRunner:
 
         _set_item(self.engine, item_id, status=ops.RUNNING, started_at=_now())
         base = _base_url(item)
+
+        # The last gate, and the one that is machine-checked rather than typed.
+        # An image built for another CPP generation meets "flash type
+        # incompatible" at best; the model allow-list cannot catch it, because
+        # allow-lists are written by people and this is exactly the mistake a
+        # person makes (found live 2026-09-08, before anything was pushed).
+        declared = str(image.get("platform") or "").strip()
+        if declared:
+            found = await self._probe_platform(item, base)
+            if found and found != declared:
+                message = (f"camera is {found}; this image is built for {declared} — "
+                           f"refusing rather than risking a wrong-platform flash")
+                _set_item(self.engine, item_id, status=ops.FAILED, finished_at=_now(),
+                          message=message)
+                log.warning("camera batch %s: %s (%s)", self.batch_id, message,
+                            item.get("name"))
+                return ops.FAILED
+            if found:
+                db.execute(self.engine,
+                           "UPDATE cameras SET platform = :p WHERE device_id = :d",
+                           {"p": found, "d": device_id})
         try:
             spec = action_or_refuse("camera_firmware_update")
         except ActionRefused as exc:             # registry drift; refuse loudly
@@ -262,15 +290,18 @@ class BatchRunner:
                            params={"image": image.get("filename"),
                                    "version": image.get("version"),
                                    "batch_id": self.batch_id}) as audit:
-            request = profile.firmware_upload_request(base, str(image["filename"]), blob)
             user, password = ops.credentials(self.cfg)
             ops_cfg = self.cfg.camera_ops
             timeout = httpx.Timeout(ops_cfg.timeout_s, connect=ops_cfg.connect_timeout_s)
             factory = self._client_factory or (
                 lambda: httpx.AsyncClient(timeout=timeout, verify=ops_cfg.verify_ssl))
-            async with factory() as client:
-                resp = await client.post(request["url"], files=request["files"],
-                                         auth=httpx.DigestAuth(user, password))
+            # Its own handle, streamed: one 988 MiB image times three concurrent
+            # uploads is a gigabyte of resident data that buys nothing.
+            with open(path, "rb") as handle:                    # noqa: PTH123
+                request = profile.firmware_upload_request(base, str(image["filename"]), handle)
+                async with factory() as client:
+                    resp = await client.post(request["url"], files=request["files"],
+                                             auth=httpx.DigestAuth(user, password))
             status_code = getattr(resp, "status_code", 0)
             if status_code >= 400:
                 audit.failed(f"upload answered HTTP {status_code}", http_status=status_code)
@@ -324,6 +355,36 @@ class BatchRunner:
                 # MISMATCH: still on the old version. Keep waiting — a camera
                 # mid-flash reports the old version right up until it reboots.
         return ops.FAILED, last, None
+
+    async def _probe_platform(self, item: dict, base: str) -> str | None:
+        """Ask the camera which generation it is, or None if it will not say.
+
+        None does not wave the camera through: a declared image platform with an
+        unreadable camera platform leaves the decision to the model allow-list,
+        which is the weaker of the two checks and is why this one exists. The
+        caller treats only a *contradiction* as fatal, because a camera that
+        cannot be asked is a camera whose upload will fail safely at the vendor's
+        own signature and flash-type checks.
+        """
+        profile = profile_for(item.get("vendor"))
+        if profile is None or not hasattr(profile, "platform_probe_requests"):
+            return None
+        user, password = ops.credentials(self.cfg)
+        ops_cfg = self.cfg.camera_ops
+        timeout = httpx.Timeout(ops_cfg.timeout_s, connect=ops_cfg.connect_timeout_s)
+        factory = self._client_factory or (
+            lambda: httpx.AsyncClient(timeout=timeout, verify=ops_cfg.verify_ssl))
+        try:
+            async with factory() as client:
+                for probe in profile.platform_probe_requests(base):
+                    resp = await client.get(probe["url"],
+                                            auth=httpx.DigestAuth(user, password))
+                    if (getattr(resp, "status_code", 0) < 400
+                            and profile.answered(getattr(resp, "text", "") or "")):
+                        return str(probe["platform"])
+        except Exception as exc:                 # noqa: BLE001 — a probe is not a push
+            log.warning("platform probe failed for %s: %r", item.get("name"), exc)
+        return None
 
     async def _read_version(self, item: dict, base: str) -> tuple[str | None, str | None]:
         """The camera's own answer, or Milestone's if the camera will not give one.
