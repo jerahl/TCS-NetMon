@@ -8,11 +8,13 @@ port, 178 are one imager of several, and the vendor field is a driver name.
 
 from datetime import datetime, timezone
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
 from netmon import db
+from netmon.api import surveillance
 from netmon.app import create_app
 from netmon.config import load_config
 from netmon.snapshot import (
@@ -210,3 +212,107 @@ def test_snapshot_enabled_without_an_account_is_refused_at_load(tmp_path):
     with pytest.raises(ConfigError) as err:
         load_config(conf)
     assert "camera_snapshot" in str(err.value)
+
+
+# ──────────────────────── the backup camera password ────────────────────────
+
+class _FakeClient:
+    """Stands in for httpx.AsyncClient, recording the password each GET used.
+
+    ``answers`` maps a password to the status the fake camera replies with, so
+    a test can say "this camera is still on the old password" without a camera.
+    """
+
+    calls: list[str] = []
+
+    def __init__(self, answers, **_kw):
+        self._answers = answers
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return False
+
+    async def get(self, url, *, auth=None, headers=None):
+        password = getattr(auth, "_password", None) or auth._password  # httpx DigestAuth
+        if isinstance(password, bytes):
+            password = password.decode()
+        type(self).calls.append(password)
+        status = self._answers.get(password, 401)
+        return httpx.Response(status, content=b"\xff\xd8jpeg",
+                              headers={"content-type": "image/jpeg"},
+                              request=httpx.Request("GET", url))
+
+
+@pytest.fixture
+def fake_camera(monkeypatch):
+    """Patch the endpoint's HTTP client. Returns a setter for the answers."""
+    state: dict = {"answers": {}}
+
+    def factory(**kw):
+        return _FakeClient(state["answers"], **kw)
+
+    monkeypatch.setattr(surveillance.httpx, "AsyncClient", factory)
+    _FakeClient.calls = []
+    surveillance._snap_cred.clear()
+    return state
+
+
+def test_backup_password_is_tried_after_a_401(tmp_path, fake_camera):
+    """A camera that missed the password rotation still answers to the old one.
+
+    Without this the tile reads "camera rejected the configured account" and
+    someone has to work out, per camera, which password it is on.
+    """
+    url = f"sqlite:///{tmp_path / 'sn5.db'}"
+    _seed(url)
+    fake_camera["answers"] = {"old-pw": 200}
+    with _client(tmp_path, url, enabled="true", user="ro",
+                 **{"pass": "new-pw", "pass_backup": "old-pw"}) as client:
+        r = client.get("/api/surveillance/cameras/1/snapshot")
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "image/jpeg"
+    assert _FakeClient.calls == ["new-pw", "old-pw"]
+
+
+def test_the_working_password_is_remembered_per_camera(tmp_path, fake_camera):
+    """The fallback must not double the request count.
+
+    A camera wall asks for up to 48 stills at once and refreshes; rediscovering
+    the same 401 on every fetch would mean two connections per tile forever.
+    """
+    url = f"sqlite:///{tmp_path / 'sn6.db'}"
+    _seed(url)
+    fake_camera["answers"] = {"old-pw": 200}
+    with _client(tmp_path, url, enabled="true", user="ro",
+                 **{"pass": "new-pw", "pass_backup": "old-pw"}) as client:
+        assert client.get("/api/surveillance/cameras/1/snapshot").status_code == 200
+        _FakeClient.calls = []
+        assert client.get("/api/surveillance/cameras/1/snapshot").status_code == 200
+    assert _FakeClient.calls == ["old-pw"]
+
+
+def test_both_passwords_rejected_says_so(tmp_path, fake_camera):
+    url = f"sqlite:///{tmp_path / 'sn7.db'}"
+    _seed(url)
+    fake_camera["answers"] = {}
+    with _client(tmp_path, url, enabled="true", user="ro",
+                 **{"pass": "new-pw", "pass_backup": "old-pw"}) as client:
+        r = client.get("/api/surveillance/cameras/1/snapshot")
+        assert r.status_code == 502
+        assert "both configured passwords" in r.headers["X-NetMon-Reason"]
+    assert _FakeClient.calls == ["new-pw", "old-pw"]
+
+
+def test_one_password_configured_is_tried_once(tmp_path, fake_camera):
+    """No backup configured behaves exactly as before: one request, one reason."""
+    url = f"sqlite:///{tmp_path / 'sn8.db'}"
+    _seed(url)
+    fake_camera["answers"] = {}
+    with _client(tmp_path, url, enabled="true", user="ro",
+                 **{"pass": "new-pw"}) as client:
+        r = client.get("/api/surveillance/cameras/1/snapshot")
+        assert r.status_code == 502
+        assert "the configured account" in r.headers["X-NetMon-Reason"]
+    assert _FakeClient.calls == ["new-pw"]

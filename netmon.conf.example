@@ -365,6 +365,13 @@ enabled = false
 # user = netmon-ro
 # pass = REPLACE_WITH_CAMERA_PASSWORD
 #
+# A second password for the SAME account, tried only after a camera answers 401
+# to the one above. 2,651 cameras are not all on one password: a rotation
+# reaches the cameras that were online for it, and the ones that were down, or
+# were installed before it, still answer to the previous one. Optional — leave
+# it out and exactly one credential is tried, as before. Also a SECRET.
+# pass_backup = REPLACE_WITH_PREVIOUS_CAMERA_PASSWORD
+#
 # Cameras on the VMS network carry self-signed certificates. Named rather than
 # hidden, because it is a real trade-off; the traffic stays inside the
 # management network.

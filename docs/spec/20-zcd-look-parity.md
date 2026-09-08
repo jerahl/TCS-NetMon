@@ -424,6 +424,22 @@ under `[camera_snapshot]` (`enabled = true`, `user`, `pass`) and restart. The
 section is documented in `netmon.conf.example`. Loading a config that enables it
 with no `user` is refused at boot rather than serving silent 503s.
 
+**Two passwords, one account (added 2026-09-08).** `pass_backup` is an optional
+second password for the same account, tried only after a camera answers 401 to
+`pass`. 2,651 cameras are not all on one password: a rotation reaches the
+cameras that were online for it, while the ones that were down, or were
+installed before it, still answer to the previous one — and with one credential
+those tiles read "camera rejected the configured account", leaving someone to
+work out per camera which password it is on. The winner is remembered per
+`device_id` in a process-local map (`_snap_cred`), because a 48-tile wall that
+refreshes would otherwise pay the same 401 twice per tile forever; the map is an
+optimisation only — empty costs one extra 401 per camera, a stale entry
+self-corrects on the next fetch, and nothing is persisted. Empty passwords are
+dropped rather than sent, so a blank credential cannot masquerade as a rejected
+account. With no `pass_backup` the path is exactly as before: one request, and
+the reason header says "the configured account" rather than "both configured
+passwords".
+
 ### S3-original — Cameras tab: navigator + thumbnail wall (superseded)
 
 - `380px 1fr` grid. **Camera Navigator** reuses the Wireless page's `SiteGroup`
@@ -841,7 +857,7 @@ NetMon largely has. Suggested order (spec 15 §3.2 estimates still apply):
 - [x] **S3 done 2026-09-07** (out of order, owner-directed): `#/cameras` with the Milestone group tree. Migration 026 applied live, one collector cycle run — 26 groups, 2,676 memberships, 0 cameras ungrouped, no degradation. 23 render-check cases and 514 tests green.
 - [x] **S2 done 2026-09-07.** Migrations 027 + 028 applied live; environment facts, recorder ESS verdicts, camera channel/TLS, seven history series, real per-recorder counts. 546 tests and 34 render-check cases green.
 - [x] **S3b + S4 done 2026-09-07.** Camera wall in the Cameras page's right pane; snapshot proxy complete and default-off. 560 tests, 38 render-check cases.
-- [ ] **Owner action to finish S4:** add the read-only camera account to `/etc/netmon/netmon.conf` under `[camera_snapshot]` (`enabled = true`, `user`, `pass`) and restart `netmon`. Nothing else is outstanding — the code path is tested against every address shape on the estate.
+- [ ] **Owner action to finish S4 (still outstanding as of 2026-09-08 — `/etc/netmon/netmon.conf` has no `[camera_snapshot]` section and `app_settings` carries no override, so the proxy is off):** add the read-only camera account to `/etc/netmon/netmon.conf` under `[camera_snapshot]` (`enabled = true`, `user`, `pass`, and `pass_backup` for the cameras still on the previous password) and restart `netmon`. Nothing else is outstanding — the code path is tested against every address shape on the estate.
 - [ ] **One field needs a real camera to confirm:** the vendor query parameter that selects the imager on a multi-camera device (178 cameras). Until `[camera_snapshot] channel_param` is set they report the gap rather than risk serving a different imager's picture. Confirming it is one request against one Bosch multi-imager once the account exists.
 - [ ] ~~**S2 next.** Highest-value items, in order: RS service state from the ESS (`_ess_camera_status` reads only `cameras/` today; spec 19 §11 has 9 recording-server states covering all 22 servers, and the Overview's recorder tiles currently colour off the Config API's `running` flag); per-RS camera counts so `chans_total` stops being null; `sites`/version/licence investigation for the header chip; `https_enabled` / `https_port` / `channel` into `cameras` — S4's snapshot proxy needs all three and collecting them now avoids a second migration.
 - [ ] A restart of `netmon.service` is required for S1's two API additions (`device_type`/`limit` on `/api/alerts`, `milestone_host` on `/api/meta`). Until then the live page's alarm cell counts estate-wide alerts, because FastAPI ignores query params it does not know about — the static bundle updates without a restart but the API does not.

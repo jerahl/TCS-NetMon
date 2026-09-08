@@ -462,17 +462,25 @@ async def camera_snapshot(
     except SnapshotUnavailable as exc:
         return _snap_error(exc.status, exc.reason)
 
+    creds = _credentials(conf, device_id)
+    if not creds:
+        return _snap_error(503, "no camera password configured")
+
     timeout = httpx.Timeout(conf.timeout_s, connect=conf.connect_timeout_s)
     async with _semaphore(conf.max_concurrent):
         try:
             async with httpx.AsyncClient(timeout=timeout, verify=target.verify,
                                          follow_redirects=False) as client:
-                # Basic first, then Digest: Bosch and Axis both answer 401 with
-                # a challenge, and httpx picks the scheme from it.
-                resp = await client.get(
-                    target.url,
-                    auth=httpx.DigestAuth(conf.user, conf.password),
-                    headers={"Accept": "image/jpeg,image/*"})
+                for which, password in creds:
+                    # Basic first, then Digest: Bosch and Axis both answer 401
+                    # with a challenge, and httpx picks the scheme from it.
+                    resp = await client.get(
+                        target.url,
+                        auth=httpx.DigestAuth(conf.user, password),
+                        headers={"Accept": "image/jpeg,image/*"})
+                    if resp.status_code != 401:
+                        _remember_credential(device_id, which)
+                        break
         except httpx.HTTPError as exc:
             # The class is the diagnosis: ConnectTimeout means the camera is not
             # answering, ConnectError means the address is wrong or the port
@@ -480,7 +488,9 @@ async def camera_snapshot(
             return _snap_error(504, f"{type(exc).__name__} fetching the still")
 
     if resp.status_code == 401:
-        return _snap_error(502, "camera rejected the configured account")
+        _forget_credential(device_id)
+        tried = "both configured passwords" if len(creds) > 1 else "the configured account"
+        return _snap_error(502, f"camera rejected {tried}")
     if resp.status_code >= 400:
         return _snap_error(502, f"camera answered HTTP {resp.status_code}")
     ctype = resp.headers.get("content-type", "")
@@ -491,6 +501,40 @@ async def camera_snapshot(
 
     return Response(content=resp.content, media_type=ctype,
                     headers={"Cache-Control": f"private, max-age={conf.cache_s}"})
+
+
+# Which password last worked for a camera, by device_id. The estate is not on
+# one password — a rotation reaches the cameras that were up for it — so the
+# proxy carries a fallback and tries it after a 401. Remembering the winner is
+# what keeps that from doubling the request count: a camera wall asks for up to
+# 48 stills at once and refreshes, and re-discovering the same 401 every time
+# would mean two connections per tile forever. Process-local and purely an
+# optimisation: an empty map costs one extra 401 per camera, and a wrong entry
+# self-corrects on the next fetch, so it is never persisted.
+_snap_cred: dict[int, str] = {}
+
+
+def _credentials(conf, device_id: int) -> list[tuple[str, str]]:
+    """The passwords to try for this camera, best guess first.
+
+    Empty passwords are dropped rather than sent: a blank credential produces
+    the same 401 as a wrong one while looking, in the reason header, like a
+    rejected account.
+    """
+    by_name = {"primary": conf.password, "backup": conf.password_backup}
+    order = ["primary", "backup"]
+    last = _snap_cred.get(device_id)
+    if last in order:
+        order.sort(key=lambda name: name != last)
+    return [(name, by_name[name]) for name in order if by_name[name]]
+
+
+def _remember_credential(device_id: int, which: str) -> None:
+    _snap_cred[device_id] = which
+
+
+def _forget_credential(device_id: int) -> None:
+    _snap_cred.pop(device_id, None)
 
 
 def _snap_error(status: int, reason: str) -> Response:
