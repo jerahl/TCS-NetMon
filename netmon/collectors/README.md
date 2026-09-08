@@ -206,6 +206,35 @@ Ported from `reference/zabbix/milestone/*`.
 Both collectors are standalone-runnable
 (`python -m netmon.collectors.packetfence|milestone --once|--loop`).
 
+## Camera operations (`netmon/cameras/`) — the one write to hardware
+
+Not a collector: `[camera_ops]`, spec 20 S8 / gate D11, **default off with
+dry-run on**. Listed here because it shares the vendor-profile idiom and because
+its *read* half is a source read like any other.
+
+- **Reading a Bosch camera's firmware:** RCP+ over the same credentialed HTTPS
+  the snapshot proxy uses —
+  `GET /rcp.xml?command=0x0cd4&type=P_STRING&direction=READ`
+  (`CONF_SOFTWARE_VERSION_FORMATTED`, RCP+ reference 9.80 §2.612). Returns
+  `<major>.<minor>.<build>`.
+  - *Gotcha:* the value is **not** in `<payload>` — that echoes the request and
+    is always empty. It is in `<result><str>`.
+  - *Why the formatted command:* the compact form (`783`) that 888 cameras
+    report through Milestone can confirm a release but never a build, so it can
+    only ever verify as `indeterminate`. Asking the camera directly is what
+    makes a firmware roll provable.
+- **Verification order:** vendor read, then Milestone's stored value. Which one
+  answered is recorded per item in `camera_batch_items.verified_by`, because a
+  Milestone-sourced confirmation is at most one identity-backfill cycle old and
+  is weaker evidence.
+- **Writing** (firmware upload) is unbuilt in effect: the request builder exists,
+  every flag is off, and `proving_device_id` restricts pre-flight to one
+  nominated camera. Nothing has been sent to hardware.
+- **Config:** `[camera_ops] enabled, dry_run, config_change, firmware_update,
+  user/pass or use_snapshot_credentials, proving_device_id, firmware_dir,
+  canary_count, ring_size, max_concurrent, max_batch, abort_pct,
+  reboot_timeout_s, connect_timeout_s, timeout_s, verify_ssl`.
+
 ## 3CX (`threecx.py`, `threecx_client.py`) — voice
 
 Ported from `reference/lib/ThreeCXClient.php`. **v20 REST, not ODBC** (Phase 0

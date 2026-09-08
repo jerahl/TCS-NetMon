@@ -260,13 +260,44 @@ def test_the_rcp_helper_only_builds_reads():
     assert parse_rcp_payload("<rcp><payload></payload></rcp>") is None
 
 
-def test_the_firmware_version_read_refuses_rather_than_guesses_a_command():
-    """The transport is proven; the command code is not documented anywhere this
-    repo can see. Verification falls back to Milestone, which the owner chose."""
-    from netmon.cameras.vendors.bosch import VendorReadUnavailable, read_firmware_version
+def test_the_version_read_uses_the_documented_command():
+    """RCP+ reference 9.80 §2.612: CONF_SOFTWARE_VERSION_FORMATTED, 0x0cd4,
+    returning <major>.<minor>.<build> — the precision that lets a firmware roll
+    verify rather than come back indeterminate."""
+    from netmon.cameras.vendors.bosch import (
+        CMD_SOFTWARE_VERSION_FORMATTED, version_read_request,
+    )
 
-    with pytest.raises(VendorReadUnavailable, match="will not guess"):
-        read_firmware_version("https://10.1.1.1")
+    assert CMD_SOFTWARE_VERSION_FORMATTED == "0x0cd4"
+    req = version_read_request("https://10.1.1.1/")
+    assert req["method"] == "GET"
+    assert req["url"] == ("https://10.1.1.1/rcp.xml?command=0x0cd4"
+                          "&type=P_STRING&direction=READ")
+
+
+def test_the_version_comes_from_result_str_not_payload():
+    """Found live: <payload> echoes the *request* and is always empty. Reading
+    it returned None on every camera while the answer sat one element away."""
+    from netmon.cameras.vendors.bosch import parse_rcp_payload, parse_version
+
+    reply = ("<rcp><command><hex>0x0cd4</hex></command><type>P_STRING</type>"
+             "<direction>READ</direction><payload></payload>"
+             "<result><str>7.83.0027</str></result></rcp>")
+    assert parse_version(reply) == "7.83.0027"
+    assert parse_rcp_payload(reply) is None
+    # A reply with no result at all is None, not an empty string that would
+    # later be compared against a version.
+    assert parse_version("<rcp><payload></payload></rcp>") is None
+
+
+def test_the_upload_error_taxonomy_is_the_vendors_own():
+    """A failed push should be explained in Bosch's words — "wrong or no
+    signature" — not as "the version did not change"."""
+    from netmon.cameras.vendors.bosch import UPLOAD_ERRORS
+
+    assert UPLOAD_ERRORS[118] == "wrong or no signature"
+    assert UPLOAD_ERRORS[112] == "flash type incompatible"
+    assert UPLOAD_ERRORS[111] == "version too low"
 
 
 def test_the_upload_request_is_described_not_sent():

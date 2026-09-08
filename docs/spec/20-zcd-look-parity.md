@@ -964,9 +964,48 @@ push it to a camera.
 (`/api/surveillance/batches`, `/firmware`), and the admin-only Bulk actions tab.
 Then the first live canary on alb-cam-44 — watched, not scheduled.
 
-**Outstanding before that canary:** a real Bosch image for this model, vetted
-and registered; and one line of Bosch RCP+ documentation would upgrade
-verification from Milestone-fallback to the camera's own answer.
+**6. The vendor read, closed 2026-09-08.** The owner supplied the RCP+ reference
+(`docs/RCP_doc_9_80_0106.pdf`, Firmware 9.80, 1,404 pages), which names it
+exactly:
+
+    2.612  CONF_SOFTWARE_VERSION_FORMATTED  code 0x0cd4 · Read p_string ·
+           access "minimal" · "the software version in the form
+           <major>.<minor>.<build>" · CPP6/7/7.3, CPP13, CPP14/15/16
+    2.611  CONF_SOFTWARE_VERSION            code 0x002f · Read p_string · "always"
+
+The *formatted* one is used, because `<major>.<minor>.<build>` is precisely the
+precision `firmware.verify` needs to answer VERIFIED instead of INDETERMINATE —
+which means **the vendor read solves the 888-camera problem**: a camera that
+Milestone only ever reports as `783` can prove its own build number when asked
+directly.
+
+One gotcha found live and now recorded in code: the answer is **not** in
+`<payload>` — that element echoes the request and is always empty. It is in
+`<result><str>`. Confirmed on two production cameras, both returning
+`7.83.0027`, matching Milestone exactly — the first independent corroboration
+that NetMon's stored firmware and the hardware agree.
+
+Also recorded from the doc, for when the write path goes live:
+
+* `CONF_UPLOAD_PROGRESS` (0x0701) is a *message*, not a readable value, carrying
+  1-100 % and a precise error taxonomy — "wrong or no signature", "flash type
+  incompatible", "version too low" — now in `bosch.UPLOAD_ERRORS`. Those are the
+  words a failed push should be explained in; "the version did not change" is
+  not one of them.
+* `CONF_UPLOAD_HISTORY` (0x0b44, Read p_octet) keeps the last ten uploads and is
+  readable over this interface. Not parsed yet: its binary ring-buffer layout
+  cannot be checked against anything until a real upload has happened.
+* `CONF_DEVICE_CAPABILITIES` tag 30 `FW_UPLOAD_SIGNATURE_TAG` says whether a
+  device **requires signed firmware** — a pre-flight check worth adding before
+  the first ring, since an unsigned image on such a device fails at error 118.
+
+The doc contains no upload endpoint; it covers RCP+ commands only. So
+`/upload.htm` remains what spec 20 asserts and what the proving camera will
+confirm or refute — which is exactly what a proving camera is for.
+
+**Outstanding before the first canary:** the firmware store upload endpoint (the
+owner has the image), and the admin API/UI. The verification half is done and
+proven against production hardware.
 
 **Fleet shape for the build:** 2,528 of 2,651 cameras are Bosch (2,019
 `Bosch1ch` + 509 `Bosch`) — 95%, confirming Bosch as the pilot vendor; 32 Axis;

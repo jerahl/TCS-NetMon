@@ -30,8 +30,9 @@ MODEL = "FLEXIDOME IP 5000i IR"
 # ── fakes ─────────────────────────────────────────────────────────────────
 
 class FakeResponse:
-    def __init__(self, status_code=200):
+    def __init__(self, status_code=200, text=""):
         self.status_code = status_code
+        self.text = text
 
 
 class FakeCameraFleet:
@@ -42,11 +43,14 @@ class FakeCameraFleet:
     the reboot timeout exists for.
     """
 
-    def __init__(self, *, upload_status=200, after=None, upload_status_by_ip=None):
+    def __init__(self, *, upload_status=200, after=None, upload_status_by_ip=None,
+                 vendor_reads=None):
         self.upload_status = upload_status
         self.upload_status_by_ip = upload_status_by_ip or {}
         self.after = after or {}
+        self.vendor_reads = vendor_reads or {}
         self.uploads: list[str] = []
+        self.version_reads: list[str] = []
 
     def client(self):
         fleet = self
@@ -62,6 +66,19 @@ class FakeCameraFleet:
                 fleet.uploads.append(url)
                 ip = url.split("//", 1)[1].split("/")[0].split(":")[0]
                 return FakeResponse(fleet.upload_status_by_ip.get(ip, fleet.upload_status))
+
+            async def get(self_inner, url, auth=None):
+                # The camera's own RCP+ version read. `vendor_reads` is what a
+                # test sets when it wants the camera to answer for itself; an
+                # empty reply is a camera that will not, which is what sends the
+                # runner to Milestone.
+                ip = url.split("//", 1)[1].split("/")[0].split(":")[0]
+                fleet.version_reads.append(url)
+                version = fleet.vendor_reads.get(ip)
+                body = ("<rcp><payload></payload><result><str>"
+                        f"{version}</str></result></rcp>" if version
+                        else "<rcp><payload></payload></rcp>")
+                return FakeResponse(200, text=body)
 
         return _Client()
 
@@ -373,3 +390,60 @@ def test_load_image_rejects_an_unregistered_id(tmp_path):
     cfg = _cfg(tmp_path)
     with pytest.raises(BatchRefused, match="not registered"):
         load_image(engine, cfg, 99)
+
+
+# ── the vendor read (RCP+ CONF_SOFTWARE_VERSION_FORMATTED) ────────────────
+
+def test_the_camera_is_asked_first_and_milestone_only_as_a_fallback(tmp_path):
+    """`verified_by` is the point: the two answers are not worth the same.
+
+    The camera's own RCP+ reply is immediate and carries <major>.<minor>.<build>.
+    Milestone's value is at most one identity-backfill cycle old and is often the
+    compact `783` form, which can confirm a release but not a build.
+    """
+    engine = _seed(f"sqlite:///{tmp_path/'r17.db'}")
+    cfg = _cfg(tmp_path)
+    batch_id = _batch(engine, device_ids=[1, 2])
+    # Camera 1 answers for itself; camera 2 does not, so it falls back.
+    fleet = FakeCameraFleet(vendor_reads={"10.1.1.1": "7.90.0123"})
+
+    result, _ = _run(engine, cfg, batch_id, fleet, after={2: "7.90.0123"})
+
+    assert result["verified"] == 2
+    items = _items(engine, batch_id)
+    assert items[1]["verified_by"] == "vendor"
+    assert items[2]["verified_by"] == "milestone"
+    # The documented command, asked over the read direction only.
+    assert fleet.version_reads[0].endswith(
+        "/rcp.xml?command=0x0cd4&type=P_STRING&direction=READ")
+
+
+def test_the_vendor_read_turns_an_indeterminate_into_a_verified(tmp_path):
+    """The 888-camera problem, solved by asking the camera instead.
+
+    Milestone reports this camera as `790`, which cannot prove `7.90.0123` and
+    would halt the batch at the canary. The camera's own formatted answer can.
+    """
+    engine = _seed(f"sqlite:///{tmp_path/'r18.db'}")
+    cfg = _cfg(tmp_path)
+    batch_id = _batch(engine, device_ids=[1, 2, 3])
+    fleet = FakeCameraFleet(vendor_reads={f"10.1.1.{i}": "7.90.0123" for i in (1, 2, 3)})
+
+    result, _ = _run(engine, cfg, batch_id, fleet, after={1: "790", 2: "790", 3: "790"})
+
+    assert result["verified"] == 3 and result["aborted"] is False
+    assert all(i["verified_by"] == "vendor" for i in _items(engine, batch_id).values())
+
+
+def test_a_camera_that_answers_the_old_version_still_fails(tmp_path):
+    """The vendor read must not become a way to pass: a camera that answers
+    promptly with the version it already had did not upgrade."""
+    engine = _seed(f"sqlite:///{tmp_path/'r19.db'}")
+    cfg = _cfg(tmp_path)
+    batch_id = _batch(engine, device_ids=[1, 2])
+    fleet = FakeCameraFleet(vendor_reads={"10.1.1.1": "7.83.0027"})
+
+    result, _ = _run(engine, cfg, batch_id, fleet)
+
+    assert result["aborted"] is True
+    assert _items(engine, batch_id)[1]["status"] == "failed"

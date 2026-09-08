@@ -313,7 +313,7 @@ class BatchRunner:
         last: str | None = None
         for _ in range(attempts):
             await self._sleep(POLL_INTERVAL_S)
-            reported, by = self._read_version(item, base)
+            reported, by = await self._read_version(item, base)
             if reported:
                 last = reported
                 verdict = fw.verify(reported, version)
@@ -325,11 +325,32 @@ class BatchRunner:
                 # mid-flash reports the old version right up until it reboots.
         return ops.FAILED, last, None
 
-    def _read_version(self, item: dict, base: str) -> tuple[str | None, str | None]:
+    async def _read_version(self, item: dict, base: str) -> tuple[str | None, str | None]:
+        """The camera's own answer, or Milestone's if the camera will not give one.
+
+        Vendor first because it is immediate and precise: Bosch's
+        CONF_SOFTWARE_VERSION_FORMATTED returns `<major>.<minor>.<build>`, which
+        is the precision `firmware.verify` needs to say VERIFIED rather than
+        INDETERMINATE. Milestone's value is at most one identity-backfill cycle
+        old and is often the compact `783` form, so it can confirm a release but
+        rarely a build — hence `verified_by`, so the two are never confused.
+        """
         profile = profile_for(item.get("vendor"))
-        if profile is not None:
+        if profile is not None and hasattr(profile, "version_read_request"):
             try:
-                return profile.read_firmware_version(base), "vendor"
+                request = profile.version_read_request(base)
+                user, password = ops.credentials(self.cfg)
+                ops_cfg = self.cfg.camera_ops
+                timeout = httpx.Timeout(ops_cfg.timeout_s, connect=ops_cfg.connect_timeout_s)
+                factory = self._client_factory or (
+                    lambda: httpx.AsyncClient(timeout=timeout, verify=ops_cfg.verify_ssl))
+                async with factory() as client:
+                    resp = await client.get(request["url"],
+                                            auth=httpx.DigestAuth(user, password))
+                if getattr(resp, "status_code", 0) < 400:
+                    version = request["parse"](getattr(resp, "text", "") or "")
+                    if version:
+                        return version, "vendor"
             except VendorReadUnavailable:
                 pass
             except Exception as exc:             # noqa: BLE001 — fall back, loudly
