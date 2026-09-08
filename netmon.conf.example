@@ -10,6 +10,11 @@
 # This is stdlib configparser (INI) syntax. Values are read by
 # netmon/config.py, which validates required keys and fails loud on missing
 # secrets.
+#
+# Values are taken LITERALLY: string interpolation is switched off, so a `%` in
+# a password is a `%` and must NOT be doubled. (With the default on, `%%` in a
+# camera password was delivered as a single `%` and the camera answered 401 —
+# fixed 2026-09-08. If you escaped a `%` as `%%` in an earlier config, undo it.)
 
 [db]
 # SQLAlchemy URL. Production is MariaDB via the PyMySQL driver; dev/test may
@@ -366,7 +371,7 @@ enabled = false
 # pass = REPLACE_WITH_CAMERA_PASSWORD
 #
 # A second password for the SAME account, tried only after a camera answers 401
-# to the one above. 2,651 cameras are not all on one password: a rotation
+# to the one above. Both are taken literally — do not double a `%`. 2,651 cameras are not all on one password: a rotation
 # reaches the cameras that were online for it, and the ones that were down, or
 # were installed before it, still answer to the previous one. Optional — leave
 # it out and exactly one credential is tried, as before. Also a SECRET.

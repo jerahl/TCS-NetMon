@@ -128,3 +128,31 @@ def test_carto_api_key_is_optional_and_not_defaulted(tmp_path):
     # Whitespace is stripped: a trailing space becomes %20 in a tile URL and
     # the key silently stops matching.
     assert load_config(conf).web.carto_api_key == "k3y-with-spaces"
+
+
+def test_a_secret_containing_percent_is_delivered_verbatim(tmp_path):
+    """configparser must not rewrite a credential.
+
+    The default BasicInterpolation treats `%` as syntax: `%%` collapses to one
+    `%` and a lone `%` raises. A real camera password containing `%%` was
+    therefore delivered a character short, the camera answered 401, and the
+    tile read "camera rejected both configured passwords" while the value in
+    the file authenticated perfectly by hand (alb-cam-100, 2026-09-08).
+
+    Every value in this file is checked, not just the camera's: it is a file of
+    credentials — DB URL, SNMP community, API tokens — and any of them may
+    contain a `%`.
+    """
+    password = "Ab%%9x?Qz1w"
+    conf = write_config(
+        tmp_path,
+        db_url="sqlite:///" + str(tmp_path / "pc.db") + "?x=100%25",
+        extra_sections=(f"[camera_snapshot]\nenabled = true\nuser = service\n"
+                        f"pass = {password}\npass_backup = 50%off\n\n"
+                        f"[poller]\nsnmp_community = c0mmun1ty%%\n"),
+    )
+    cfg = load_config(conf)
+    assert cfg.camera_snapshot.password == password
+    assert cfg.camera_snapshot.password_backup == "50%off"
+    assert cfg.poller.snmp_community == "c0mmun1ty%%"
+    assert cfg.db.url.endswith("?x=100%25")

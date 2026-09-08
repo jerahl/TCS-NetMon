@@ -352,7 +352,15 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
             f"see netmon.conf.example)"
         )
 
-    parser = configparser.ConfigParser()
+    # `interpolation=None`: this file is mostly secrets, and configparser's
+    # default BasicInterpolation rewrites them. A `%` is not a literal to it —
+    # `%%` collapses to one `%` and a lone `%` raises — so a camera password
+    # containing `%%` was silently delivered a character short and every
+    # snapshot came back "camera rejected both configured passwords" (found on
+    # alb-cam-100, 2026-09-08: the value in the file authenticated, the value
+    # NetMon sent did not). No key here has ever wanted interpolation; a config
+    # of credentials must hand back exactly what was typed.
+    parser = configparser.ConfigParser(interpolation=None)
     # Preserve key case for group DNs etc.
     parser.optionxform = str  # type: ignore[assignment]
     read_ok = parser.read(conf_path)

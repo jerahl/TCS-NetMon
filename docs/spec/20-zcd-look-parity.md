@@ -444,6 +444,16 @@ camera. Trying https first is cheap when it is wrong — a closed 443 refuses th
 connection rather than burning `connect_timeout_s` — and the scheme that
 answered is remembered per camera alongside the password.
 
+**A `%` in a password is a `%` (fixed 2026-09-08).** `load_config` built its
+`ConfigParser` with the default `BasicInterpolation`, which treats `%` as
+syntax: `%%` collapses to one `%`, a lone `%` raises. The proxy therefore sent
+an 11-character password where the file held 12, alb-cam-100 answered 401, and
+the tile said "camera rejected both configured passwords" while the value as
+written authenticated by hand. `interpolation=None` now, in `netmon/config.py`
+and `scripts/zabbix_export.py` — a file of credentials must hand back exactly
+what was typed — with a regression test over a `%`-bearing password, SNMP
+community and DB URL, and the rule stated at the top of `netmon.conf.example`.
+
 **Two passwords, one account (added 2026-09-08).** `pass_backup` is an optional
 second password for the same account, tried only after a camera answers 401 to
 `pass`. 2,651 cameras are not all on one password: a rotation reaches the
