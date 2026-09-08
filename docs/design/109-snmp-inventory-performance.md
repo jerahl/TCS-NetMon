@@ -400,3 +400,53 @@ than the slowness it fixes.
   487.9 s against the per-sweep shape's comparable figure, within noise) and it
   conflicts with the "bank completed sweeps on cancellation" property that Part 1
   rightly insisted on keeping. Left alone deliberately.
+
+## 13. Verified on the deploy VM (2026-09-08, after restart)
+
+First run after `systemctl restart netmon netmon-poller` — the worst case, every
+sweep due at once, while every other collector was also restarting:
+
+```
+sweep ports  done: 19054 row(s),  3/155 failed, 292.4s
+sweep stack  done:   367 row(s),  0/155 failed,   3.8s
+sweep poe    done: 14346 row(s), 14/155 failed, 166.1s
+sweep fdb    done: 82450 row(s),  5/155 failed,  71.1s
+sweep edp    done:   311 row(s),  2/155 failed,  17.1s
+sweep vlans  done:  1886 row(s),  0/155 failed,  12.2s
+sweep entity done: 19194 row(s),  4/155 failed, 136.5s
+run complete: 137608 row(s) in 699.3s     consecutive_failures = 0
+```
+
+The skip fired on exactly the two intended hosts and said so:
+
+```
+WARNING skipping 2 switch(es) not answering SNMP; their inventory rows will age
+without refresh: Old TCT Automotive (192.168.88.250, snmp down since …),
+X465-48P (10.10.252.89, snmp down since …)
+```
+
+**The correctness fix, observed doing its job.** Switches that failed a walk kept
+their previous rows and their previous timestamps, while switches that succeeded
+refreshed:
+
+| Switch | fdb rows | `updated_at` | This pass |
+|---|---|---|---|
+| ARC-IDF-217 | 251 | 14:15:15 | fdb walk returned 0 lines → **kept** (old code: 0) |
+| Southview RM2108 | 366 | 14:14:44 | fdb truncated at 170 lines → **kept** (old code: 366→170) |
+| CES-LIBRARY | 140 | 14:15:15 | fdb truncated at 90 lines → **kept** |
+| ARC-MDF | 417 | 14:24:41 | succeeded → refreshed |
+| CES-IDF-A | 200 | 14:24:36 | succeeded → refreshed |
+
+**Damage that predates the fix does not self-heal.** `CES-MDF` still has **0**
+FDB entries and `OKD-MDF` **10** — both core MDF switches with 180 and 240
+ports. Those tables were emptied by the old behaviour and can only refill when a
+walk succeeds, which for these two it repeatedly does not. That is now an honest
+"stale since 14:14" rather than a confident empty table, but the underlying
+question stands: **CES-MDF (10.28.0.1) and OKD-MDF (10.64.0.1) have a real SNMP
+responsiveness problem** and fail walks across nearly every sweep. Worth a look
+at the switches themselves — this is the FDB the Switches page's FDB⋈PF identity
+pane reads, so it is currently blank for two of the district's core switches.
+
+**`ports` at 292.4 s against a 120 s interval** is the largest thing left. It
+overruns its own cadence, so the supervisor simply reschedules it back to back
+under load. §12's first bullet is now the top item, not a footnote.
