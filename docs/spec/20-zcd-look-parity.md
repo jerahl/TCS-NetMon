@@ -810,6 +810,71 @@ owner's choice:
 Either way the canary → ring → abort discipline is not optional for firmware, and
 the first live firmware batch should be watched, not scheduled.
 
+---
+
+#### S8 findings, 2026-09-08 — the investigation, and one blocker it uncovered
+
+**1. Milestone cannot be driven. The direct path stands.** The Config API on this
+2025 R2 deployment exposes no firmware or software-update resource. 28 candidate
+names — `firmware`, `firmwares`, `firmwareUpdate(s)`, `softwareUpdate(s)`,
+`deviceFirmware`, `deviceUpdate(s)`, `hardwareUpdate(s)`, `upgrade(s)`,
+`firmwarePackages`, `packages`, `driverUpdates`, `installations`, … — every one
+answers **404 "Unknown resource"**. `/api/rest/v1/tasks` *does* exist (200) but
+returns `{"array": []}` and is the async-task **result** list, not a catalogue of
+invokable operations; `recordingServers/{id}/tasks` is the same and equally
+empty. A hardware record's `relations` carries only `parent` and `self`, and
+`methods`/`actions`/`operations`/`commands` are all unknown resources.
+
+So the question "could NetMon drive XProtect's own push instead of talking to
+cameras?" is answered **no** for the REST API — the same shape as evidence locks
+(S6): if the capability exists in this version at all it lives behind the MIP
+interface, which NetMon does not speak. **The separate VMS-write sign-off that
+option would have needed is therefore moot**, and the direct-to-camera path in
+D11 is the only one available.
+
+**2. Firmware strings are not one format, and S8's safety conditions are string
+comparisons.** Across all 2,651 cameras:
+
+| form | count | examples | vendors |
+|---|---|---|---|
+| dotted | 1,732 | `7.83.0027` · `6.60.0065` · `6.50.1` | Bosch, Axis |
+| compact | 888 | `783` · `660` · `900` · `761` | Bosch only |
+| unreadable | 31 | `5.75.1.4` (4-part, fine) · `03500623` · `64500580` | Axis, ONVIF |
+
+`783` and `7.83.0027` are the same firmware written two ways, and **11 of 38
+models carry both forms**, so it is per camera, not per model. Left alone this
+breaks the two conditions that make a roll safe:
+
+* condition 3 (skip a camera already at target) would have matched nothing for
+  the 888 compact cameras and re-pushed firmware they already run;
+* condition 7 (verify by read-back) would have marked a *successful* upgrade
+  `failed` when the camera reported `790` and the image said `7.90.0123` — and
+  under condition 6 those failures count toward `abort_pct`, so a healthy roll
+  would have aborted itself.
+
+Fixed before any batch code exists: `netmon/cameras/firmware.py`, pure functions
+with 20 tests over the estate's real strings. The asymmetry is deliberate —
+**skipping** compares at the coarsest shared precision (a false "already there"
+costs one avoided push), while **verifying** demands the target's full precision
+and answers `INDETERMINATE` rather than `VERIFIED` when the camera's own format
+cannot express it. An unprovable upgrade is not a successful one. Unreadable
+strings return None and the camera is refused, never guessed at — including
+4-digit compact values, which are ambiguous (6.100 or 61.00?) and which this
+estate does not actually report.
+
+**3. Still open — the owner's call before code.** The catalogue deferral means
+the first thing S8 ships is the dangerous half. The spec's two options stand
+(dry-run + a lab/spare camera as the proving ground, **preferred**, or a minimal
+NTP/time-zone catalogue purely to exercise the runner). Nothing that writes to a
+camera is built until that is answered.
+
+**Fleet shape for the build:** 2,528 of 2,651 cameras are Bosch (2,019
+`Bosch1ch` + 509 `Bosch`) — 95%, confirming Bosch as the pilot vendor; 32 Axis;
+91 ONVIF, which have no snapshot path either. 84 distinct model×firmware pairs
+across 38 models, so per-image model allow-lists are both necessary and small.
+
+---
+
 **Sequencing:** after S1–S6 and after D7 (S4) has proven the camera-side HTTP
 path and credentials in production. Then: batch machinery + firmware store +
 Bosch profile in dry-run (2 sessions), the Milestone-mediated investigation above
@@ -1009,7 +1074,7 @@ NetMon largely has. Suggested order (spec 15 §3.2 estimates still apply):
 - [x] S4 snapshot proxy behind `[camera_snapshot] enabled = false`; allow-list + vendor + size + scheme + channel tests green; the render-at-source relaxation recorded above. Still needs the owner to provision the account.
 - [x] **S5 done 2026-09-07** — camera detail in ZCD's four-tab layout: sidecar + preview frame, Device Health as probe cells, 24h transition strip, stream/network kv, one PacketFence & uplink card with all four operator buttons, Active Issue with real Ack/Suppress, Recent Events. `state_events` added to the detail payload. Tab lives in the URL for both routes.
 - [x] S6 Sites / Servers / Storage / Alarms / Evidence Lock tabs; every unavailable metric named, none rendered as 0 — done 2026-09-08 (evidence locks probed and refused by the Config API; ring drawn only on a real fraction; row actions operator-gated)
-- [ ] S8 (D11) bulk camera ops: `firmware_images` / `camera_batches` / `camera_batch_items` migrations with rollback notes; batch runner as a supervised task; Bosch profile fixture-tested; `[camera_ops]` default-off + dry-run default; canary → rings → abort threshold; verification by read-back; admin-only; open questions above answered in this spec before the first live batch
+- [ ] S8 (D11) — investigation done 2026-09-08 (Milestone exposes no firmware resource; direct path stands) and `netmon/cameras/firmware.py` built; the write path waits on the owner's proving-ground answer. Remaining: bulk camera ops: `firmware_images` / `camera_batches` / `camera_batch_items` migrations with rollback notes; batch runner as a supervised task; Bosch profile fixture-tested; `[camera_ops]` default-off + dry-run default; canary → rings → abort threshold; verification by read-back; admin-only; open questions above answered in this spec before the first live batch
 - [ ] Every new component has a `render-check.mjs` case for its no-data shape; API tests for every new query param
 - [ ] Runbook `docs/runbooks/surveillance.md` updated: what each tab reads, what needs WinRM, how to enable snapshots, how to run and abort a batch
 
