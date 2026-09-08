@@ -337,6 +337,19 @@ class CameraOpsConfig:
     #: The privileged camera account. Empty until the owner provisions one.
     user: str = ""
     password: str = ""
+    #: Reuse `[camera_snapshot]`'s account instead of a separate one
+    #: (owner-directed 2026-09-08). Off by default and deliberately explicit:
+    #: that section documents its credential as read-only, so borrowing it for
+    #: writes has to be a decision somebody typed, not a fallback that happens
+    #: quietly. On this estate the snapshot account is `service`, which on Bosch
+    #: hardware is the privileged level — so the "read-only" note describes an
+    #: intention, not an enforced limit.
+    use_snapshot_credentials: bool = False
+    #: While set, pre-flight refuses **every camera except this device id**.
+    #: The proving ground the owner chose (2026-09-08) instead of a low-stakes
+    #: setting catalogue, expressed in code rather than in someone's memory: it
+    #: cannot be forgotten at 22:00 on the night of the first real batch.
+    proving_device_id: int = 0
     #: Vetted images live here, one directory per vendor. Outside the repo for
     #: the same reason credentials are.
     firmware_dir: str = "/var/lib/netmon/firmware"
@@ -628,6 +641,8 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         firmware_update=_ops("firmware_update"),
         user=parser.get("camera_ops", "user", fallback="").strip(),
         password=parser.get("camera_ops", "pass", fallback=""),
+        use_snapshot_credentials=_ops("use_snapshot_credentials"),
+        proving_device_id=parser.getint("camera_ops", "proving_device_id", fallback=0),
         firmware_dir=parser.get("camera_ops", "firmware_dir",
                                 fallback="/var/lib/netmon/firmware").strip(),
         canary_count=parser.getint("camera_ops", "canary_count", fallback=1),
@@ -640,7 +655,15 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         timeout_s=parser.getfloat("camera_ops", "timeout_s", fallback=120.0),
         verify_ssl=_as_bool(parser.get("camera_ops", "verify_ssl", fallback="false")),
     )
-    if camera_ops.enabled and not camera_ops.dry_run and not camera_ops.user:
+    if camera_ops.use_snapshot_credentials and camera_ops.user:
+        raise ConfigError("[camera_ops] sets both `user` and use_snapshot_credentials — "
+                          "pick one, so it is unambiguous which account writes to a camera")
+    if (camera_ops.enabled and not camera_ops.dry_run
+            and camera_ops.use_snapshot_credentials and not camera_snapshot.user):
+        raise ConfigError("[camera_ops] use_snapshot_credentials = true but "
+                          "[camera_snapshot] has no account to borrow")
+    if (camera_ops.enabled and not camera_ops.dry_run
+            and not camera_ops.use_snapshot_credentials and not camera_ops.user):
         # Live and credential-less would refuse every camera at pre-flight and
         # look like a fleet-wide fault. Fail at boot where it is one line.
         raise ConfigError("[camera_ops] enabled with dry_run = false needs `user` and "

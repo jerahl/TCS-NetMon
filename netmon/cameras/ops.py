@@ -70,6 +70,23 @@ class Preflight:
         }
 
 
+def credentials(cfg: Any) -> tuple[str, str]:
+    """The account a camera write authenticates with.
+
+    `[camera_ops] user/pass` normally; `[camera_snapshot]`'s when the owner has
+    explicitly set `use_snapshot_credentials` (2026-09-08). Borrowing it is a
+    typed decision rather than a silent fallback, because that section calls its
+    credential read-only — on this estate it is the Bosch `service` account,
+    which is the privileged level, so the note describes an intention rather
+    than an enforced limit.
+    """
+    ops = cfg.camera_ops
+    if ops.use_snapshot_credentials:
+        snap = cfg.camera_snapshot
+        return snap.user, snap.password
+    return ops.user, ops.password
+
+
 def _rows_for(engine: Engine, device_ids: list[int]) -> dict[int, dict]:
     """Everything pre-flight needs about each camera, in one read."""
     if not device_ids:
@@ -179,8 +196,18 @@ def preflight_firmware(engine: Engine, cfg: Any, device_ids: list[int],
         if device_id in no_touch:
             refuse("inside an active maintenance window")
             continue
-        if not (cfg.camera_ops.user and cfg.camera_ops.password):
-            refuse("no privileged camera account configured ([camera_ops] user/pass)")
+        user, password = credentials(cfg)
+        if not (user and password):
+            refuse("no privileged camera account configured ([camera_ops] user/pass, "
+                   "or use_snapshot_credentials)")
+            continue
+        proving = int(getattr(cfg.camera_ops, "proving_device_id", 0) or 0)
+        if proving and device_id != proving:
+            # The proving ground, enforced rather than remembered. While this is
+            # set NetMon can only ever write to the one camera the owner
+            # nominated, whatever a batch asks for.
+            refuse(f"[camera_ops] proving_device_id = {proving}: while the machinery is "
+                   f"being proved, only that camera may be written to")
             continue
 
         out.allowed.append(row)

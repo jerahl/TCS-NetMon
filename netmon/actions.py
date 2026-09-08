@@ -76,6 +76,17 @@ ACTIONS: dict[str, ActionSpec] = {
         effect="rConfig runs the stored 'Cycle POE' snippet on this switch port — anything powered by it reboots.",
         disruptive=True,
     ),
+    # The first action that goes straight to hardware rather than through a
+    # platform that would validate it (spec 20 S8 / D11). Admin-only, behind
+    # [camera_ops], dry-run by default — but it is in this registry for the same
+    # reason the other four are: what NetMon sent to a device belongs in one
+    # audited place, whatever asked for it.
+    "camera_firmware_update": ActionSpec(
+        key="camera_firmware_update", source="camera", label="Update camera firmware",
+        effect="Uploads a vetted firmware image straight to the camera; it reboots and "
+               "stops recording for the duration, and a wrong image needs a site visit.",
+        disruptive=True,
+    ),
     "ap_reboot": ActionSpec(
         key="ap_reboot", source="xiq", label="Reboot AP",
         effect="ExtremeCloud IQ reboots this access point; every client on it is disconnected for ~2 minutes.",

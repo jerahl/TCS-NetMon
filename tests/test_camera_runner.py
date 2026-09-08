@@ -1,0 +1,375 @@
+"""The batch executor (spec 20 S8 / D11) — canary, rings, abort, verification.
+
+Every camera here is a fake transport. That is the spec's own condition: a
+vendor path is fixture-tested before it ever sees a device, and this is the only
+module in NetMon where an untested branch means somebody driving to a school.
+
+The cases worth reading are the ones where the runner *stops*.
+"""
+
+import asyncio
+import hashlib
+import json
+from datetime import datetime, timedelta, timezone
+
+import pytest
+from sqlalchemy import text
+
+from netmon import db
+from netmon.cameras import ops
+from netmon.cameras.runner import BatchRefused, BatchRunner, load_image
+from netmon.config import load_config
+from tests.conftest import create_core_tables, write_config
+
+NOW = datetime(2026, 9, 8, 22, 0, tzinfo=timezone.utc)
+BLOB = b"BOSCH-FIRMWARE-7.90.0123"
+SHA = hashlib.sha256(BLOB).hexdigest()
+MODEL = "FLEXIDOME IP 5000i IR"
+
+
+# ── fakes ─────────────────────────────────────────────────────────────────
+
+class FakeResponse:
+    def __init__(self, status_code=200):
+        self.status_code = status_code
+
+
+class FakeCameraFleet:
+    """Every camera in one object: what each answers, and what it reports after.
+
+    `after` maps device_id → the firmware string the camera reports once it has
+    "rebooted". A camera missing from it never comes back, which is the failure
+    the reboot timeout exists for.
+    """
+
+    def __init__(self, *, upload_status=200, after=None, upload_status_by_ip=None):
+        self.upload_status = upload_status
+        self.upload_status_by_ip = upload_status_by_ip or {}
+        self.after = after or {}
+        self.uploads: list[str] = []
+
+    def client(self):
+        fleet = self
+
+        class _Client:
+            async def __aenter__(self_inner):
+                return self_inner
+
+            async def __aexit__(self_inner, *exc):
+                return False
+
+            async def post(self_inner, url, files=None, auth=None):
+                fleet.uploads.append(url)
+                ip = url.split("//", 1)[1].split("/")[0].split(":")[0]
+                return FakeResponse(fleet.upload_status_by_ip.get(ip, fleet.upload_status))
+
+        return _Client()
+
+
+def _seed(url, *, cameras=None):
+    engine = db.make_engine(url)
+    create_core_tables(engine)
+    cameras = cameras or [(1, "cam-a", "10.1.1.1"), (2, "cam-b", "10.1.1.2"),
+                          (3, "cam-c", "10.1.1.3")]
+    with engine.begin() as c:
+        for device_id, name, ip in cameras:
+            c.execute(text("INSERT INTO devices (id,name,site,device_type,enabled) "
+                           "VALUES (:i,:n,'BHS','camera',1)"),
+                      {"i": device_id, "n": name})
+            c.execute(text(
+                "INSERT INTO cameras (device_id, model, firmware, vendor, ip, "
+                "https_enabled, https_port, updated_at) "
+                "VALUES (:i,:m,'7.83.0027','Bosch1ch',:ip,1,443,:t)"),
+                {"i": device_id, "m": MODEL, "ip": ip, "t": NOW})
+            c.execute(text(
+                "INSERT INTO device_state (device_id,dimension,value,severity,source,updated_at) "
+                "VALUES (:i,'reachability','up','ok','derived',:t),"
+                "       (:i,'source_status','up','ok','milestone',:t)"),
+                {"i": device_id, "t": NOW})
+        c.execute(text(
+            "INSERT INTO firmware_images (id,vendor,version,filename,rel_path,size_bytes,"
+            "sha256,models,uploaded_by,uploaded_at) VALUES "
+            "(1,'bosch','7.90.0123','b790.fw','bosch/b790.fw',:sz,:sha,:models,'sappleby',:t)"),
+            {"sz": len(BLOB), "sha": SHA, "models": json.dumps([MODEL]), "t": NOW})
+    engine.dispose()
+    return db.make_engine(url)
+
+
+def _store(tmp_path):
+    d = tmp_path / "fw" / "bosch"
+    d.mkdir(parents=True)
+    (d / "b790.fw").write_bytes(BLOB)
+    return str(tmp_path / "fw")
+
+
+def _cfg(tmp_path, **ops_kw):
+    base = {"enabled": "true", "dry_run": "false", "firmware_update": "true",
+            "user": "svc-cam", "pass": "x", "firmware_dir": _store(tmp_path),
+            "reboot_timeout_s": "60"}
+    base.update(ops_kw)
+    body = "\n".join(f"{k} = {v}" for k, v in base.items())
+    return load_config(write_config(tmp_path, extra_sections=f"[camera_ops]\n{body}"))
+
+
+def _batch(engine, *, device_ids, dry=False, canary=1, ring=10, abort_pct=10,
+           max_concurrent=3):
+    db.execute(engine, """
+        INSERT INTO camera_batches (op, firmware_id, status, dry_run, canary_count,
+            ring_size, max_concurrent, abort_pct, reboot_timeout_s, created_by, created_at)
+        VALUES ('firmware_update', 1, 'previewed', :dry, :canary, :ring, :conc, :abort,
+                60, 'sappleby', :t)""",
+        {"dry": 1 if dry else 0, "canary": canary, "ring": ring, "conc": max_concurrent,
+         "abort": abort_pct, "t": NOW})
+    batch_id = int(db.fetch_one(engine, "SELECT MAX(id) AS id FROM camera_batches")["id"])
+    rings = ops.plan_rings(device_ids, canary_count=canary, ring_size=ring)
+    rows = [{"b": batch_id, "d": device_id, "r": ring_index,
+             "s": "would_run" if dry else "pending"}
+            for ring_index, group in enumerate(rings) for device_id in group]
+    db.execute(engine, "INSERT INTO camera_batch_items (batch_id, device_id, ring, status, "
+                       "before_value) VALUES (:b, :d, :r, :s, '7.83.0027')", rows)
+    return batch_id
+
+
+def _run(engine, cfg, batch_id, fleet, *, after=None):
+    """Run to completion with sleeps stubbed out."""
+    async def no_sleep(_s):
+        return None
+
+    runner = BatchRunner(engine, cfg, batch_id, actor="sappleby", role="admin",
+                         client_factory=fleet.client, sleep=no_sleep,
+                         milestone_firmware=lambda device_id: (after or {}).get(device_id))
+    return asyncio.run(runner.run()), runner
+
+
+def _items(engine, batch_id):
+    return {int(r["device_id"]): dict(r) for r in db.fetch_all(
+        engine, "SELECT * FROM camera_batch_items WHERE batch_id = :b", {"b": batch_id})}
+
+
+# ── the guards ────────────────────────────────────────────────────────────
+
+def test_a_live_batch_is_refused_while_the_flags_are_off(tmp_path):
+    engine = _seed(f"sqlite:///{tmp_path/'r1.db'}")
+    cfg = _cfg(tmp_path, enabled="false")
+    batch_id = _batch(engine, device_ids=[1])
+    with pytest.raises(BatchRefused, match="enabled = false"):
+        _run(engine, cfg, batch_id, FakeCameraFleet())
+
+
+def test_the_per_operation_flag_is_separate_from_enabled(tmp_path):
+    engine = _seed(f"sqlite:///{tmp_path/'r2.db'}")
+    cfg = _cfg(tmp_path, firmware_update="false")
+    batch_id = _batch(engine, device_ids=[1])
+    with pytest.raises(BatchRefused, match="firmware_update = false"):
+        _run(engine, cfg, batch_id, FakeCameraFleet())
+
+
+def test_a_dry_run_needs_no_arming_and_sends_nothing(tmp_path):
+    engine = _seed(f"sqlite:///{tmp_path/'r3.db'}")
+    cfg = _cfg(tmp_path, enabled="false", firmware_update="false")
+    batch_id = _batch(engine, device_ids=[1, 2, 3], dry=True)
+    fleet = FakeCameraFleet()
+
+    result, _ = _run(engine, cfg, batch_id, fleet)
+
+    assert fleet.uploads == []
+    assert result["would_run"] == 3
+    items = _items(engine, batch_id)
+    assert {i["status"] for i in items.values()} == {"would_run"}
+    assert "would upload b790.fw" in items[1]["message"]
+
+
+def test_an_image_that_changed_on_disk_is_refused(tmp_path):
+    """The SHA-256 is re-checked at run time, not trusted from upload: an image
+    that changed between vetting and roll is not the image that was vetted."""
+    engine = _seed(f"sqlite:///{tmp_path/'r4.db'}")
+    cfg = _cfg(tmp_path)
+    store = tmp_path / "fw" / "bosch" / "b790.fw"
+    store.write_bytes(b"TAMPERED")
+    batch_id = _batch(engine, device_ids=[1])
+    with pytest.raises(BatchRefused, match="changed on disk"):
+        _run(engine, cfg, batch_id, FakeCameraFleet())
+
+
+def test_a_missing_image_is_refused_before_anything_runs(tmp_path):
+    engine = _seed(f"sqlite:///{tmp_path/'r5.db'}")
+    cfg = _cfg(tmp_path)
+    (tmp_path / "fw" / "bosch" / "b790.fw").unlink()
+    batch_id = _batch(engine, device_ids=[1])
+    with pytest.raises(BatchRefused, match="missing from the store"):
+        _run(engine, cfg, batch_id, FakeCameraFleet())
+
+
+def test_a_scheduled_batch_will_not_start_early(tmp_path):
+    engine = _seed(f"sqlite:///{tmp_path/'r6.db'}")
+    cfg = _cfg(tmp_path)
+    batch_id = _batch(engine, device_ids=[1])
+    db.execute(engine, "UPDATE camera_batches SET not_before = :t WHERE id = :i",
+               {"t": datetime.now(timezone.utc) + timedelta(hours=6), "i": batch_id})
+    with pytest.raises(BatchRefused, match="scheduled for"):
+        _run(engine, cfg, batch_id, FakeCameraFleet())
+
+
+# ── the canary gate ───────────────────────────────────────────────────────
+
+def test_the_canary_gates_the_whole_batch(tmp_path):
+    """One camera goes first and the rest wait. This is the single mechanism
+    standing between a bad image and the second camera."""
+    engine = _seed(f"sqlite:///{tmp_path/'r7.db'}")
+    cfg = _cfg(tmp_path)
+    batch_id = _batch(engine, device_ids=[1, 2, 3])
+    # The canary never comes back on the new version.
+    fleet = FakeCameraFleet()
+    result, _ = _run(engine, cfg, batch_id, fleet, after={1: "7.83.0027"})
+
+    assert result["aborted"] is True
+    assert len(fleet.uploads) == 1           # cameras 2 and 3 were never touched
+    items = _items(engine, batch_id)
+    assert items[1]["status"] == "failed"
+    assert items[2]["status"] == "skipped" and "canary" in items[2]["message"]
+    batch = db.fetch_one(engine, "SELECT status, message FROM camera_batches WHERE id = :i",
+                         {"i": batch_id})
+    assert batch["status"] == "aborted" and "before the second camera" in batch["message"]
+
+
+def test_an_indeterminate_canary_also_stops_the_batch(tmp_path):
+    """888 cameras report firmware as `783`, which cannot prove `7.90.0123`.
+
+    The upgrade may well have worked. A fleet-wide roll should not proceed on
+    "probably" — so indeterminate halts exactly like a failure, and the item
+    says which it was.
+    """
+    engine = _seed(f"sqlite:///{tmp_path/'r8.db'}")
+    cfg = _cfg(tmp_path)
+    batch_id = _batch(engine, device_ids=[1, 2, 3])
+    fleet = FakeCameraFleet()
+    result, _ = _run(engine, cfg, batch_id, fleet, after={1: "790"})
+
+    assert result["aborted"] is True
+    items = _items(engine, batch_id)
+    assert items[1]["status"] == "indeterminate"
+    assert "cannot prove" in items[1]["message"]
+    assert len(fleet.uploads) == 1
+
+
+def test_a_verified_canary_lets_the_rings_proceed(tmp_path):
+    engine = _seed(f"sqlite:///{tmp_path/'r9.db'}")
+    cfg = _cfg(tmp_path)
+    batch_id = _batch(engine, device_ids=[1, 2, 3])
+    fleet = FakeCameraFleet()
+    after = {1: "7.90.0123", 2: "7.90.0123", 3: "7.90.0123"}
+
+    result, _ = _run(engine, cfg, batch_id, fleet, after=after)
+
+    assert result["aborted"] is False and result["verified"] == 3
+    assert len(fleet.uploads) == 3
+    items = _items(engine, batch_id)
+    assert items[3]["after_value"] == "7.90.0123"
+    # Which read answered is recorded: a Milestone-sourced confirmation is
+    # weaker evidence than the camera's own and must not read as the same.
+    assert items[3]["verified_by"] == "milestone"
+    batch = db.fetch_one(engine, "SELECT status FROM camera_batches WHERE id = :i",
+                         {"i": batch_id})
+    assert batch["status"] == "done"
+
+
+# ── the abort threshold ───────────────────────────────────────────────────
+
+def test_a_ring_over_the_abort_threshold_halts_the_batch(tmp_path):
+    engine = _seed(f"sqlite:///{tmp_path/'r10.db'}",
+                   cameras=[(i, f"cam-{i}", f"10.1.1.{i}") for i in range(1, 8)])
+    cfg = _cfg(tmp_path)
+    # canary + two rings of three.
+    batch_id = _batch(engine, device_ids=[1, 2, 3, 4, 5, 6, 7], ring=3, abort_pct=10)
+    fleet = FakeCameraFleet()
+    after = {1: "7.90.0123", 2: "7.90.0123", 3: "7.83.0027", 4: "7.90.0123"}
+
+    result, _ = _run(engine, cfg, batch_id, fleet, after=after)
+
+    assert result["aborted"] is True
+    items = _items(engine, batch_id)
+    assert items[3]["status"] == "failed"
+    # Ring 2 never ran: 5, 6 and 7 are skipped with the halt reason.
+    for device_id in (5, 6, 7):
+        assert items[device_id]["status"] == "skipped"
+        assert "halted" in items[device_id]["message"]
+    assert len(fleet.uploads) == 4
+
+
+def test_an_upload_that_is_rejected_is_a_failure_not_a_wait(tmp_path):
+    engine = _seed(f"sqlite:///{tmp_path/'r11.db'}")
+    cfg = _cfg(tmp_path)
+    batch_id = _batch(engine, device_ids=[1, 2, 3])
+    fleet = FakeCameraFleet(upload_status=401)
+
+    result, _ = _run(engine, cfg, batch_id, fleet)
+
+    assert result["aborted"] is True
+    items = _items(engine, batch_id)
+    assert items[1]["status"] == "failed" and "HTTP 401" in items[1]["message"]
+
+
+# ── the audit trail ───────────────────────────────────────────────────────
+
+def test_every_upload_is_audited_before_it_leaves(tmp_path):
+    """Same chokepoint as D4's four actions: the record of what NetMon sent to a
+    device lives in one table, whatever asked for it."""
+    engine = _seed(f"sqlite:///{tmp_path/'r12.db'}")
+    cfg = _cfg(tmp_path)
+    batch_id = _batch(engine, device_ids=[1, 2, 3])
+    _run(engine, cfg, batch_id, FakeCameraFleet(),
+         after={1: "7.90.0123", 2: "7.90.0123", 3: "7.90.0123"})
+
+    rows = db.fetch_all(engine, "SELECT * FROM action_audit ORDER BY id")
+    assert len(rows) == 3
+    assert {r["action"] for r in rows} == {"camera_firmware_update"}
+    assert {r["source"] for r in rows} == {"camera"}
+    assert {r["outcome"] for r in rows} == {"ok"}
+    assert rows[0]["actor"] == "sappleby" and rows[0]["actor_role"] == "admin"
+    # The image is named in the audit params; no credential ever is.
+    params = json.loads(rows[0]["params"])
+    assert params["image"] == "b790.fw" and params["version"] == "7.90.0123"
+    assert not any("pass" in k.lower() for k in params)
+    # And the item points back at its audit row, so the two can be read together.
+    assert _items(engine, batch_id)[1]["audit_id"] == rows[0]["id"]
+
+
+def test_a_dry_run_writes_no_audit_rows_because_nothing_was_sent(tmp_path):
+    engine = _seed(f"sqlite:///{tmp_path/'r13.db'}")
+    cfg = _cfg(tmp_path)
+    batch_id = _batch(engine, device_ids=[1, 2, 3], dry=True)
+    _run(engine, cfg, batch_id, FakeCameraFleet())
+    assert db.fetch_all(engine, "SELECT * FROM action_audit") == []
+
+
+# ── addressing ────────────────────────────────────────────────────────────
+
+def test_the_upload_url_is_rebuilt_from_the_registry(tmp_path):
+    """Same rule as the snapshot proxy: a batch can only ever reach an address
+    Milestone registered for a camera."""
+    engine = _seed(f"sqlite:///{tmp_path/'r14.db'}")
+    cfg = _cfg(tmp_path)
+    batch_id = _batch(engine, device_ids=[1])
+    fleet = FakeCameraFleet()
+    _run(engine, cfg, batch_id, fleet, after={1: "7.90.0123"})
+    assert fleet.uploads == ["https://10.1.1.1/upload.htm"]
+
+
+def test_an_aborted_batch_can_be_stopped_by_an_operator(tmp_path):
+    engine = _seed(f"sqlite:///{tmp_path/'r15.db'}")
+    cfg = _cfg(tmp_path)
+    batch_id = _batch(engine, device_ids=[1, 2, 3])
+    runner = BatchRunner(engine, cfg, batch_id, actor="sappleby", role="admin")
+    runner.abort("stopped from the batch page")
+
+    batch = db.fetch_one(engine, "SELECT status, message FROM camera_batches WHERE id = :i",
+                         {"i": batch_id})
+    assert batch["status"] == "aborted" and "operator" not in (batch["message"] or "")
+    assert {i["status"] for i in _items(engine, batch_id).values()} == {"skipped"}
+
+
+def test_load_image_rejects_an_unregistered_id(tmp_path):
+    engine = _seed(f"sqlite:///{tmp_path/'r16.db'}")
+    cfg = _cfg(tmp_path)
+    with pytest.raises(BatchRefused, match="not registered"):
+        load_image(engine, cfg, 99)

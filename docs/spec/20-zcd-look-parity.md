@@ -910,11 +910,63 @@ guess a code and send it to 2,528 cameras, and verification falls back to
 Milestone — which is exactly the arrangement the owner chose. Filling the gap
 needs one line from Bosch's RCP+ documentation, not more code.
 
-**Still to build:** the executor (canary gate, ring progression, abort
-threshold, read-back verification), the firmware store upload + SHA-256
-re-check, the API (`/api/surveillance/batches`, `/firmware`), and the admin-only
-Bulk actions tab. The write call itself stays unreachable until `[camera_ops]`
-is armed and the lab camera has proved it.
+**5. Executor built 2026-09-08** (`netmon/cameras/runner.py`, 16 tests against a
+fake fleet). Canary gate, ring progression, abort threshold, SHA-256 re-check at
+run time, read-back verification, and the audit row per item. Still nothing can
+be sent: `[camera_ops] enabled = false` and `firmware_update = false`.
+
+Three behaviours in it that are decisions, not mechanics:
+
+* **An `indeterminate` canary halts the batch**, exactly like a failure. 888
+  cameras report firmware in a form that cannot prove a build number, so the
+  upgrade may well have worked — and a fleet-wide roll should not proceed on
+  "probably". The item records which it was, so nobody has to guess later.
+* **The SHA-256 is re-checked when the batch runs**, not trusted from upload. An
+  image that changed on disk between vetting and roll is not the image that was
+  vetted, and the difference is a bricked camera.
+* **A rejected upload is a failure immediately**, not something to wait out. The
+  verification wait exists for a camera that is flashing, not for one that
+  answered 401.
+
+Verification polls in *attempts* rather than against a wall clock — the first
+version deadlocked its own tests for minutes, which is exactly how a hung
+verification would behave in production.
+
+**Owner answers wired in, 2026-09-08:**
+
+* **`proving_device_id = 1592`** — `alb-cam-44` (10.21.18.44, TASPA, FLEXIDOME
+  IP 5000i IR, fw 7.83.0027). While it is set, pre-flight refuses *every* other
+  camera, whatever a batch asks for. The proving ground is enforced in code
+  rather than remembered at 22:00 on the night of the first batch.
+* **`use_snapshot_credentials = true`** — the owner directed reusing the
+  account already in `netmon.conf` rather than provisioning a second. Worth
+  recording plainly: that account is `service`, which on Bosch hardware is the
+  privileged level, so `[camera_snapshot]`'s "read-only" note describes an
+  intention and not an enforced limit. Setting both `user` and this flag is
+  refused at load, so which account writes to a camera is never ambiguous.
+
+**Live dry-run, 2026-09-08** — migration 029 applied to production, then a real
+batch created against the real registry targeting alb-cam-44 plus three
+neighbours:
+
+    ALLOW  alb-cam-44   10.21.18.44   FLEXIDOME IP 5000i IR  fw=7.83.0027
+    REFUSE alb-cam-100  proving_device_id = 1592
+    REFUSE alb-cam-101  proving_device_id = 1592
+    REFUSE alb-cam-102  reachability is down_network_only, not up
+    → 1 would_run, 3 skipped, 0 audit rows (nothing was sent)
+
+alb-cam-102 refusing itself for an unrelated reason is the reachability tier
+doing its job. The placeholder image row and the demo batch were deleted
+afterwards: a 28-byte registered "image" is selectable, and a live batch would
+push it to a camera.
+
+**Still to build:** the firmware store upload endpoint, the API
+(`/api/surveillance/batches`, `/firmware`), and the admin-only Bulk actions tab.
+Then the first live canary on alb-cam-44 — watched, not scheduled.
+
+**Outstanding before that canary:** a real Bosch image for this model, vetted
+and registered; and one line of Bosch RCP+ documentation would upgrade
+verification from Milestone-fallback to the camera's own answer.
 
 **Fleet shape for the build:** 2,528 of 2,651 cameras are Bosch (2,019
 `Bosch1ch` + 509 `Bosch`) — 95%, confirming Bosch as the pilot vendor; 32 Axis;
