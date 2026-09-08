@@ -185,6 +185,61 @@ def register_firmware(body: RegisterBody, request: Request,
             "sha256": sha, "models": models, "platform": body.platform.strip() or None}
 
 
+class AmendBody(BaseModel):
+    """What may be changed on a registered image, and what may not."""
+    models: list[str] | None = None
+    platform: str | None = None
+    notes: str | None = None
+
+
+@router.patch("/firmware/{image_id}")
+def amend_firmware(image_id: int, body: AmendBody, request: Request,
+                   engine: Engine = Depends(get_engine),
+                   user=Depends(require_role(Role.admin))) -> dict:
+    """Widen (or correct) an image's model allow-list, platform or notes.
+
+    Deliberately narrow: the file, its SHA-256 and its size are **not**
+    amendable. Those identify the image that was vetted, and letting them move
+    under an existing id would mean a batch created yesterday points at
+    different bytes today.
+
+    Widening an allow-list is a real safety decision — it says "this image may
+    now reach these cameras too" — so it is logged at warning level with who did
+    it and what changed, and an empty list is refused: an image that names no
+    model may touch nothing.
+    """
+    row = db.fetch_one(engine, "SELECT * FROM firmware_images WHERE id = :i", {"i": image_id})
+    if row is None:
+        raise HTTPException(status_code=404, detail="no such firmware image")
+    before = json.loads(row["models"] or "[]")
+
+    fields: dict[str, object] = {}
+    if body.models is not None:
+        models = [m.strip() for m in body.models if m.strip()]
+        if not models:
+            raise _refused("an image with no model allow-list may touch nothing")
+        fields["models"] = json.dumps(models)
+    if body.platform is not None:
+        fields["platform"] = body.platform.strip() or None
+    if body.notes is not None:
+        fields["notes"] = body.notes.strip() or None
+    if not fields:
+        raise _refused("nothing to change")
+
+    sets = ", ".join(f"{k} = :{k}" for k in fields)
+    db.execute(engine, f"UPDATE firmware_images SET {sets} WHERE id = :id",
+               {**fields, "id": image_id})
+    after = json.loads(fields.get("models", row["models"]) or "[]")
+    added = sorted(set(after) - set(before))
+    removed = sorted(set(before) - set(after))
+    log.warning("firmware image %s (%s) amended by %s: models +%s -%s%s",
+                image_id, row["version"], _actor(user), added or "none",
+                removed or "none",
+                f", platform -> {fields['platform']}" if "platform" in fields else "")
+    return {"id": image_id, "models": after, "added": added, "removed": removed,
+            "platform": fields.get("platform", row["platform"])}
+
+
 # ── batches ───────────────────────────────────────────────────────────────
 
 class BatchBody(BaseModel):

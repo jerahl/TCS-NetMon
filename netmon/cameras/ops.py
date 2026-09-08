@@ -28,6 +28,7 @@ from sqlalchemy.engine import Engine
 
 from netmon import db
 from netmon.cameras import firmware as fw
+from netmon.cameras.platforms import compatible, platform_for
 from netmon.cameras.vendors import profile_for
 
 #: Statuses a `camera_batch_items` row can hold. Named here because the runner,
@@ -174,13 +175,22 @@ def preflight_firmware(engine: Engine, cfg: Any, device_ids: list[int],
             continue
 
         declared = str(image.get("platform") or "").strip()
-        known = str(row.get("platform") or "").strip()
-        if declared and known and declared != known:
-            # Stored from the last probe. The runner checks again live before
-            # every upload — this one is so a preview can say it up front rather
-            # than after somebody has approved the batch.
-            refuse(f"camera is {known}; this image is built for {declared}")
-            continue
+        # The vendor's own model→CPP table first, the stored probe second. The
+        # table is authoritative about *which* generation a model is; the probe
+        # can only prove a band, and its legacy band spans CPP4 through CPP7.3 —
+        # which on this estate includes 393 CPP4 cameras that must never receive
+        # a CPP7.3 image.
+        known = platform_for(row.get("model")) or str(row.get("platform") or "").strip()
+        if declared:
+            verdict = compatible(declared, known)
+            if verdict is False:
+                refuse(f"camera is {known}; this image is built for {declared}")
+                continue
+            if verdict is None:
+                refuse(f"this image is built for {declared} and the platform of model "
+                       f"{row.get('model') or 'unknown'!r} is not known — refusing "
+                       f"rather than guessing")
+                continue
 
         already = fw.same_release(row.get("firmware"), image.get("version"))
         if already is None:

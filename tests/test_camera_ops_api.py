@@ -260,3 +260,60 @@ def test_an_unknown_batch_is_a_404_not_a_500(tmp_path):
     with client:
         assert client.get("/api/surveillance/batches/999").status_code == 404
         assert client.post("/api/surveillance/batches/999/abort").status_code == 404
+
+
+# ── amending an allow-list ────────────────────────────────────────────────
+
+def test_widening_an_allow_list_reports_what_changed(tmp_path):
+    """Widening says "this image may now reach these cameras too", so the
+    response and the log both name the difference rather than the new state."""
+    client, _ = _client(tmp_path)
+    with client:
+        image_id = _register(client).json()["id"]
+        r = client.patch(f"/api/surveillance/firmware/{image_id}",
+                         json={"models": [MODEL, "FLEXIDOME IP 4000i"]})
+        assert r.status_code == 200, r.text
+        assert r.json()["added"] == ["FLEXIDOME IP 4000i"]
+        assert r.json()["removed"] == []
+        rows = client.get("/api/surveillance/firmware").json()
+        assert sorted(rows[0]["models"]) == ["FLEXIDOME IP 4000i", MODEL]
+
+
+def test_the_bytes_of_a_registered_image_cannot_be_amended(tmp_path):
+    """The file, its hash and its size identify the image that was vetted. If
+    they could move under an existing id, a batch created yesterday would point
+    at different bytes today."""
+    client, _ = _client(tmp_path)
+    with client:
+        image_id = _register(client).json()["id"]
+        r = client.patch(f"/api/surveillance/firmware/{image_id}",
+                         json={"sha256": "b" * 64, "filename": "other.fw",
+                               "size_bytes": 1})
+        # Unknown fields are ignored by the model, so nothing changes and the
+        # call is refused as empty rather than silently accepted.
+        assert r.status_code == 409
+        row = client.get("/api/surveillance/firmware").json()[0]
+        assert row["sha256"] == SHA and row["filename"] == "b793.fw"
+
+
+def test_an_allow_list_cannot_be_emptied(tmp_path):
+    client, _ = _client(tmp_path)
+    with client:
+        image_id = _register(client).json()["id"]
+        r = client.patch(f"/api/surveillance/firmware/{image_id}", json={"models": []})
+        assert r.status_code == 409
+        assert "may touch nothing" in r.json()["detail"]
+
+
+def test_amending_an_unknown_image_is_a_404(tmp_path):
+    client, _ = _client(tmp_path)
+    with client:
+        assert client.patch("/api/surveillance/firmware/999",
+                            json={"models": ["x"]}).status_code == 404
+
+
+def test_amending_is_admin_only(tmp_path):
+    client, _ = _client(tmp_path, role="operator")
+    with client:
+        assert client.patch("/api/surveillance/firmware/1",
+                            json={"models": ["x"]}).status_code == 403

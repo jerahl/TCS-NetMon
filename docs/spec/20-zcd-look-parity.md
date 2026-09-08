@@ -1194,6 +1194,55 @@ cleanly instead of crashing the batch and leaving rows claiming `running`.
 * One camera is not a ring. The abort threshold and ring progression have been
   tested against a fake fleet, not against hardware.
 
+### S8 — the vendor's CPP table, and a probe that was too coarse
+
+The owner supplied Bosch/Keenfinity's "Which CPP corresponds to certain cameras
+and encoders?" table on 2026-09-08, and it corrected something the live probe
+had got dangerously wrong.
+
+**The probe proves a band, not a point.** The only legacy marker the RCP+
+reference offers (`CONF_CPU_LOAD_VCA`) is documented for CPP6/CPP7/CPP7.3 — and
+its availability row does not mention **CPP4 at all**. This estate runs 419 CPP4
+cameras (254 `FLEXIDOME IP indoor 5000 HD`, 157 outdoor, 8 panoramic 5000 MP),
+every one of which answered that marker and was recorded as "CPP6/7/7.3" by the
+first sweep. A CPP7.3 image would then have looked eligible for them.
+
+`netmon/cameras/platforms.py` transcribes the table for the models this estate
+runs, with the vendor's CTNs beside each so the mapping can be checked rather
+than trusted. Pre-flight and the runner now take **the table as authoritative
+for which generation a model is**, and use the probe for what it is genuinely
+good at: catching a device that answers as something the table did not expect.
+A model the table does not list is refused rather than assumed — that is 69
+`FLEXIDOME IP micro 3000i` today, which the article does not cover.
+
+Corrected on the deploy VM: 2,351 stored platforms rewritten from the table, and
+69 coarse `CPP6/7/7.3` values cleared, because a band left in a column that
+reads like a fact is worse than a NULL.
+
+    FLEXIDOME IP 5000i IR / 5000i / 4000i / 3000i IR   CPP7.3   1,523
+    FLEXIDOME IP indoor / outdoor 5000 HD, pano 5000   CPP4       419
+    FLEXIDOME indoor / outdoor / pano 5100i IR         CPP14.2    307
+    FLEXIDOME multi 7000i (+ IR, 20MP)                 CPP14.1    202
+    DINION IP starlight 6000 HD                        CPP7         8
+    FLEXIDOME IP micro 3000i                           unlisted    69
+
+`compatible()` requires an exact generation, with one allowance: the vendor
+numbers CPP14.1/14.2/14.3 sub-variants sharing a firmware line, so an image
+labelled plainly `CPP14` is accepted for those. CPP7 and CPP7.3 are *not*
+interchangeable however similar they look, and CPP4 is a different world again.
+
+**Allow-list widened, on the owner's word plus three kinds of evidence.**
+`FLEXIDOME IP 4000i` joins image #2 (7.93.0024): the owner said so, the vendor
+table lists it as CPP7.3 (NDI/NDE-4502-A/AL), five sampled cameras probe as the
+legacy band, and one 4000i on this estate **already runs 7.93.0024**. A
+`PATCH /api/surveillance/firmware/{id}` endpoint now exists for exactly this, so
+widening is a recorded act rather than a hand-edited row; it refuses an empty
+list and cannot touch the file, hash or size, because those identify the image
+that was vetted.
+
+Still available to add on the owner's word, both table-confirmed CPP7.3:
+`FLEXIDOME IP 5000i` (212 cameras) and `FLEXIDOME IP 3000i IR` (7).
+
 **A Firmware tab on Surveillance (owner-directed 2026-09-08).** The same
 machinery, reached from the NOC page rather than only from the Cameras
 navigator, and admin-only — a viewer does not see the tab at all, and typing the

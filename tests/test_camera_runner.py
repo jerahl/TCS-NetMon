@@ -554,8 +554,13 @@ def test_an_image_for_another_platform_is_refused_at_the_last_moment(tmp_path):
 
 
 def test_a_matching_platform_proceeds_and_is_remembered(tmp_path):
+    """A real CPP14 model, a CPP14 image, and a camera that answers as CPP14."""
     engine = _seed(f"sqlite:///{tmp_path/'r21.db'}")
-    db.execute(engine, "UPDATE firmware_images SET platform = 'CPP14/15/16' WHERE id = 1")
+    db.execute(engine, "UPDATE firmware_images SET platform = 'CPP14.2', "
+                       "models = :m WHERE id = 1",
+               {"m": json.dumps(["FLEXIDOME outdoor 5100i IR"])})
+    db.execute(engine, "UPDATE cameras SET model = 'FLEXIDOME outdoor 5100i IR' "
+                       "WHERE device_id = 1")
     cfg = _cfg(tmp_path)
     batch_id = _batch(engine, device_ids=[1])
     fleet = _patch_fleet_get(_platform_fleet({"10.1.1.1": "CPP14/15/16"},
@@ -565,10 +570,31 @@ def test_a_matching_platform_proceeds_and_is_remembered(tmp_path):
 
     assert result["verified"] == 1
     assert len(fleet.uploads) == 1
-    # Probed once, stored — so the next preview can refuse up front rather than
-    # after somebody has approved the batch.
+    # The vendor table's exact generation is what gets stored, not the probe's
+    # band — a band is not a fact about this camera.
     row = db.fetch_one(engine, "SELECT platform FROM cameras WHERE device_id = 1")
-    assert row["platform"] == "CPP14/15/16"
+    assert row["platform"] == "CPP14.2"
+
+
+def test_a_probe_that_contradicts_the_vendor_table_stops_the_item(tmp_path):
+    """Two sources disagreeing about silicon is not something to average.
+
+    If a camera the table calls CPP7.3 answers as CPP14, either the table is
+    wrong for this device or the device is not what the registry says. Either
+    way, a firmware push is the wrong thing to do next.
+    """
+    engine = _seed(f"sqlite:///{tmp_path/'r26.db'}")
+    db.execute(engine, "UPDATE firmware_images SET platform = 'CPP7.3' WHERE id = 1")
+    cfg = _cfg(tmp_path)
+    batch_id = _batch(engine, device_ids=[1])
+    fleet = _patch_fleet_get(_platform_fleet({"10.1.1.1": "CPP14/15/16"}))
+
+    _run(engine, cfg, batch_id, fleet)
+
+    assert fleet.uploads == []
+    item = _items(engine, batch_id)[1]
+    assert item["status"] == "failed"
+    assert "vendor table calls" in item["message"]
 
 
 def test_an_image_that_names_no_platform_leaves_the_gate_open(tmp_path):

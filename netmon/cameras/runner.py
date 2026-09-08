@@ -43,6 +43,7 @@ from netmon import db
 from netmon.actions import ActionRefused, AuditedAction, action_or_refuse
 from netmon.cameras import firmware as fw
 from netmon.cameras import ops
+from netmon.cameras.platforms import compatible, platform_for, probe_agrees
 from netmon.cameras.vendors import profile_for
 from netmon.cameras.vendors.bosch import (
     VendorReadUnavailable, VendorWriteUnavailable,
@@ -288,18 +289,32 @@ class BatchRunner:
         declared = str(image.get("platform") or "").strip()
         if declared:
             found = await self._probe_platform(item, base)
-            if found and found != declared:
-                message = (f"camera is {found}; this image is built for {declared} — "
+            table = platform_for(item.get("model"))
+            # The probe proves a band; the vendor table names the point. A
+            # camera whose model the table knows is judged on the table, and the
+            # probe is used to catch the table being wrong about this device.
+            if found and table and probe_agrees(found, table) is False:
+                message = (f"camera answers as {found} but the vendor table calls "
+                           f"{item.get('model')!r} {table} — refusing until that is "
+                           f"resolved")
+                _set_item(self.engine, item_id, status=ops.FAILED, finished_at=_now(),
+                          message=message)
+                log.warning("camera batch %s: %s (%s)", self.batch_id, message,
+                            item.get("name"))
+                return ops.FAILED
+            effective = table or found
+            if effective and compatible(declared, effective) is not True:
+                message = (f"camera is {effective}; this image is built for {declared} — "
                            f"refusing rather than risking a wrong-platform flash")
                 _set_item(self.engine, item_id, status=ops.FAILED, finished_at=_now(),
                           message=message)
                 log.warning("camera batch %s: %s (%s)", self.batch_id, message,
                             item.get("name"))
                 return ops.FAILED
-            if found:
+            if effective:
                 db.execute(self.engine,
                            "UPDATE cameras SET platform = :p WHERE device_id = :d",
-                           {"p": found, "d": device_id})
+                           {"p": effective, "d": device_id})
         try:
             spec = action_or_refuse("camera_firmware_update")
         except ActionRefused as exc:             # registry drift; refuse loudly

@@ -329,3 +329,74 @@ def test_the_upload_request_matches_the_camera_s_own_form():
         bosch.firmware_upload_request("https://10.1.1.1", "../../etc/passwd", b"x")
     with pytest.raises(ValueError, match="empty"):
         bosch.firmware_upload_request("https://10.1.1.1", "bosch.fw", b"")
+
+
+# ── the vendor's CPP table ────────────────────────────────────────────────
+
+def test_the_probe_band_does_not_name_a_generation():
+    """The correction the vendor table forced, 2026-09-08.
+
+    The only legacy marker available is documented for CPP6/CPP7/CPP7.3, and
+    this estate also runs CPP4 cameras that answer it. So a probe saying
+    "CPP6/7/7.3" cannot authorise a CPP7.3 image — 393 CPP4 cameras sit inside
+    that band, including 254 FLEXIDOME IP indoor 5000 HD.
+    """
+    from netmon.cameras.platforms import compatible, platform_for, probe_agrees
+
+    assert platform_for("FLEXIDOME IP indoor 5000 HD") == "CPP4"
+    assert platform_for("FLEXIDOME IP 4000i") == "CPP7.3"
+    assert platform_for("DINION IP starlight 6000 HD") == "CPP7"   # not 7.3
+    assert platform_for("FLEXIDOME IP micro 3000i") is None        # unlisted
+
+    # The band contains CPP4, so the probe agreeing proves nothing about which.
+    assert probe_agrees("CPP6/7/7.3", "CPP4") is True
+    assert probe_agrees("CPP6/7/7.3", "CPP7.3") is True
+    # But it does contradict a newer generation, which is what it is for.
+    assert probe_agrees("CPP14/15/16", "CPP7.3") is False
+
+
+def test_an_image_may_only_go_to_its_own_generation():
+    from netmon.cameras.platforms import compatible
+
+    assert compatible("CPP7.3", "CPP7.3") is True
+    assert compatible("CPP7.3", "CPP4") is False      # the dangerous pairing
+    assert compatible("CPP7.3", "CPP7") is False      # near neighbours, still no
+    # The vendor numbers CPP14 sub-variants that share a firmware line, so a
+    # plainly-labelled CPP14 image is accepted for them.
+    assert compatible("CPP14", "CPP14.2") is True
+    assert compatible("CPP14.1", "CPP14.2") is False
+    # Unknown on either side is undecidable, never permission.
+    assert compatible("CPP7.3", "") is None
+    assert compatible("", "CPP7.3") is None
+
+
+def test_preflight_prefers_the_table_over_the_stored_probe(tmp_path):
+    """A CPP4 camera recorded as CPP6/7/7.3 by an early probe must still be
+    refused a CPP7.3 image."""
+    url = f"sqlite:///{tmp_path/'o11.db'}"
+    engine = _seed(url)
+    with engine.begin() as c:
+        c.execute(text("UPDATE cameras SET model = 'FLEXIDOME IP indoor 5000 HD', "
+                       "platform = 'CPP6/7/7.3' WHERE device_id = 1"))
+    cfg = _cfg(tmp_path, user="svc-cam", **{"pass": "x"})
+    image = dict(IMAGE, platform="CPP7.3",
+                 models=json.dumps(["FLEXIDOME IP indoor 5000 HD"]))
+
+    pre = preflight_firmware(engine, cfg, [1], image, now=NOW)
+    assert pre.allowed == []
+    assert "camera is CPP4" in _reasons(pre)["cam-ok"]
+
+
+def test_a_model_the_table_does_not_know_is_refused_not_assumed(tmp_path):
+    url = f"sqlite:///{tmp_path/'o12.db'}"
+    engine = _seed(url)
+    with engine.begin() as c:
+        c.execute(text("UPDATE cameras SET model = 'FLEXIDOME IP micro 3000i', "
+                       "platform = NULL WHERE device_id = 1"))
+    cfg = _cfg(tmp_path, user="svc-cam", **{"pass": "x"})
+    image = dict(IMAGE, platform="CPP7.3",
+                 models=json.dumps(["FLEXIDOME IP micro 3000i"]))
+
+    pre = preflight_firmware(engine, cfg, [1], image, now=NOW)
+    assert pre.allowed == []
+    assert "is not known" in _reasons(pre)["cam-ok"]
