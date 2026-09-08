@@ -526,6 +526,64 @@ CREATE TABLE action_audit (
 """
 
 
+CAMERA_OPS_DDL_SQLITE = (
+    """
+CREATE TABLE firmware_images (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vendor TEXT NOT NULL,
+    version TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    rel_path TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    sha256 TEXT NOT NULL UNIQUE,
+    models TEXT NOT NULL,
+    notes TEXT,
+    uploaded_by TEXT NOT NULL,
+    uploaded_at TIMESTAMP NOT NULL
+)
+""",
+    """
+CREATE TABLE camera_batches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    op TEXT NOT NULL,
+    firmware_id INTEGER,
+    setting_key TEXT,
+    setting_value TEXT,
+    status TEXT NOT NULL DEFAULT 'draft',
+    dry_run INTEGER NOT NULL DEFAULT 1,
+    canary_count INTEGER NOT NULL DEFAULT 1,
+    ring_size INTEGER NOT NULL DEFAULT 10,
+    max_concurrent INTEGER NOT NULL DEFAULT 3,
+    abort_pct INTEGER NOT NULL DEFAULT 10,
+    reboot_timeout_s INTEGER NOT NULL DEFAULT 300,
+    not_before TIMESTAMP,
+    created_by TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    started_at TIMESTAMP,
+    finished_at TIMESTAMP,
+    message TEXT
+)
+""",
+    """
+CREATE TABLE camera_batch_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL,
+    device_id INTEGER NOT NULL,
+    ring INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending',
+    before_value TEXT,
+    after_value TEXT,
+    verified_by TEXT,
+    audit_id INTEGER,
+    message TEXT,
+    started_at TIMESTAMP,
+    finished_at TIMESTAMP,
+    UNIQUE (batch_id, device_id)
+)
+""",
+)
+
+
 STATE_SAMPLES_DDL_SQLITE = """
 CREATE TABLE state_samples (
     series TEXT NOT NULL,
@@ -575,6 +633,7 @@ def create_core_tables(engine) -> None:
             SETTINGS_AUDIT_DDL_SQLITE,
             STATE_SAMPLES_DDL_SQLITE,
             ACTION_AUDIT_DDL_SQLITE,
+            *CAMERA_OPS_DDL_SQLITE,
         ):
             conn.execute(text(ddl))
 

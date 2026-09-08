@@ -369,6 +369,53 @@ poe_snippet_id = 4
 # role must never be able to reboot an AP.
 min_role = operator
 
+[camera_ops]
+# Bulk camera operations — firmware update and (later) configuration change.
+# Spec 20 S8, gate D11. THE MOST DANGEROUS THING NETMON CAN DO: a wrong image
+# bricks a camera and costs a truck roll, so every default here is off.
+#
+# Not built yet beyond pre-flight and planning; there is no executor. These keys
+# exist so the shape is reviewable before anything can send.
+enabled = false
+# Walks every check and records what it *would* do, sending nothing. Stays true
+# until the owner has watched a batch behave on a lab/spare camera.
+dry_run = true
+# Per operation, because they carry different risk. The setting catalogue is
+# deferred, so config_change has nothing to run yet.
+config_change = false
+firmware_update = false
+#
+# A PRIVILEGED camera account — deliberately NOT the read-only one in
+# [camera_snapshot], which is documented as unable to change camera
+# configuration. Reusing it would either fail every write or mean that account
+# was never read-only. Both are SECRETS.
+# user = netmon-ops
+# pass = REPLACE_WITH_PRIVILEGED_CAMERA_PASSWORD
+#
+# Vetted firmware images, one directory per vendor, outside the repo for the
+# same reason credentials are. Each image is registered in `firmware_images`
+# with a SHA-256 and a model allow-list; a push refuses any camera not on it.
+firmware_dir = /var/lib/netmon/firmware
+#
+# The ring discipline. Copied onto each batch at creation, so editing this file
+# mid-roll cannot change the rules a running batch plays by.
+# The canary runs ALONE and the batch stops until it verifies — it is the only
+# thing between a bad image and the second camera. 0 is refused at load.
+canary_count = 1
+ring_size = 10
+max_concurrent = 3
+# Hard cap per batch. The fleet is 2,651, so a full roll is many batches by
+# design — that is the point, not a limitation.
+max_batch = 50
+# Halt the batch when a ring's failure rate exceeds this percentage.
+abort_pct = 10
+# How long to wait for a camera to come back and report the new version.
+reboot_timeout_s = 300
+connect_timeout_s = 5
+timeout_s = 120
+# Cameras on the VMS network carry self-signed certificates, as with snapshots.
+verify_ssl = false
+
 [camera_snapshot]
 # Camera still-image proxy (spec 11 D7, approved 2026-07-28; built spec 20 S4).
 #

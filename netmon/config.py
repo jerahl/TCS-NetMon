@@ -314,6 +314,46 @@ class SourceToggle:
 
 
 @dataclass(frozen=True)
+class CameraOpsConfig:
+    """Bulk camera operations (spec 20 S8, gate D11 approved in principle).
+
+    The first NetMon write that goes **straight to hardware** rather than
+    through a platform that validates it, so the defaults are the most cautious
+    in the file: everything off, dry-run on, and the two operations gated
+    separately.
+
+    The account is deliberately NOT the snapshot proxy's. `[camera_snapshot]`
+    documents its credential as read-only and says the account "must not be able
+    to change camera configuration" — which is exactly right, and exactly why it
+    cannot push firmware. Reusing it would either fail every write or quietly
+    mean the read-only account was never read-only.
+    """
+    enabled: bool = False
+    dry_run: bool = True
+    #: Per-operation, because they carry different risk. The setting catalogue
+    #: is deferred (owner, 2026-09-07) so `config_change` has nothing to run yet.
+    config_change: bool = False
+    firmware_update: bool = False
+    #: The privileged camera account. Empty until the owner provisions one.
+    user: str = ""
+    password: str = ""
+    #: Vetted images live here, one directory per vendor. Outside the repo for
+    #: the same reason credentials are.
+    firmware_dir: str = "/var/lib/netmon/firmware"
+    #: The ring discipline. Copied onto each batch at creation so a later config
+    #: edit cannot change the rules a running batch plays by.
+    canary_count: int = 1
+    ring_size: int = 10
+    max_concurrent: int = 3
+    max_batch: int = 50
+    abort_pct: int = 10
+    reboot_timeout_s: int = 300
+    connect_timeout_s: float = 5.0
+    timeout_s: float = 120.0
+    verify_ssl: bool = False
+
+
+@dataclass(frozen=True)
 class Config:
     db: DBConfig
     web: WebConfig
@@ -325,6 +365,7 @@ class Config:
     history: HistoryConfig
     actions: ActionsConfig
     camera_snapshot: CameraSnapshotConfig
+    camera_ops: CameraOpsConfig
     sources: dict[str, SourceToggle]
     path: str
 
@@ -577,6 +618,43 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         raise ConfigError("[camera_snapshot] enabled = true needs `user` (and `pass`) — "
                           "the shared read-only camera account")
 
+    def _ops(key: str, default: str = "false") -> bool:
+        return _as_bool(parser.get("camera_ops", key, fallback=default))
+
+    camera_ops = CameraOpsConfig(
+        enabled=_ops("enabled"),
+        dry_run=_ops("dry_run", "true"),
+        config_change=_ops("config_change"),
+        firmware_update=_ops("firmware_update"),
+        user=parser.get("camera_ops", "user", fallback="").strip(),
+        password=parser.get("camera_ops", "pass", fallback=""),
+        firmware_dir=parser.get("camera_ops", "firmware_dir",
+                                fallback="/var/lib/netmon/firmware").strip(),
+        canary_count=parser.getint("camera_ops", "canary_count", fallback=1),
+        ring_size=parser.getint("camera_ops", "ring_size", fallback=10),
+        max_concurrent=parser.getint("camera_ops", "max_concurrent", fallback=3),
+        max_batch=parser.getint("camera_ops", "max_batch", fallback=50),
+        abort_pct=parser.getint("camera_ops", "abort_pct", fallback=10),
+        reboot_timeout_s=parser.getint("camera_ops", "reboot_timeout_s", fallback=300),
+        connect_timeout_s=parser.getfloat("camera_ops", "connect_timeout_s", fallback=5.0),
+        timeout_s=parser.getfloat("camera_ops", "timeout_s", fallback=120.0),
+        verify_ssl=_as_bool(parser.get("camera_ops", "verify_ssl", fallback="false")),
+    )
+    if camera_ops.enabled and not camera_ops.dry_run and not camera_ops.user:
+        # Live and credential-less would refuse every camera at pre-flight and
+        # look like a fleet-wide fault. Fail at boot where it is one line.
+        raise ConfigError("[camera_ops] enabled with dry_run = false needs `user` and "
+                          "`pass` — a privileged camera account, NOT the read-only "
+                          "one in [camera_snapshot]")
+    if camera_ops.canary_count < 1:
+        raise ConfigError("[camera_ops] canary_count must be at least 1 — the canary "
+                          "is what stops a bad image reaching the second camera")
+    if camera_ops.max_batch < 1 or camera_ops.ring_size < 1:
+        raise ConfigError("[camera_ops] max_batch and ring_size must be positive")
+    if not 0 < camera_ops.abort_pct <= 100:
+        raise ConfigError("[camera_ops] abort_pct must be between 1 and 100; 0 would "
+                          "abort a batch on its first success")
+
     actions = ActionsConfig(
         enabled=_abool("enabled"),
         reevaluate_access=_abool("reevaluate_access"),
@@ -612,4 +690,4 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
     return Config(db=db, web=web, auth=auth, security=security, poller=poller,
                   snmp_inventory=snmp_inventory, engine=engine, history=history,
                   actions=actions, camera_snapshot=camera_snapshot,
-                  sources=sources, path=conf_path)
+                  camera_ops=camera_ops, sources=sources, path=conf_path)

@@ -862,11 +862,59 @@ strings return None and the camera is refused, never guessed at — including
 4-digit compact values, which are ambiguous (6.100 or 61.00?) and which this
 estate does not actually report.
 
-**3. Still open — the owner's call before code.** The catalogue deferral means
-the first thing S8 ships is the dangerous half. The spec's two options stand
-(dry-run + a lab/spare camera as the proving ground, **preferred**, or a minimal
-NTP/time-zone catalogue purely to exercise the runner). Nothing that writes to a
-camera is built until that is answered.
+**3. Owner answers, 2026-09-08.**
+
+* **Proving ground: the lab/spare camera** (the spec's preferred option). The
+  machinery and the Bosch profile are built and run in dry-run; the first live
+  batches go to one deliberate spare before any production camera. *Outstanding
+  owner action: nominate that camera.*
+* **Read-back: vendor read preferred, Milestone as fallback.** Recorded per item
+  in `camera_batch_items.verified_by`, because which one answered changes how
+  much the answer is worth.
+
+**4. Built 2026-09-08 — the safety core, no executor.** Migration `029`
+(`firmware_images`, `camera_batches`, `camera_batch_items`), `[camera_ops]`
+(everything off, `dry_run = true`), `netmon/cameras/ops.py` (pre-flight + ring
+planning + dry-run batch creation), `netmon/cameras/vendors/` (closed registry,
+Bosch only), and `netmon/cameras/firmware.py`. 40 tests. Nothing sends.
+
+Four decisions inside that are worth stating:
+
+* **The account is not the snapshot proxy's.** `[camera_snapshot]` documents its
+  credential as read-only and says it "must not be able to change camera
+  configuration" — which is exactly why it cannot push firmware. `[camera_ops]`
+  takes its own privileged account, and arming the section without one fails at
+  boot rather than refusing every camera at pre-flight and looking like a
+  fleet-wide fault.
+* **Refused cameras are recorded, not omitted.** Each becomes a `skipped` item
+  carrying its reason. A batch that quietly dropped them leaves an operator
+  unable to tell a camera that was fine from one that was forgotten.
+* **The ring discipline is copied onto the batch row** at creation. A batch must
+  play by the rules it was created under; reading them from config at run time
+  means editing the file mid-roll silently changes the safety margin of
+  something already running.
+* **A maintenance window means no-touch here**, not just "suppress the email".
+  A window is somebody saying this equipment is being worked on, and pushing
+  firmware into that is how two people end up at one camera.
+
+**Bosch profile — transport proven, one gap named.** Live probe of a FLEXIDOME
+IP 5000i IR: `GET /rcp.xml?command=…&direction=READ` answers **200 `text/xml`**
+with a well-formed `<rcp>` envelope, authenticating with the Digest account
+NetMon already holds — so RCP+ is reachable and the write path has somewhere to
+go. `/info.xml`, `/version.xml`, `/device.xml` and `/deviceinfo.xml` all 400.
+The **command code for firmware version is not derivable**: the camera's own
+`/js/rcp.js` is a generic transport library with no command constants (zero
+occurrences of "firmware"), and the reference bundle carries no Bosch RCP+
+material. So `read_firmware_version` raises `VendorReadUnavailable` rather than
+guess a code and send it to 2,528 cameras, and verification falls back to
+Milestone — which is exactly the arrangement the owner chose. Filling the gap
+needs one line from Bosch's RCP+ documentation, not more code.
+
+**Still to build:** the executor (canary gate, ring progression, abort
+threshold, read-back verification), the firmware store upload + SHA-256
+re-check, the API (`/api/surveillance/batches`, `/firmware`), and the admin-only
+Bulk actions tab. The write call itself stays unreachable until `[camera_ops]`
+is armed and the lab camera has proved it.
 
 **Fleet shape for the build:** 2,528 of 2,651 cameras are Bosch (2,019
 `Bosch1ch` + 509 `Bosch`) — 95%, confirming Bosch as the pilot vendor; 32 Axis;
