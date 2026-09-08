@@ -107,3 +107,24 @@ def test_poller_in_process_is_not_web_editable(tmp_path):
     from netmon import settings
 
     assert "poller.in_process" not in settings.BY_KEY
+
+
+def test_carto_api_key_is_optional_and_not_defaulted(tmp_path):
+    """The map must survive a config that has no basemap key.
+
+    Empty means the tiles arrive watermarked, which is worse than keyed and far
+    better than a map with no basemap at all — so this must never raise, and it
+    must never invent a placeholder that would be sent to CARTO as a real key.
+    """
+    from netmon.config import load_config
+    from tests.conftest import write_config
+
+    cfg = load_config(write_config(tmp_path))
+    assert cfg.web.carto_api_key == ""
+
+    conf = write_config(tmp_path, extra_sections="")
+    text = conf.read_text().replace("[web]\n", "[web]\ncarto_api_key =  k3y-with-spaces  \n")
+    conf.write_text(text)
+    # Whitespace is stripped: a trailing space becomes %20 in a tile URL and
+    # the key silently stops matching.
+    assert load_config(conf).web.carto_api_key == "k3y-with-spaces"

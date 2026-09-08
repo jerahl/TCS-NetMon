@@ -41,6 +41,22 @@ session_ttl = 43200
 # only builds a host/port target — credentials are entered in the terminal,
 # never handled here. Leave empty to hide the affordance.
 # ssheasy_url = https://ssheasy.example.internal
+
+# CARTO Basemaps API key for the site map's raster tiles (spec 09).
+#
+# Without it CARTO stamps every tile "API KEY REQUIRED", which is what the map
+# showed until 2026-09-08. Get a free key at carto.com/basemaps/apikey — the
+# free tier is 5,000,000 tile requests a calendar month, in exchange for
+# keeping the CARTO and OpenStreetMap attribution visible on the map (the map
+# page renders it; do not remove it).
+#
+# This key reaches the browser through /api/meta, because it is a query
+# parameter on a tile URL — there is no way to use it server-side. It still
+# belongs here rather than in the repo: a committed key is in git history and
+# indexed forever, and this one carries a quota and a no-sharing term.
+#
+# Empty → the map still works, watermarked, rather than losing its basemap.
+# carto_api_key = REPLACE_WITH_CARTO_BASEMAPS_KEY
 # Base URL of the PacketFence ADMIN UI (not the REST API base in [packetfence]
 # — on a normal deployment those are different ports). Used to deep-link an
 # endpoint as <packetfence_url>/admin/#/node/<mac> from AP and port detail.

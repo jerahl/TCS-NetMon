@@ -321,9 +321,20 @@ kind and utilisation, animated flow, event feed, site list with codes and device
 counts, DARK / NOC MODE / EDIT MAP controls, legend.
 
 **Two issues:**
-1. **The basemap is watermarked "API KEY REQUIRED"** across the entire tile
+1. ~~**The basemap is watermarked "API KEY REQUIRED"** across the entire tile
    layer (CARTO key missing or expired). On the one page ZCD can't match, this
-   is the first thing a visitor sees.
+   is the first thing a visitor sees.~~ **Fixed 2026-09-08.** The owner supplied
+   a CARTO Basemaps key; it lives in `[web] carto_api_key` in
+   `/etc/netmon/netmon.conf` and reaches the browser through `/api/meta`, never
+   the repo. Verified by tile size: the same tile is 13,302 B unkeyed and
+   9,286 B keyed, and a deliberately wrong key returns the 13,302 B watermarked
+   version — so the fix is measured, not assumed. Free tier is 5,000,000
+   tiles/month **on condition the CARTO + OpenStreetMap attribution stays
+   visible**, which `map.jsx` renders and whose comment now says why it must not
+   be tidied away. **Follow-up worth taking:** CARTO is retiring raster in
+   favour of vector tiles (sharper at any zoom, fresher data, restyleable). That
+   needs a Leaflet vector plugin, i.e. a new frontend dependency, so it is an
+   owner decision under CLAUDE.md §3 rather than something to slip in.
 2. It uses **its own shell** — own topbar, own control styling — unlike every
    other page. When the design tokens land (spec 14 G0), this page should adopt
    them rather than stay a separate visual language.

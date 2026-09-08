@@ -96,6 +96,7 @@ def ui_meta(
         version=__version__,
         zabbix_url=cfg.web.zabbix_url,
         ssheasy_url=cfg.web.ssheasy_url,
+        carto_api_key=cfg.web.carto_api_key,
         packetfence_url=cfg.web.packetfence_url,
         milestone_host=(milestone.settings.get("host", "") if milestone else ""),
         can_edit=cfg.security.allow_web_edit,

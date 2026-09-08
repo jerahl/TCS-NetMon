@@ -52,6 +52,19 @@ class WebConfig:
     # NetMon only builds a target URL (host/port); it never handles credentials
     # (ssheasy prompts for them in-terminal) — read-only-first still holds.
     ssheasy_url: str = ""
+    # CARTO Basemaps API key for the site map's raster tiles. Without it CARTO
+    # stamps every tile "API KEY REQUIRED" — which on the one page ZCD has no
+    # answer to is the first thing a visitor sees.
+    #
+    # It is a credential, so it lives here and reaches the browser through
+    # /api/meta, never through the repo (§4.6). It is *also* unavoidably visible
+    # in the browser's network tab, because it is a query parameter on a tile
+    # URL — that is how the service is designed. Keeping it out of git still
+    # matters: a committed key is in history and indexed forever, and this key
+    # carries a 5,000,000-tile monthly quota and a no-sharing term.
+    #
+    # Empty → the map still works, watermarked, rather than losing its basemap.
+    carto_api_key: str = ""
     # Base URL of the PacketFence *admin UI*, for deep-linking an endpoint:
     # <packetfence_url>/admin/#/node/<mac> (the shape ZCD uses —
     # ActionSearchData.php:287). This is deliberately NOT reused from
@@ -347,6 +360,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         session_ttl=parser.getint("web", "session_ttl", fallback=43200),
         zabbix_url=parser.get("web", "zabbix_url", fallback="").strip().rstrip("/"),
         ssheasy_url=parser.get("web", "ssheasy_url", fallback="").strip().rstrip("/"),
+        carto_api_key=parser.get("web", "carto_api_key", fallback="").strip(),
     )
 
     # --- [auth] — SAML SP (ClassLink) + dev bypass ---

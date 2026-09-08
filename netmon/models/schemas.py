@@ -320,6 +320,12 @@ class UiMeta(BaseModel):
     ssheasy_url: str = ""
     # PacketFence admin-UI base, for the endpoint deep-link. Empty → hidden.
     packetfence_url: str = ""
+    # CARTO Basemaps API key for the site map's raster tiles. Unavoidably
+    # browser-visible — it is a query parameter on a tile URL — but it stays out
+    # of the repo, because a committed key is in git history and indexed
+    # forever, and this one carries a monthly quota and a no-sharing term.
+    # Empty → the map renders watermarked rather than losing its basemap.
+    carto_api_key: str = ""
     # The Milestone API Gateway host, shown in the Surveillance page header the
     # way ZCD shows its management server (spec 20 S1). A hostname, not a
     # credential; empty when [milestone] is unconfigured, and the header then
