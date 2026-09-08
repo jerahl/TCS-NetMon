@@ -30,37 +30,32 @@ sources agree:
            <direction>READ</direction><payload></payload>
            <result><str>7.83.0027</str></result></rcp>
 
-**The upload endpoint, corrected by the camera itself 2026-09-08.** Spec 20
-recorded `/upload.htm`. That is wrong for this generation: a live attempt on
-alb-cam-44 (FLEXIDOME IP 5000i IR, CPP7.3) had the connection dropped 0.8 s in,
-before any of the 91 MiB moved — `httpx.ReadError`, nothing transferred, camera
-unharmed and still on 7.83.0027.
+**The upload endpoint and its field name, settled by the camera 2026-09-08.**
+The first live attempt failed — connection dropped 0.8 s into a POST to
+`/upload.htm`, none of the 91 MiB transferred, camera unharmed. The endpoint
+looked like the culprit and it was not: the camera's own service page settles
+both halves::
 
-The camera's own web UI says where it posts. `js/utils.js` carries::
+    <form method="post" action="upload.htm" enctype="multipart/form-data"
+          target="uploadIFrame" id="firmwareUpload">
+      <input type="file" name="net.bin" id="fwfile" class="file">
+    </form>
 
-    function getZipUrl(zip) { ... return zip ? "zip.xml" : "unzip.xml"; }
-    function ajaxUpload(url, file, name, pwd) {
-        var formData = new FormData();
-        if (pwd) { formData.append("pwd", pwd); }
-        formData.append(name, file);
-        ...
-    }
+    DragDropUtils.ajaxUpload("upload.htm", file, "net.bin", password)
 
-So an upload is a **multipart POST to `/unzip.xml`** with an optional `pwd`
-part — which matches "password required for this upload" and "file is to large
-for that type of upload", two strings sitting beside it in the same file.
+So `/upload.htm` was right, and the **multipart part name is `net.bin`** — a
+detail no amount of reading the RCP+ reference would have produced, because the
+upload is not an RCP+ command at all. Sending the part as `file` is what made
+the camera hang up, and it is exactly the sort of thing that cannot be reasoned
+out, only observed.
 
-What is still missing is the **name of the file part**: `ajaxUpload` takes it
-from its caller, and the caller lives in the settings UI's lazily-loaded
-`page_cam_upload` webpack chunk, which is not reachable from the live-view page
-this profile can see. So :func:`firmware_upload_request` refuses rather than
-send a multipart body with a guessed field name — a guess would most likely be
-rejected, but "most likely" is not the standard for the one operation here that
-can brick a device.
+The same page shows two more things worth keeping: firmware is submitted with no
+password (the password dialog belongs to config uploads), and the UI refuses a
+filename that does not end in `.fw` before it submits anything.
 
-One capture of the browser's own upload request (devtools → Network → the POST
-to `unzip.xml` → the form-data part name) closes this, exactly as one line of
-the RCP+ reference closed the version read.
+`/unzip.xml`, which `utils.js` returns from `getZipUrl()`, is a *different*
+upload path used elsewhere in that UI. Following it was a wrong turn taken from
+a plausible-looking string; the service page is the authority for firmware.
 
 **What the doc says about uploads**, recorded because it changes how a failed
 push will be diagnosed once the write path is live:
@@ -213,14 +208,13 @@ def answered(xml: str) -> bool:
     return "<result>" in body
 
 
-#: Where the camera's own UI posts an upload (`getZipUrl()` in its utils.js).
-UPLOAD_PATH = "/unzip.xml"
-#: The multipart part name the file goes in. **Empty until observed**: the
-#: camera's `ajaxUpload(url, file, name, pwd)` takes it from a caller this
-#: profile cannot see. Fill it in from one captured request and the write path
-#: is live; guessing it is not an option for an operation that can brick a
-#: device.
-UPLOAD_FIELD = ""
+#: Where the camera's own service page posts firmware, and the name of the
+#: multipart part it puts the file in. Both read off the page's own markup
+#: (`js/page_service.js`), not guessed: the part name `net.bin` is not derivable
+#: from anything, and sending `file` instead is what made the first live attempt
+#: fail.
+UPLOAD_PATH = "/upload.htm"
+UPLOAD_FIELD = "net.bin"
 
 
 def firmware_upload_request(base_url: str, filename: str, blob: Any) -> dict:
@@ -234,10 +228,9 @@ def firmware_upload_request(base_url: str, filename: str, blob: Any) -> dict:
     988 MiB image streams from disk instead of sitting in memory once per
     concurrent upload.
 
-    **Refused until the field name is known** (see the module docstring). The
-    endpoint is settled — `/unzip.xml`, from the camera's own code — but the
-    name of the multipart file part is not, and this is the one operation in
-    NetMon where being probably-right is not good enough.
+    Endpoint and field name both come from the camera's own service page (see
+    the module docstring). The image keeps its own filename; only the *part*
+    name is fixed, because that is what the device parses on.
     """
     if not filename or "/" in filename or "\\" in filename:
         raise ValueError("firmware filename must be a bare name from the image store")

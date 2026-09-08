@@ -227,9 +227,19 @@ its *read* half is a source read like any other.
   answered is recorded per item in `camera_batch_items.verified_by`, because a
   Milestone-sourced confirmation is at most one identity-backfill cycle old and
   is weaker evidence.
-- **Writing** (firmware upload) is unbuilt in effect: the request builder exists,
-  every flag is off, and `proving_device_id` restricts pre-flight to one
-  nominated camera. Nothing has been sent to hardware.
+- **Writing** (firmware upload) is a multipart POST to `/upload.htm` with the
+  file in a part named **`net.bin`** — both read off the camera's own service
+  page, not inferred; `net.bin` appears in no documentation and is not an RCP+
+  command.
+  - *Authenticate first, always.* Digest costs a challenge round trip, and httpx
+    pays it by sending the request unauthenticated once. With a 91 MiB image
+    that means shipping the whole file to be told "authenticate first", and the
+    camera drops the connection — two live attempts died at 0.8s before this was
+    understood. A cheap GET primes the challenge on the same auth object.
+  - *Proven on hardware 2026-09-08:* alb-cam-44 went 7.83.0027 → 7.93.0024,
+    verified by its own RCP+ read, 1m55s end to end.
+  - Still gated: `[camera_ops]` flags plus `proving_device_id`, which restricts
+    pre-flight to one nominated camera.
 - **Config:** `[camera_ops] enabled, dry_run, config_change, firmware_update,
   user/pass or use_snapshot_credentials, proving_device_id, firmware_dir,
   canary_count, ring_size, max_concurrent, max_batch, abort_pct,

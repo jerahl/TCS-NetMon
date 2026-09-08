@@ -300,37 +300,32 @@ def test_the_upload_error_taxonomy_is_the_vendors_own():
     assert UPLOAD_ERRORS[111] == "version too low"
 
 
-def test_the_upload_request_refuses_until_the_field_name_is_known():
-    """What the first live canary taught, on 2026-09-08.
+def test_the_upload_request_matches_the_camera_s_own_form():
+    """Endpoint and part name are read off the camera's service page markup.
 
-    `/upload.htm` was spec 20's assertion and the camera dropped the connection
-    0.8s in, having transferred none of the 91 MiB. The endpoint is `/unzip.xml`
-    — the camera's own utils.js says so — but the multipart *field name* comes
-    from a settings-UI chunk nobody has read, so the request is refused rather
-    than guessed. Guessing would probably just be rejected; "probably" is not
-    the standard for the one call here that can brick a device.
+        <form method="post" action="upload.htm" enctype="multipart/form-data">
+          <input type="file" name="net.bin" id="fwfile">
+
+    `net.bin` is not derivable from anything — it is not an RCP+ command, and no
+    documentation this project holds mentions it. Sending the part as `file` is
+    what made the first live attempt fail with the connection dropped 0.8s in.
     """
     from netmon.cameras.vendors import bosch
 
-    assert bosch.UPLOAD_PATH == "/unzip.xml"
-    assert bosch.UPLOAD_FIELD == "", "a field name was filled in without evidence"
-    with pytest.raises(bosch.VendorWriteUnavailable, match="field name"):
-        bosch.firmware_upload_request("https://10.1.1.1", "bosch_7_93.fw", b"\x00\x01")
+    assert bosch.UPLOAD_PATH == "/upload.htm"
+    assert bosch.UPLOAD_FIELD == "net.bin"
 
-    # The argument checks still run first: a path is never a filename, and an
-    # empty image is refused before anything else is considered.
+    req = bosch.firmware_upload_request("https://10.1.1.1", "CPP7.3_FW_7.93.0024.fw", b"\x00")
+    assert req["method"] == "POST" and req["url"] == "https://10.1.1.1/upload.htm"
+    # The part name is fixed; the filename inside it stays the image's own, which
+    # is what the device logs and what the UI checks ends in .fw.
+    assert list(req["files"]) == ["net.bin"]
+    assert req["files"]["net.bin"][0] == "CPP7.3_FW_7.93.0024.fw"
+    # A firmware upload is not a request to retry: a second attempt landing
+    # mid-flash is how a camera stops coming back.
+    assert req["retries"] == 0
+
     with pytest.raises(ValueError):
         bosch.firmware_upload_request("https://10.1.1.1", "../../etc/passwd", b"x")
     with pytest.raises(ValueError, match="empty"):
         bosch.firmware_upload_request("https://10.1.1.1", "bosch.fw", b"")
-
-    # And once it is known, the request is the multipart POST the UI makes.
-    saved, bosch.UPLOAD_FIELD = bosch.UPLOAD_FIELD, "file"
-    try:
-        req = bosch.firmware_upload_request("https://10.1.1.1", "bosch_7_93.fw", b"\x00\x01")
-        assert req["method"] == "POST" and req["url"].endswith("/unzip.xml")
-        # A firmware upload is not a request to retry: a second attempt landing
-        # mid-flash is how a camera stops coming back.
-        assert req["retries"] == 0
-    finally:
-        bosch.UPLOAD_FIELD = saved

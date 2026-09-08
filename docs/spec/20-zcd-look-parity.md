@@ -1141,10 +1141,58 @@ The class name is what makes such a row readable.
 All three are covered by a test that reproduces exactly this failure — a fake
 camera that accepts the connection and drops it mid-upload.
 
-**Outstanding before a second attempt:** the multipart field name for
-`/unzip.xml`. Everything else has now been exercised against real hardware:
-pre-flight, the platform gate, the audit chokepoint, the failure paths, and the
-verification read.
+### S8 — the canary landed, 2026-09-08
+
+**alb-cam-44 is on 7.93.0024, verified by the camera itself.**
+
+    batch 5   done       20:56:11 → 20:58:06
+    item      verified   7.83.0027 → 7.93.0024   verified_by = vendor
+    audit 7   ok         HTTP 200, 83,385 ms of upload
+
+**The cause of the two failures was neither the endpoint nor the field name.**
+It was the digest handshake. Digest sends a request once unauthenticated to
+collect the 401, then repeats it with credentials — so a 91 MiB image was being
+shipped in full to be told "authenticate first", and this camera drops the
+connection rather than reading it. Both attempts died at exactly 0.8 s, which is
+a server hanging up on the first bytes, not a transfer failing. A cheap GET now
+collects the challenge on the same auth object, and the image goes out
+authenticated on its first and only send.
+
+**Correcting the previous entry:** `/upload.htm` was right all along, and
+`/unzip.xml` was a wrong turn taken from a plausible string in `utils.js`. The
+camera's own service page settles both halves::
+
+    <form method="post" action="upload.htm" enctype="multipart/form-data"
+          target="uploadIFrame" id="firmwareUpload">
+      <input type="file" name="net.bin" id="fwfile" class="file">
+
+The part name **`net.bin`** was undiscoverable by reasoning — it is not an RCP+
+command and appears in no documentation this project holds. It came from reading
+the page's markup, reached through the settings bundle's own webpack chunk map
+(`1108: "page_cam_upload"` was a decoy; `page_service` is where firmware lives).
+
+**What the run proves, beyond the one camera:** the platform probe matched
+before anything was sent; the audit row was written before the bytes left; the
+camera went unreachable mid-flash (`ConnectTimeout`) and the poller kept
+waiting rather than calling it failed; and verification came from the camera's
+own `<major>.<minor>.<build>` answer, not from the POST's 200. Because this was
+a single-camera batch, ring 0 was the whole batch — with more cameras it would
+now release to ring 1.
+
+**And the two failures were safe failures.** Nothing was half-written, and the
+fixes from the previous attempt did their job: the second failed one item
+cleanly instead of crashing the batch and leaving rows claiming `running`.
+
+**Known limits, now that it works:**
+
+* `reboot_timeout_s = 300` was enough here (the camera was back in ~90 s), but a
+  slower model could exceed it and be recorded `failed` while still upgrading.
+  The read-back would correct the record on the next batch; the item would not.
+* Milestone's stored firmware still reads 7.83.0027 until the identity backfill
+  catches up. The camera and `camera_batch_items.after_value` are the current
+  truth, which is exactly why `verified_by` exists.
+* One camera is not a ring. The abort threshold and ring progression have been
+  tested against a fake fleet, not against hardware.
 
 **Fleet shape for the build:** 2,528 of 2,651 cameras are Bosch (2,019
 `Bosch1ch` + 509 `Bosch`) — 95%, confirming Bosch as the pilot vendor; 32 Axis;

@@ -317,6 +317,17 @@ class BatchRunner:
             timeout = httpx.Timeout(ops_cfg.timeout_s, connect=ops_cfg.connect_timeout_s)
             factory = self._client_factory or (
                 lambda: httpx.AsyncClient(timeout=timeout, verify=ops_cfg.verify_ssl))
+            # ONE auth object for both requests below, deliberately. Digest is a
+            # challenge/response: the first request goes out unauthenticated,
+            # collects a 401, and is repeated with credentials. For a 91 MiB
+            # image that means shipping the whole file to be told "authenticate
+            # first" — and this camera drops the connection rather than reading
+            # it, which is what killed both live attempts at 0.8 s.
+            #
+            # So a cheap GET collects the challenge first. httpx caches it on the
+            # auth object, and the upload then goes out authenticated on its
+            # first and only send.
+            auth = httpx.DigestAuth(user, password)
             # Its own handle, streamed: one 988 MiB image times three concurrent
             # uploads is a gigabyte of resident data that buys nothing.
             try:
@@ -327,8 +338,11 @@ class BatchRunner:
                     request = profile.firmware_upload_request(base, str(image["filename"]),
                                                               handle)
                     async with factory() as client:
+                        if hasattr(profile, "version_read_request"):
+                            await client.get(profile.version_read_request(base)["url"],
+                                             auth=auth)
                         resp = await client.post(request["url"], files=request["files"],
-                                                 auth=httpx.DigestAuth(user, password))
+                                                 auth=auth)
             except VendorWriteUnavailable as exc:
                 audit.failed(str(exc))
                 _set_item(self.engine, item_id, status=ops.FAILED, finished_at=_now(),

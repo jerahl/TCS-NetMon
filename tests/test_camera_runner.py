@@ -51,6 +51,9 @@ class FakeCameraFleet:
         self.vendor_reads = vendor_reads or {}
         self.uploads: list[str] = []
         self.version_reads: list[str] = []
+        #: Every call in order, so a test can assert what happened *before* the
+        #: image was sent — not merely that both happened.
+        self.calls: list[tuple[str, str]] = []
 
     def client(self):
         fleet = self
@@ -64,6 +67,7 @@ class FakeCameraFleet:
 
             async def post(self_inner, url, files=None, auth=None):
                 fleet.uploads.append(url)
+                fleet.calls.append(("POST", url))
                 ip = url.split("//", 1)[1].split("/")[0].split(":")[0]
                 return FakeResponse(fleet.upload_status_by_ip.get(ip, fleet.upload_status))
 
@@ -74,6 +78,7 @@ class FakeCameraFleet:
                 # runner to Milestone.
                 ip = url.split("//", 1)[1].split("/")[0].split(":")[0]
                 fleet.version_reads.append(url)
+                fleet.calls.append(("GET", url))
                 version = fleet.vendor_reads.get(ip)
                 body = ("<rcp><payload></payload><result><str>"
                         f"{version}</str></result></rcp>" if version
@@ -147,7 +152,7 @@ def _batch(engine, *, device_ids, dry=False, canary=1, ring=10, abort_pct=10,
     return batch_id
 
 
-def _run(engine, cfg, batch_id, fleet, *, after=None, upload_field="file"):
+def _run(engine, cfg, batch_id, fleet, *, after=None, upload_field="net.bin"):
     """Run to completion with sleeps stubbed out."""
     _set_upload_field(upload_field)
     async def no_sleep(_s):
@@ -167,12 +172,11 @@ def _items(engine, batch_id):
 # ── the guards ────────────────────────────────────────────────────────────
 
 def _set_upload_field(value):
-    """Give the Bosch profile the field name the real camera has not yet told us.
+    """Override the profile's multipart part name, for the refusal case only.
 
-    Every upload test needs a *buildable* request, and the profile refuses to
-    build one until the multipart part name is observed on a real request.
-    Setting it here keeps the runner's own behaviour under test without
-    pretending anyone knows the value.
+    The real value is `net.bin`, read off the camera's own service-page markup.
+    A test that empties it is exercising what happens when a profile cannot
+    build a request at all.
     """
     from netmon.cameras.vendors import bosch
     bosch.UPLOAD_FIELD = value
@@ -191,7 +195,7 @@ def test_the_profile_refusing_to_build_a_request_fails_the_item_cleanly(tmp_path
     try:
         _run(engine, cfg, batch_id, fleet, upload_field="")
     finally:
-        _set_upload_field("file")
+        _set_upload_field("net.bin")
     assert fleet.uploads == []
     items = _items(engine, batch_id)
     assert items[1]["status"] == "failed"
@@ -402,9 +406,9 @@ def test_the_upload_url_is_rebuilt_from_the_registry(tmp_path):
     batch_id = _batch(engine, device_ids=[1])
     fleet = FakeCameraFleet()
     _run(engine, cfg, batch_id, fleet, after={1: "7.90.0123"})
-    # /unzip.xml, not /upload.htm: the camera's own utils.js says where it posts,
-    # and the live attempt on 2026-09-08 proved the spec's guess wrong.
-    assert fleet.uploads == ["https://10.1.1.1/unzip.xml"]
+    # /upload.htm, per the camera's own service-page form. The first live
+    # attempt failed on the part *name*, not on this path.
+    assert fleet.uploads == ["https://10.1.1.1/upload.htm"]
 
 
 def test_an_aborted_batch_can_be_stopped_by_an_operator(tmp_path):
@@ -637,3 +641,30 @@ def test_a_dropped_upload_fails_the_item_not_the_batch(tmp_path):
     audit = db.fetch_all(engine, "SELECT outcome, message FROM action_audit")
     assert len(audit) == 1 and audit[0]["outcome"] == "failed"
     assert "ReadError" in audit[0]["message"]
+
+
+def test_the_upload_is_authenticated_before_the_image_is_sent(tmp_path):
+    """Digest costs a round trip, and the image must not pay it.
+
+    Digest sends the request once unauthenticated to collect the 401, then
+    repeats it — which for a 91 MiB image means shipping the whole file to be
+    told "authenticate first". alb-cam-44 drops the connection instead of
+    reading it, and that is what killed both live attempts at 0.8s. So a cheap
+    GET collects the challenge first, and the upload goes out authenticated on
+    its only send.
+    """
+    engine = _seed(f"sqlite:///{tmp_path/'r25.db'}")
+    cfg = _cfg(tmp_path)
+    batch_id = _batch(engine, device_ids=[1])
+    fleet = FakeCameraFleet(vendor_reads={"10.1.1.1": "7.90.0123"})
+
+    _run(engine, cfg, batch_id, fleet)
+
+    # Ordering is the whole point: a GET must precede the POST, or the image
+    # pays for the challenge. Asserting only that both happened would pass
+    # against the bug, because verification reads afterwards anyway.
+    methods = [m for m, _ in fleet.calls]
+    assert methods[0] == "GET", f"the image was sent before authenticating: {fleet.calls}"
+    assert methods[1] == "POST"
+    assert fleet.calls[0][1].endswith("direction=READ")
+    assert fleet.uploads == ["https://10.1.1.1/upload.htm"]
