@@ -44,7 +44,9 @@ from netmon.actions import ActionRefused, AuditedAction, action_or_refuse
 from netmon.cameras import firmware as fw
 from netmon.cameras import ops
 from netmon.cameras.vendors import profile_for
-from netmon.cameras.vendors.bosch import VendorReadUnavailable
+from netmon.cameras.vendors.bosch import (
+    VendorReadUnavailable, VendorWriteUnavailable,
+)
 
 log = logging.getLogger("netmon.cameras.runner")
 
@@ -167,6 +169,30 @@ class BatchRunner:
         rings = self._rings()
         summary = {"verified": 0, "indeterminate": 0, "failed": 0, "would_run": 0}
 
+        try:
+            summary = await self._run_rings(rings, batch, image, path, dry=dry,
+                                            summary=summary)
+        except Exception as exc:                     # noqa: BLE001 — settle, then re-raise
+            # Whatever went wrong, the rows must not be left mid-flight. A batch
+            # stuck on "running" is indistinguishable from one still working,
+            # which is the shape of staleness this project exists to refuse.
+            self._halt(f"batch stopped on an unexpected error: {type(exc).__name__}: "
+                       f"{str(exc) or 'no detail'}")
+            db.execute(self.engine,
+                       "UPDATE camera_batch_items SET status = 'failed', finished_at = :t, "
+                       "message = COALESCE(message, :m) WHERE batch_id = :b "
+                       "AND status = 'running'",
+                       {"t": _now(), "m": f"batch stopped: {type(exc).__name__}",
+                        "b": self.batch_id})
+            raise
+
+        if not self.aborted:
+            _set_batch(self.engine, self.batch_id, status="done", finished_at=_now())
+        return {"batch_id": self.batch_id, "dry_run": dry, **summary,
+                "aborted": self.aborted}
+
+    async def _run_rings(self, rings: list, batch: dict, image: dict, path: Path | None,
+                         *, dry: bool, summary: dict) -> dict:
         for ring_index, items in rings:
             if self.aborted:
                 break
@@ -192,11 +218,7 @@ class BatchRunner:
                 self._halt(f"ring {ring_index} failed {pct}% (threshold "
                            f"{batch['abort_pct']}%) — batch halted")
                 break
-
-        if not self.aborted:
-            _set_batch(self.engine, self.batch_id, status="done", finished_at=_now())
-        return {"batch_id": self.batch_id, "dry_run": dry, **summary,
-                "aborted": self.aborted}
+        return summary
 
     def _rings(self) -> list[tuple[int, list[dict]]]:
         rows = db.fetch_all(
@@ -297,11 +319,37 @@ class BatchRunner:
                 lambda: httpx.AsyncClient(timeout=timeout, verify=ops_cfg.verify_ssl))
             # Its own handle, streamed: one 988 MiB image times three concurrent
             # uploads is a gigabyte of resident data that buys nothing.
-            with open(path, "rb") as handle:                    # noqa: PTH123
-                request = profile.firmware_upload_request(base, str(image["filename"]), handle)
-                async with factory() as client:
-                    resp = await client.post(request["url"], files=request["files"],
-                                             auth=httpx.DigestAuth(user, password))
+            try:
+                # A profile that will not build the request refuses here, before
+                # a socket is opened — the batch item says why, and no camera is
+                # touched.
+                with open(path, "rb") as handle:                # noqa: PTH123
+                    request = profile.firmware_upload_request(base, str(image["filename"]),
+                                                              handle)
+                    async with factory() as client:
+                        resp = await client.post(request["url"], files=request["files"],
+                                                 auth=httpx.DigestAuth(user, password))
+            except VendorWriteUnavailable as exc:
+                audit.failed(str(exc))
+                _set_item(self.engine, item_id, status=ops.FAILED, finished_at=_now(),
+                          audit_id=audit.audit_id, message=str(exc))
+                return ops.FAILED
+            except (httpx.HTTPError, OSError) as exc:
+                # The camera closing the connection mid-upload is a *failure of
+                # this item*, not of the batch. Letting it propagate killed the
+                # run and left the rows saying "running" forever — a monitoring
+                # system that lies about its own state (found live 2026-09-08).
+                #
+                # The class is the diagnosis and `str()` on several httpx errors
+                # is empty, so the class name is what gets recorded.
+                reason = (f"{type(exc).__name__} during upload: "
+                          f"{str(exc) or 'no detail from the transport'}")
+                audit.failed(reason)
+                _set_item(self.engine, item_id, status=ops.FAILED, finished_at=_now(),
+                          audit_id=audit.audit_id, message=reason)
+                log.warning("camera batch %s: upload to %s failed: %s",
+                            self.batch_id, item.get("name"), reason)
+                return ops.FAILED
             status_code = getattr(resp, "status_code", 0)
             if status_code >= 400:
                 audit.failed(f"upload answered HTTP {status_code}", http_status=status_code)

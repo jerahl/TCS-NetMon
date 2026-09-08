@@ -1094,10 +1094,57 @@ wall of stills.
 a live recording camera at TASPA and that a flash interrupts its recording for
 the reboot.
 
-**Outstanding before the first canary:** arming `[camera_ops]`
-(`enabled = true`, `firmware_update = true`, `dry_run = false`) — which is the
-owner's to type, deliberately, when they are watching. Everything else is built,
-tested, and proven as far as it can be without sending bytes to a camera.
+### S8 — the first live canary, 2026-09-08: failed safely, and taught three things
+
+Owner armed `[camera_ops]` and directed the run. Batch 3, one camera
+(alb-cam-44), image #2 (7.93.0024, CPP7.3, 91 MiB). **Nothing was flashed. The
+camera was untouched and still answers 7.83.0027.**
+
+What happened, in order: the platform probe ran and matched (CPP6/7/7.3 both
+sides), the audit row was written *before* anything left, the POST to
+`/upload.htm` was accepted at the socket and then dropped — `httpx.ReadError`
+after 0.8 s, none of the 91 MiB transferred.
+
+**1. `/upload.htm` was wrong.** Spec 20 asserted it; the camera disagrees. Its
+own web UI says where it posts — `js/utils.js`::
+
+    function getZipUrl(zip) { ... return zip ? "zip.xml" : "unzip.xml"; }
+    function ajaxUpload(url, file, name, pwd) {
+        var formData = new FormData();
+        if (pwd) { formData.append("pwd", pwd); }
+        formData.append(name, file); ... }
+
+So it is a multipart POST to **`/unzip.xml`**, with an optional `pwd` part.
+`UPLOAD_PATH` is corrected. What is still unknown is the **name of the file
+part**: `ajaxUpload` takes it from a caller in the settings UI's lazily-loaded
+`page_cam_upload` chunk, which the live-view page does not reference. So
+`firmware_upload_request` now **refuses to build a request at all** rather than
+post a body with a guessed field name. One capture of the browser's own upload
+(devtools → Network → the POST to `unzip.xml` → the form-data part name) closes
+it, exactly as one line of the RCP+ reference closed the version read.
+
+**2. A transport error killed the whole batch.** The exception propagated out of
+`_run_item`, through `asyncio.gather`, out of `run()` — so a single camera
+dropping a connection would have ended a 50-camera roll. Now it fails *that
+item* and the batch continues (or, for a canary, halts deliberately).
+
+**3. The rows lied.** Because the run crashed, batch 3 and its item sat at
+`running` indefinitely — indistinguishable from a batch still working. That is
+precisely the staleness this project refuses everywhere else, in the one place
+where it would matter most. `run()` now settles every in-flight row before
+re-raising, and the halt reason is written where an operator reads it.
+
+A fourth, smaller: `str(httpx.ReadError(""))` is empty, and an exception object
+is always truthy, so `f"{exc or 'no detail'}"` produced an empty audit message.
+The class name is what makes such a row readable.
+
+All three are covered by a test that reproduces exactly this failure — a fake
+camera that accepts the connection and drops it mid-upload.
+
+**Outstanding before a second attempt:** the multipart field name for
+`/unzip.xml`. Everything else has now been exercised against real hardware:
+pre-flight, the platform gate, the audit chokepoint, the failure paths, and the
+verification read.
 
 **Fleet shape for the build:** 2,528 of 2,651 cameras are Bosch (2,019
 `Bosch1ch` + 509 `Bosch`) — 95%, confirming Bosch as the pilot vendor; 32 Axis;

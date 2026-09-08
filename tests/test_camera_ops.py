@@ -300,15 +300,37 @@ def test_the_upload_error_taxonomy_is_the_vendors_own():
     assert UPLOAD_ERRORS[111] == "version too low"
 
 
-def test_the_upload_request_is_described_not_sent():
-    from netmon.cameras.vendors.bosch import firmware_upload_request
+def test_the_upload_request_refuses_until_the_field_name_is_known():
+    """What the first live canary taught, on 2026-09-08.
 
-    req = firmware_upload_request("https://10.1.1.1", "bosch_7_90.fw", b"\x00\x01")
-    assert req["method"] == "POST" and req["url"].endswith("/upload.htm")
-    # A firmware upload is not a request to retry: a second attempt landing
-    # mid-flash is how a camera stops coming back.
-    assert req["retries"] == 0
+    `/upload.htm` was spec 20's assertion and the camera dropped the connection
+    0.8s in, having transferred none of the 91 MiB. The endpoint is `/unzip.xml`
+    — the camera's own utils.js says so — but the multipart *field name* comes
+    from a settings-UI chunk nobody has read, so the request is refused rather
+    than guessed. Guessing would probably just be rejected; "probably" is not
+    the standard for the one call here that can brick a device.
+    """
+    from netmon.cameras.vendors import bosch
+
+    assert bosch.UPLOAD_PATH == "/unzip.xml"
+    assert bosch.UPLOAD_FIELD == "", "a field name was filled in without evidence"
+    with pytest.raises(bosch.VendorWriteUnavailable, match="field name"):
+        bosch.firmware_upload_request("https://10.1.1.1", "bosch_7_93.fw", b"\x00\x01")
+
+    # The argument checks still run first: a path is never a filename, and an
+    # empty image is refused before anything else is considered.
     with pytest.raises(ValueError):
-        firmware_upload_request("https://10.1.1.1", "../../etc/passwd", b"x")
+        bosch.firmware_upload_request("https://10.1.1.1", "../../etc/passwd", b"x")
     with pytest.raises(ValueError, match="empty"):
-        firmware_upload_request("https://10.1.1.1", "bosch.fw", b"")
+        bosch.firmware_upload_request("https://10.1.1.1", "bosch.fw", b"")
+
+    # And once it is known, the request is the multipart POST the UI makes.
+    saved, bosch.UPLOAD_FIELD = bosch.UPLOAD_FIELD, "file"
+    try:
+        req = bosch.firmware_upload_request("https://10.1.1.1", "bosch_7_93.fw", b"\x00\x01")
+        assert req["method"] == "POST" and req["url"].endswith("/unzip.xml")
+        # A firmware upload is not a request to retry: a second attempt landing
+        # mid-flash is how a camera stops coming back.
+        assert req["retries"] == 0
+    finally:
+        bosch.UPLOAD_FIELD = saved

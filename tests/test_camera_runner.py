@@ -147,8 +147,9 @@ def _batch(engine, *, device_ids, dry=False, canary=1, ring=10, abort_pct=10,
     return batch_id
 
 
-def _run(engine, cfg, batch_id, fleet, *, after=None):
+def _run(engine, cfg, batch_id, fleet, *, after=None, upload_field="file"):
     """Run to completion with sleeps stubbed out."""
+    _set_upload_field(upload_field)
     async def no_sleep(_s):
         return None
 
@@ -164,6 +165,38 @@ def _items(engine, batch_id):
 
 
 # ── the guards ────────────────────────────────────────────────────────────
+
+def _set_upload_field(value):
+    """Give the Bosch profile the field name the real camera has not yet told us.
+
+    Every upload test needs a *buildable* request, and the profile refuses to
+    build one until the multipart part name is observed on a real request.
+    Setting it here keeps the runner's own behaviour under test without
+    pretending anyone knows the value.
+    """
+    from netmon.cameras.vendors import bosch
+    bosch.UPLOAD_FIELD = value
+
+
+def test_the_profile_refusing_to_build_a_request_fails_the_item_cleanly(tmp_path):
+    """The state the fleet is actually in today: endpoint known, field name not.
+
+    That must read as a refused item with the reason on it — not a crash, and
+    not a socket opened to a camera on a guess.
+    """
+    engine = _seed(f"sqlite:///{tmp_path/'r24.db'}")
+    cfg = _cfg(tmp_path)
+    batch_id = _batch(engine, device_ids=[1])
+    fleet = FakeCameraFleet()
+    try:
+        _run(engine, cfg, batch_id, fleet, upload_field="")
+    finally:
+        _set_upload_field("file")
+    assert fleet.uploads == []
+    items = _items(engine, batch_id)
+    assert items[1]["status"] == "failed"
+    assert "field name for the file is not known" in items[1]["message"]
+
 
 def test_a_live_batch_is_refused_while_the_flags_are_off(tmp_path):
     engine = _seed(f"sqlite:///{tmp_path/'r1.db'}")
@@ -369,7 +402,9 @@ def test_the_upload_url_is_rebuilt_from_the_registry(tmp_path):
     batch_id = _batch(engine, device_ids=[1])
     fleet = FakeCameraFleet()
     _run(engine, cfg, batch_id, fleet, after={1: "7.90.0123"})
-    assert fleet.uploads == ["https://10.1.1.1/upload.htm"]
+    # /unzip.xml, not /upload.htm: the camera's own utils.js says where it posts,
+    # and the live attempt on 2026-09-08 proved the spec's guess wrong.
+    assert fleet.uploads == ["https://10.1.1.1/unzip.xml"]
 
 
 def test_an_aborted_batch_can_be_stopped_by_an_operator(tmp_path):
@@ -544,3 +579,61 @@ def test_an_image_that_names_no_platform_leaves_the_gate_open(tmp_path):
     result, _ = _run(engine, cfg, batch_id, fleet)
     assert result["verified"] == 1
     assert len(fleet.uploads) == 1
+
+
+# ── what a dead socket during an upload must do ───────────────────────────
+
+class _ExplodingFleet(FakeCameraFleet):
+    """A camera that accepts the connection and then drops it mid-upload.
+
+    Exactly what alb-cam-44 did on the first live attempt: the POST died with
+    httpx.ReadError after 0.8s, which propagated out of the runner, killed the
+    batch, and left the rows saying "running" forever.
+    """
+
+    def client(self):
+        import httpx as _httpx
+
+        class _Client:
+            async def __aenter__(self_inner):
+                return self_inner
+
+            async def __aexit__(self_inner, *exc):
+                return False
+
+            async def post(self_inner, url, files=None, auth=None):
+                raise _httpx.ReadError("")
+
+            async def get(self_inner, url, auth=None):
+                return FakeResponse(200, text="<rcp><payload></payload></rcp>")
+
+        return _Client()
+
+
+def test_a_dropped_upload_fails_the_item_not_the_batch(tmp_path):
+    engine = _seed(f"sqlite:///{tmp_path/'r23.db'}")
+    cfg = _cfg(tmp_path)
+    batch_id = _batch(engine, device_ids=[1, 2, 3])
+
+    result, _ = _run(engine, cfg, batch_id, _ExplodingFleet())
+
+    # The canary failed, so the batch stopped — but it *stopped*, it did not
+    # crash, and every row says what happened to it.
+    assert result["aborted"] is True
+    items = _items(engine, batch_id)
+    assert items[1]["status"] == "failed"
+    assert "ReadError" in items[1]["message"]
+    # str(ReadError("")) is empty, so the class name is what makes the row
+    # readable at all.
+    assert "no detail from the transport" in items[1]["message"]
+    assert {items[2]["status"], items[3]["status"]} == {"skipped"}
+    assert not [i for i in items.values() if i["status"] == "running"]
+
+    batch = db.fetch_one(engine, "SELECT status FROM camera_batches WHERE id = :i",
+                         {"i": batch_id})
+    assert batch["status"] == "aborted"
+
+    # The attempt is still audited: something was sent to a device, or tried to be.
+    audit = db.fetch_all(engine, "SELECT outcome, message FROM action_audit")
+    assert len(audit) == 1 and audit[0]["outcome"] == "failed"
+    assert "ReadError" in audit[0]["message"]
