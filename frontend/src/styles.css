@@ -4868,6 +4868,47 @@ kbd.k { font-family: var(--mono); font-size: 10px; background: var(--bg-2); bord
 .state-pill.warn { background: rgba(245,179,0,0.10);  border-color: rgba(245,179,0,0.30);  color: var(--warn); }
 .state-pill.err  { background: rgba(242,95,92,0.12);  border-color: rgba(242,95,92,0.35);  color: var(--err); }
 
+/* ───────── S6: sites / storage / alarm actions ───────── */
+
+/* Configured-capacity cell. The bar compares recorders (or schools) to each
+   other — there is no consumed figure to make a percentage from — so it is
+   deliberately a different colour from the ok/warn utilisation bars, and the
+   words "used —" travel with it. */
+.cap-cell { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.cap-cell .util-bar {
+  display: inline-block; width: 60px; height: 6px;
+  background: var(--bg-3); border-radius: 3px; overflow: hidden;
+  vertical-align: middle;
+}
+.cap-cell .util-bar i { display: block; height: 100%; background: var(--accent); opacity: 0.65; }
+.nvr-tbl .cap-cell .util-bar { width: 52px; }
+
+/* The chevron that opens a school's cameras. */
+.link-tbl .chev {
+  color: var(--muted); text-decoration: none; font-size: 15px; line-height: 1;
+  padding: 0 4px;
+}
+.link-tbl .chev:hover { color: var(--accent); }
+
+/* Fleet storage: ring slot beside its explanation. When there is no fraction
+   to draw, the slot carries the configured total instead of an invented arc. */
+.fleet-storage { display: flex; gap: 18px; align-items: center; padding: 4px 0; }
+.fleet-storage .fleet-note { font-size: 11.5px; color: var(--fg-2); line-height: 1.55; }
+.fleet-nofrac {
+  width: 96px; height: 96px; flex: none;
+  border: 1px dashed var(--line-2); border-radius: 50%;
+  display: grid; place-items: center; text-align: center;
+}
+.fleet-nofrac .v { font-size: 15px; color: var(--fg); }
+.fleet-nofrac .k {
+  font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px;
+}
+
+/* Alarm rows with working row actions need a column for them. */
+.alarm-row.has-act { grid-template-columns: 90px 60px 70px 130px 1fr 110px auto; }
+.alarm-row .act { display: flex; gap: 6px; justify-content: flex-end; }
+.alarm-row .act .btn { padding: 2px 8px; font-size: 10px; }
+
 .rec-pill {
   display: inline-block; font-size: 10.5px; padding: 1px 8px; border-radius: 10px;
   background: rgba(52,211,153,0.10); border: 1px solid rgba(52,211,153,0.30); color: var(--ok);

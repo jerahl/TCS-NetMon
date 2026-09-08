@@ -197,17 +197,71 @@ def site_context(
     """Per-site recorders, configured storage and network device counts.
 
     Split from `/sites` rather than joined into it: that query already groups
-    2,662 cameras by site, and adding three more aggregates over different
-    tables would make one slow query out of two fast ones. The Sites tab (S6)
-    and the overview both stitch them by site name.
+    2,662 cameras by site, and adding aggregates over different tables would
+    make one slow query out of two fast ones. The Sites tab (S6) and the
+    overview both stitch them by site name.
+
+    Two independent queries stitched here rather than one join, for the same
+    reason and one more: a site can have recorders and no switches, switches and
+    no recorders, or neither while still having cameras — an inner join would
+    silently drop whichever half is missing, and the Sites tab's job is to show
+    every school that has cameras. Missing halves become zeros, never absent
+    rows.
+
+    Recorder names ride along because the ZCD row names the recording server
+    rather than counting it: at a school with one recorder the count is noise
+    and the hostname is the answer to "who records this".
     """
-    return [dict(r) for r in db.fetch_all(engine, """
-        SELECT d.site AS site,
-               COUNT(DISTINCT rs.device_id) AS recorders,
-               SUM(rs.storage_total_gb) AS storage_total_gb,
-               MAX(rs.retention_days) AS retention_days
+    rows: dict[str, dict] = {}
+
+    # One row per recorder, folded up here rather than with GROUP_CONCAT: that
+    # function's ORDER BY/SEPARATOR spelling is MariaDB's and SQLite parses
+    # neither, and the tests run on SQLite. 22 rows do not need SQL to
+    # concatenate them.
+    for r in db.fetch_all(engine, """
+        SELECT d.site AS site, d.name AS name,
+               rs.storage_total_gb AS storage_total_gb,
+               rs.retention_days AS retention_days
         FROM recording_servers rs JOIN devices d ON d.id = rs.device_id
-        WHERE d.enabled = 1 GROUP BY d.site ORDER BY d.site""")]
+        WHERE d.enabled = 1 ORDER BY d.site, d.name"""):
+        row = rows.setdefault(r["site"], {"site": r["site"], "recorders": 0,
+                                          "names": [], "storage_total_gb": None,
+                                          "retention_days": None})
+        row["recorders"] += 1
+        row["names"].append(r["name"])
+        if r["storage_total_gb"] is not None:
+            row["storage_total_gb"] = (row["storage_total_gb"] or 0) + r["storage_total_gb"]
+        # Retention is the longest any recorder at the school keeps, and it is
+        # cumulative from the moment of recording — MAX, never SUM (spec 19 §8).
+        if r["retention_days"] is not None:
+            row["retention_days"] = max(row["retention_days"] or 0, r["retention_days"])
+
+    # Switches and APs per site, from the registry rather than from any
+    # collector: this is "what is installed here", which is a registry fact and
+    # is true even while XIQ is blind.
+    for r in db.fetch_all(engine, """
+        SELECT site,
+               SUM(CASE WHEN device_type = 'switch' THEN 1 ELSE 0 END) AS switches,
+               SUM(CASE WHEN device_type = 'ap' THEN 1 ELSE 0 END) AS aps
+        FROM devices
+        WHERE enabled = 1 AND device_type IN ('switch', 'ap')
+        GROUP BY site"""):
+        rows.setdefault(r["site"], {"site": r["site"]}).update(
+            {"switches": r["switches"] or 0, "aps": r["aps"] or 0})
+
+    out = []
+    for site in sorted(rows, key=lambda s: (s is None, s or "")):
+        row = rows[site]
+        out.append({
+            "site": site,
+            "recorders": row.get("recorders") or 0,
+            "recorder_names": ", ".join(row.get("names") or []) or None,
+            "storage_total_gb": row.get("storage_total_gb"),
+            "retention_days": row.get("retention_days"),
+            "switches": row.get("switches") or 0,
+            "aps": row.get("aps") or 0,
+        })
+    return out
 
 
 @router.get("/camera-groups")

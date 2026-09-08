@@ -465,6 +465,124 @@ const cases = [
            { device_id: 2, name: "WFS-BCD-DVR", hostname: null, site: null, role: null,
              version: null, chans_total: null, chans_recording: null,
              storage_total_gb: null, retention_days: null, status: "blind" }] }],
+  // ─── S6: Sites / Storage / Alarms actions / Evidence Lock ──────────────
+  ["SitesTab · a school in trouble beside a clean one", S.SitesTab, {
+    sites: [
+      { site: "Bryant High", total: 264, up: 240, down_confirmed: 7,
+        down_source_only: 4, down_network_only: 13, blind: 0, recording: 258 },
+      { site: "Skyland", total: 59, up: 59, down_confirmed: 0, down_source_only: 0,
+        down_network_only: 0, blind: 0, recording: 59 },
+      // Cameras with no site attribution: 96% of the registry had none before
+      // the resolver, and a null key must not collide or crash.
+      { site: null, total: 8, up: 8, down_confirmed: 0, down_source_only: 0,
+        down_network_only: 0, blind: 0, recording: 8 },
+    ],
+    context: [
+      { site: "Bryant High", recorders: 1, recorder_names: "bhs-bcddvr-ms.tcs.tusc.k12.al.us",
+        storage_total_gb: 107000, retention_days: 61, switches: 14, aps: 65 },
+      // In /sites but not in /site-context — a school with cameras and no
+      // recorder linked. The row must still render.
+      { site: "Skyland", recorders: 0, recorder_names: null, storage_total_gb: null,
+        retention_days: null, switches: 4, aps: 18 },
+    ] },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (!text.includes("7 down · 4 Milestone-down · 13 no ICMP")) {
+       throw new Error("failure shapes collapsed into one number");
+     }
+     if (!text.includes("all clear")) throw new Error("a clean school did not say so");
+     if (!text.includes("bhs-bcddvr-ms")) throw new Error("recorder not named");
+     if (text.includes("bhs-bcddvr-ms.tcs")) throw new Error("FQDN not shortened");
+     if (!text.includes("14 switches") || !text.includes("65 APs")) {
+       throw new Error("network context missing");
+     }
+     if (!text.includes("none linked")) throw new Error("a school with no recorder said nothing");
+     if (!text.includes("used —")) throw new Error("configured capacity could read as usage");
+   }],
+
+  ["SitesTab · counts arriving as strings", S.SitesTab, {
+    sites: [{ site: "MLK", total: "114", up: "63", down_confirmed: "11",
+              down_source_only: "0", down_network_only: "20", blind: "20" }],
+    context: [{ site: "MLK", recorders: 1, recorder_names: "mlk-bcd-dvr",
+                storage_total_gb: "76000", retention_days: "61", switches: "4", aps: "18" }] },
+   (html) => {
+     if (html.includes(">110<")) throw new Error("string counts concatenated instead of adding");
+   }],
+
+  // The ring is a claim about proportion. With no consumed figure there is no
+  // proportion, and drawing one anyway is the worst thing this page could do.
+  ["StorageView · no consumed figure draws no ring", S.StorageView, {
+    rows: [{ name: "BHS-BCD-DVR", hostname: "bhs-bcddvr-ms", storage_total_gb: 107000,
+             storage_used_gb: null, retention_days: 61 }],
+    summary: { storage_total_gb: 1837600, storage_used_gb: null, storage_used_known: false },
+    context: [{ site: "Bryant High", recorder_names: "bhs-bcddvr-ms",
+                storage_total_gb: 107000, retention_days: 61 }] },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (text.includes("<svg")) throw new Error("a ring was drawn from configured size alone");
+     if (!text.includes("Consumed space is not exposed")) {
+       throw new Error("the missing figure was not named");
+     }
+     if (!text.includes("1.8 PB")) throw new Error("configured total not shown in the ring slot");
+     if (!text.includes("Over-commit")) throw new Error("the over-commit gap went unnamed");
+     if (!text.includes("not exposed")) throw new Error("volumes table hid the unknown used column");
+   }],
+
+  ["StorageView · a real fraction draws the ring", S.StorageView, {
+    rows: [{ name: "TEST-DVR", hostname: "test", storage_total_gb: 100,
+             storage_used_gb: 91, retention_days: 30 }],
+    summary: { storage_total_gb: 100, storage_used_gb: 91, storage_used_known: true },
+    context: [] },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (!text.includes("<svg")) throw new Error("a known fraction drew no ring");
+     if (!text.includes("91%")) throw new Error("the percentage is not stated");
+   }],
+
+  ["AlarmsTab · an operator gets working row actions", S.AlarmsTab, {
+    rows: [{ id: 1, device_id: 2, device_name: "bhs-cam-02", device_type: "camera",
+             site: "Bryant High", rule_name: "device_down", severity: "crit",
+             opened_at: "2026-09-08T08:00:00Z" }],
+    role: "operator", onChanged: () => {} },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     for (const label of ["Ack", "Assign", "Suppress 1h"]) {
+       if (!text.includes(label)) throw new Error(`${label} missing for an operator`);
+     }
+     if (!text.includes("does not stop the state being")) {
+       throw new Error("suppression's meaning not explained");
+     }
+   }],
+
+  ["AlarmsTab · a viewer is told, not refused", S.AlarmsTab, {
+    rows: [{ id: 1, device_id: 2, device_name: "bhs-cam-02", device_type: "camera",
+             site: "Bryant High", rule_name: "device_down", severity: "crit",
+             opened_at: "2026-09-08T08:00:00Z", acked_by: null }],
+    role: "viewer", onChanged: () => {} },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (text.includes("Suppress 1h")) throw new Error("a viewer was shown actions that 403");
+     if (!text.includes("need the operator role")) throw new Error("no explanation for the viewer");
+   }],
+
+  ["AlarmsTab · an acked alarm offers no second Ack", S.AlarmsTab, {
+    rows: [{ id: 1, device_id: 2, device_name: "bhs-cam-02", device_type: "camera",
+             site: "Bryant High", rule_name: "device_down", severity: "warn",
+             opened_at: "2026-09-08T08:00:00Z", acked_by: "sappleby" }],
+    role: "admin", onChanged: () => {} },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (/>Ack</.test(text)) throw new Error("Ack offered on an already-acked alarm");
+     if (!text.includes("Assign")) throw new Error("Assign should still be available");
+   }],
+
+  ["EvidenceLockTab · names the reason it is empty", S.EvidenceLockTab, {},
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (!text.includes("Unknown request")) throw new Error("the gateway's own answer is not quoted");
+     if (!text.includes("Smart Client")) throw new Error("no route to the locks that do exist");
+   }],
+
   ["ServerMini · no metrics at all", S.ServerMini, {
     s: { device_id: 3, name: "TRAN-BCD-DVR", site: null, role: null, version: null,
          chans_total: null, storage_total_gb: null, retention_days: null, status: "blind" } }],

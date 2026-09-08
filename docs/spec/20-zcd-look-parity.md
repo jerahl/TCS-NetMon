@@ -619,7 +619,54 @@ Adopt ZCD's structure, fill it with NetMon's data, drop what nothing feeds:
 - `#/camera/:id?tab=…` in the hash; render-check cases for every tab with a
   blind camera, a down_source_only camera, and a camera with no IP.
 
-### S6 — Sites · Servers · Storage · Alarms · Evidence Lock tabs (1–2 sessions)
+### S6 — Sites · Servers · Storage · Alarms · Evidence Lock — **done 2026-09-08**
+
+Built as specified below, with four things worth recording because they were
+decided against the live estate rather than at the desk:
+
+**Evidence Lock is a named gap, not a tab that was skipped.** Probed on the live
+gateway 2026-09-08: `GET /api/rest/v1/evidenceLocks` answers **400 · "Bad
+request: Unknown request"** and the singular spelling 404s. The Config API on
+2025 R2 does not publish locks at all — they belong to the Management/Event
+server interface the MIP SDK speaks. The tab therefore exists, quotes the
+gateway's own answer, and points at Smart Client's *Search → Evidence lock
+list*. ZCD's version was a mock with inert Extend/Export buttons, so nothing
+working was lost.
+
+**The storage ring is drawn only when there is a fraction.** A ring is a claim
+about proportion; with no consumed-space field there is no proportion, and an
+arc over a number nobody measured is the most misleading thing this page could
+show. `StorageView` renders the ring when `storage_used_known`, and otherwise
+puts the configured total in the ring's slot with the reason beside it.
+Over-commit stays named. Both branches are render-checked, so the honest branch
+is exercised at build time and not only on an estate that happens to lack the
+figure.
+
+**Capacity bars compare, they do not fill.** Configured GB has no denominator,
+so every bar on Sites, Per-school capacity and Recording Servers is scaled to
+the largest peer, coloured differently from the ok/warn utilisation bars, and
+carries the words "used —" in the cell. A bar that looks like utilisation gets
+read as utilisation.
+
+**`/site-context` grew the half it was already documented to carry.** It now
+returns `switches`, `aps` and `recorder_names` beside the recorders, storage and
+retention. Two queries stitched in Python rather than one join, because a school
+can have recorders and no switches or switches and no recorders, and an inner
+join would drop exactly the school whose cameras have nowhere to record.
+`GROUP_CONCAT` was avoided on purpose: its `ORDER BY`/`SEPARATOR` spelling is
+MariaDB's and the tests run on SQLite. Retention across two recorders at one
+school is `MAX`, never `SUM` — the same error that once reported 106 days for a
+45-day live plus 61-day archive.
+
+**Alarm row actions work, and a viewer is told rather than refused.** Ack /
+Assign / Suppress 1h reuse the Problems console's handlers so the two consoles
+cannot drift; the buttons appear for `operator`/`admin` only, and a viewer gets
+one sentence saying why. The footer states what Suppress actually does — a
+one-hour maintenance window that stops the engine emailing and does not stop the
+state being recorded, so the alert stays visible and keeps updating.
+
+The original plan, unchanged:
+
 
 - **Sites:** ZCD table minus Network/VLAN: dot · site (+ "n switches · n APs")
   · recording server(s) · cameras `up / total` · health pill (`all clear` or
@@ -891,7 +938,7 @@ NetMon largely has. Suggested order (spec 15 §3.2 estimates still apply):
 - [x] S3 navigator (tree by Milestone group) + camera wall in the detail pane
 - [x] S4 snapshot proxy behind `[camera_snapshot] enabled = false`; allow-list + vendor + size + scheme + channel tests green; the render-at-source relaxation recorded above. Still needs the owner to provision the account.
 - [x] **S5 done 2026-09-07** — camera detail in ZCD's four-tab layout: sidecar + preview frame, Device Health as probe cells, 24h transition strip, stream/network kv, one PacketFence & uplink card with all four operator buttons, Active Issue with real Ack/Suppress, Recent Events. `state_events` added to the detail payload. Tab lives in the URL for both routes.
-- [ ] S6 Sites / Servers / Storage / Alarms / Evidence Lock tabs; every unavailable metric named, none rendered as 0
+- [x] S6 Sites / Servers / Storage / Alarms / Evidence Lock tabs; every unavailable metric named, none rendered as 0 — done 2026-09-08 (evidence locks probed and refused by the Config API; ring drawn only on a real fraction; row actions operator-gated)
 - [ ] S8 (D11) bulk camera ops: `firmware_images` / `camera_batches` / `camera_batch_items` migrations with rollback notes; batch runner as a supervised task; Bosch profile fixture-tested; `[camera_ops]` default-off + dry-run default; canary → rings → abort threshold; verification by read-back; admin-only; open questions above answered in this spec before the first live batch
 - [ ] Every new component has a `render-check.mjs` case for its no-data shape; API tests for every new query param
 - [ ] Runbook `docs/runbooks/surveillance.md` updated: what each tab reads, what needs WinRM, how to enable snapshots, how to run and abort a batch

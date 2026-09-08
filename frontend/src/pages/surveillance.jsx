@@ -1,5 +1,5 @@
 import React from "react";
-import { getJSON, qs } from "../api.js";
+import { getJSON, postJSON, qs } from "../api.js";
 import {
   Card, Loading, ErrorMsg, SourceBadge, sevColor, PageHeader, Tabs, StatCell, Dot, SevText,
   Sparkline,
@@ -47,14 +47,15 @@ export const fmtGb = (gb) => {
 const num = (v) => Number(v) || 0;
 const fmtN = (v) => num(v).toLocaleString();
 
-// Tabs that have real content today. Cameras is no longer among them: it is
-// its own page at #/cameras, navigated by the Milestone group tree, because
-// that is where camera work happens and a fleet of 2,662 needs a persistent
+// ZCD's tab row, less Cameras: that is its own page at #/cameras, navigated by
+// the Milestone group tree, because a fleet of 2,662 needs a persistent
 // navigator rather than a table you leave and return to (owner, 2026-09-07).
-// ZCD also has Sites and Evidence Lock; those arrive in spec 20 S6 with the
-// data behind them. An empty tab naming a future phase would be worse than
-// no tab.
-const TAB_IDS = ["overview", "servers", "storage", "alarms"];
+//
+// Sites and Evidence Lock arrive with S6. Evidence Lock is a tab with no data
+// behind it and says so — the Config API on 2025 R2 answers `evidenceLocks`
+// with 400 "Unknown request" (probed 2026-09-08) — because the nav matching
+// ZCD is the point, and a named gap is worth more than a missing tab.
+const TAB_IDS = ["overview", "sites", "servers", "storage", "alarms", "evidence"];
 
 function StateDot({ value }) {
   const sev = value === "up" ? "ok" : value === "down" ? "crit" : value === "blind" ? "warn" : "unknown";
@@ -64,10 +65,15 @@ function StateDot({ value }) {
 export function SurveillancePage({ query = {} }) {
   const [summary, setSummary] = React.useState(null);
   const [sites, setSites] = React.useState(null);
+  const [context, setContext] = React.useState(null);
   const [servers, setServers] = React.useState(null);
   const [alarms, setAlarms] = React.useState(null);
   const [meta, setMeta] = React.useState(null);
   const [error, setError] = React.useState(null);
+  // Held in a ref so an alarm action can pull fresh rows the moment it lands,
+  // rather than leaving the operator looking at the state they just changed
+  // until the 30s tick.
+  const loadRef = React.useRef(null);
   // The URL owns the active tab, not component state — so a deep link, the ⌘K
   // palette and the browser's back button all land where they say they will.
   const tab = TAB_IDS.includes(query.tab) ? query.tab : "overview";
@@ -90,11 +96,16 @@ export function SurveillancePage({ query = {} }) {
         .then((s) => { if (live) { setSummary(s); setError(null); } })
         .catch((e) => { if (live) setError(e); });
       getJSON("/api/surveillance/sites").then((r) => live && setSites(r)).catch(() => live && setSites([]));
+      // Recorders, configured storage, switches and APs per school — the
+      // columns the Sites tab carries beside the camera counts.
+      getJSON("/api/surveillance/site-context")
+        .then((r) => live && setContext(r)).catch(() => live && setContext([]));
       getJSON("/api/surveillance/servers").then((r) => live && setServers(r)).catch(() => live && setServers([]));
       getJSON("/api/alerts" + qs({ device_type: ALARM_SCOPE, limit: 200 }))
         .then((r) => live && setAlarms(r)).catch(() => live && setAlarms([]));
     };
     load();
+    loadRef.current = load;
     const id = setInterval(load, REFRESH_MS);
     return () => { live = false; clearInterval(id); };
   }, []);
@@ -115,11 +126,13 @@ export function SurveillancePage({ query = {} }) {
 
   const tabs = [
     { id: "overview", label: "Overview" },
+    { id: "sites", label: "Sites", badge: sites ? String(sites.length) : "" },
     { id: "servers", label: "Recording Servers", badge: fmtN(summary.servers_total),
       kind: rsAllUp ? "" : "err" },
     { id: "storage", label: "Storage" },
     { id: "alarms", label: "Alarms", badge: alarms ? fmtN(alarms.length) : "",
       kind: alarmCrit > 0 ? "err" : alarms && alarms.length ? "warn" : "" },
+    { id: "evidence", label: "Evidence Lock" },
   ];
 
   return (
@@ -213,9 +226,13 @@ export function SurveillancePage({ query = {} }) {
                        location.hash = "#/cameras" + (s ? `?q=${encodeURIComponent(s)}` : "");
                      }} />
       )}
+      {tab === "sites" && <SitesTab sites={sites} context={context} />}
       {tab === "servers" && <ServersTab rows={servers} />}
-      {tab === "storage" && <StorageTab />}
-      {tab === "alarms" && <AlarmsTab rows={alarms} />}
+      {tab === "storage" && <StorageTab summary={summary} context={context} />}
+      {tab === "alarms" && (
+        <AlarmsTab rows={alarms} onChanged={() => loadRef.current && loadRef.current()} />
+      )}
+      {tab === "evidence" && <EvidenceLockTab />}
     </div>
   );
 }
@@ -545,7 +562,7 @@ function alarmHref(a) {
   return "#/surveillance?tab=servers";
 }
 
-export function AlarmFeed({ rows, limit }) {
+export function AlarmFeed({ rows, limit, actions }) {
   if (!rows) return <Loading what="alarms" />;
   if (rows.length === 0) {
     return (
@@ -558,7 +575,8 @@ export function AlarmFeed({ rows, limit }) {
   return (
     <div>
       {shown.map((a) => (
-        <div key={a.id} className={"alarm-row" + (a.acked_by ? " ack" : "")}>
+        <div key={a.id}
+             className={"alarm-row" + (a.acked_by ? " ack" : "") + (actions ? " has-act" : "")}>
           <div className="ts">{ageOf(a.opened_at) || "?"} ago</div>
           <SevText severity={a.severity} />
           <div><Dot severity={a.severity} /></div>
@@ -568,6 +586,7 @@ export function AlarmFeed({ rows, limit }) {
             {a.site || "—"}
             {a.acked_by && <span className="dim"> · ack {a.acked_by}</span>}
           </div>
+          {actions && <div className="act">{actions(a)}</div>}
         </div>
       ))}
       {limit && rows.length > limit && (
@@ -579,8 +598,126 @@ export function AlarmFeed({ rows, limit }) {
   );
 }
 
+// ── Sites (S6) ────────────────────────────────────────────────────────────
+//
+// ZCD's Sites table, minus its Network and VLAN columns — those are the
+// switching domain and live on #/switches, and duplicating them here would
+// invite two answers to one question. What replaces them is the pair of facts a
+// surveillance operator actually wants beside a school: which recorder serves
+// it, and how much network it has (a school with 65 APs and one camera down is
+// a different conversation from one with four).
+//
+// Two sources stitched by site name: /sites counts cameras by failure shape,
+// /site-context carries recorders, configured storage and the registry's
+// switch/AP counts. A school in one and not the other still gets a row.
+
+// Configured capacity as a bar, scaled to the largest school rather than to a
+// percentage — there is no consumed-space figure to make a percentage out of
+// (spec 19 §8), and a bar that looks like utilisation would be read as
+// utilisation. The "used —" beside it says so in words as well.
+function CapacityBar({ gb, max }) {
+  const n = Number(gb) || 0;
+  const pct = max > 0 ? Math.max(2, Math.round((n / max) * 100)) : 0;
+  if (!n) return <span className="dim">—</span>;
+  return (
+    <span className="cap-cell" title={`${fmtGb(n)} configured · relative to the largest school`}>
+      <span className="util-bar cfg"><i style={{ width: `${pct}%` }} /></span>
+      <span className="mono">{fmtGb(n)}</span>
+      <span className="dim"> used —</span>
+    </span>
+  );
+}
+
+export function SitesTab({ sites, context }) {
+  if (!sites) return <Loading what="sites" />;
+  const ctx = new Map((context || []).map((c) => [c.site, c]));
+  const rows = [...sites].sort((a, b) => String(a.site || "").localeCompare(String(b.site || "")));
+  const maxGb = Math.max(0, ...(context || []).map((c) => Number(c.storage_total_gb) || 0));
+
+  return (
+    <Card title="Schools" source="milestone"
+          kicker={`${rows.length} school(s) with cameras`}>
+      {rows.length === 0 ? (
+        <div className="msg">No cameras are attributed to a site yet.</div>
+      ) : (
+        <table className="link-tbl">
+          <thead>
+            <tr>
+              <th style={{ width: 24 }}></th>
+              <th>School</th><th>Recording server</th><th>Cameras</th><th>Health</th>
+              <th>Storage configured</th><th>Retention</th><th style={{ width: 20 }}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const c = ctx.get(r.site) || {};
+              const down = num(r.down_confirmed) + num(r.down_source_only);
+              const soft = num(r.down_network_only) + num(r.blind);
+              const sev = down ? "crit" : soft ? "warn" : num(r.total) ? "ok" : "unknown";
+              return (
+                <tr key={r.site || "__none"} className={down ? "row-err" : ""}>
+                  <td><Dot severity={sev} /></td>
+                  <td>
+                    {r.site || <span className="dim">no site</span>}
+                    <div className="dim" style={{ fontSize: 10.5 }}>
+                      {num(c.switches)} switch{num(c.switches) === 1 ? "" : "es"}
+                      {" · "}{num(c.aps)} AP{num(c.aps) === 1 ? "" : "s"}
+                    </div>
+                  </td>
+                  <td className="mono" style={{ fontSize: 11 }}>
+                    {/* The recorder's own name, not a count: at a school with
+                        one recorder the count is noise and the name answers
+                        "who records this". */}
+                    {c.recorder_names
+                      ? String(c.recorder_names).split(", ").map((h) => h.split(".")[0]).join(", ")
+                      : <span className="dim">none linked</span>}
+                  </td>
+                  <td className="mono">{fmtN(r.up)} / {fmtN(r.total)}</td>
+                  <td>
+                    {down === 0 && soft === 0 ? (
+                      <span className="state-pill ok">all clear</span>
+                    ) : (
+                      <span className={"state-pill " + (down ? "err" : "warn")}>
+                        {[num(r.down_confirmed) ? `${r.down_confirmed} down` : null,
+                          num(r.down_source_only) ? `${r.down_source_only} Milestone-down` : null,
+                          num(r.down_network_only) ? `${r.down_network_only} no ICMP` : null,
+                          num(r.blind) ? `${r.blind} blind` : null].filter(Boolean).join(" · ")}
+                      </span>
+                    )}
+                  </td>
+                  <td><CapacityBar gb={c.storage_total_gb} max={maxGb} /></td>
+                  <td className="mono dim">
+                    {c.retention_days ? `${c.retention_days}d` : "—"}
+                  </td>
+                  <td>
+                    <a className="chev" title={`cameras at ${r.site || "this site"}`}
+                       href={"#/cameras" + (r.site ? `?q=${encodeURIComponent(r.site)}` : "")}>›</a>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+      <div className="msg" style={{ fontSize: 11, marginTop: 10 }}>
+        Camera counts are the reachability tiers, kept apart on purpose: a
+        school with cameras Milestone cannot reach has a different problem from
+        one with cameras that are genuinely dead. Switch and AP counts come from
+        the registry — what is installed, true even while XIQ is blind. Storage
+        is the <em>configured</em> size; consumed space is not in the Config API.
+        Network and VLAN columns are deliberately absent — that is the switching
+        domain, and it has its own page.
+      </div>
+    </Card>
+  );
+}
+
 export function ServersTab({ rows }) {
   if (!rows) return <Loading what="recording servers" />;
+  // Bars scaled to the biggest recorder, for the same reason as the Sites tab:
+  // configured capacity has no percentage to be a fraction of, so the bar
+  // compares recorders to each other and says "configured" in words.
+  const maxGb = Math.max(0, ...rows.map((r) => Number(r.storage_total_gb) || 0));
   return (
     <Card title="Recording servers" source="milestone"
           kicker={`${rows.length} recording server(s)`}>
@@ -600,7 +737,14 @@ export function ServersTab({ rows }) {
                 <td><EssState value={s.service_state} at={s.states_at} /></td>
                 <td><EssState value={s.cpu_state} at={s.states_at} /></td>
                 <td><EssState value={s.retention_state} at={s.states_at} /></td>
-                <td className="mono">{fmtGb(s.storage_total_gb)}</td>
+                <td className="cap-cell">
+                  <span className="util-bar cfg" title={`${fmtGb(s.storage_total_gb)} configured`}>
+                    <i style={{ width: `${maxGb > 0 && s.storage_total_gb
+                      ? Math.max(2, Math.round((s.storage_total_gb / maxGb) * 100)) : 0}%` }} />
+                  </span>
+                  <span className="mono">{fmtGb(s.storage_total_gb)}</span>
+                  <span className="dim"> used —</span>
+                </td>
                 <td className="mono dim">{s.retention_days ? `${s.retention_days}d` : "—"}</td>
                 <td className="mono dim">{s.version || "—"}</td>
               </tr>
@@ -624,9 +768,67 @@ export function ServersTab({ rows }) {
   );
 }
 
-export function AlarmsTab({ rows }) {
+export function AlarmsTab({ rows, onChanged, role: roleProp }) {
   const [sev, setSev] = React.useState("all");
-  const [ack, setAck] = React.useState("all");
+  const [ackFilter, setAckFilter] = React.useState("all");
+  const [busy, setBusy] = React.useState(null);
+  const [err, setErr] = React.useState(null);
+  // Who is looking. The API enforces the operator role on every one of these
+  // three; asking here as well is so a viewer sees an explanation instead of
+  // three buttons that answer 403. `roleProp` lets the render check drive it.
+  const [role, setRole] = React.useState(roleProp || null);
+  React.useEffect(() => {
+    if (roleProp) return undefined;
+    let live = true;
+    getJSON("/auth/me").then((me) => live && setRole(me?.role || "viewer"))
+      .catch(() => live && setRole("viewer"));
+    return () => { live = false; };
+  }, [roleProp]);
+  const canAct = role === "operator" || role === "admin";
+
+  // ZCD's row actions were inert. These are the Problems console's handlers,
+  // reused rather than reimplemented, so the two consoles cannot drift into
+  // disagreeing about what "acknowledge" does.
+  async function act(id, fn) {
+    setBusy(id);
+    setErr(null);
+    try {
+      await fn();
+      onChanged?.();
+    } catch (e) {
+      setErr(e);
+    } finally {
+      setBusy(null);
+    }
+  }
+  const doAck = (a) => act(a.id, () => postJSON(`/api/alerts/${a.id}/ack`));
+  const doSuppress = (a) => act(a.id, () => postJSON(`/api/alerts/${a.id}/suppress`));
+  const doAssign = (a) => {
+    const who = window.prompt(`Assign "${a.rule_name}" on ${a.device_name || a.device_id} to:`,
+                              a.assigned_to || "");
+    if (who === null) return undefined;
+    return act(a.id, () => postJSON(`/api/alerts/${a.id}/assign`, { assignee: who }));
+  };
+
+  const rowActions = canAct ? (a) => (
+    <React.Fragment>
+      {!a.acked_by && (
+        <button type="button" className="btn sm" disabled={busy === a.id}
+                onClick={() => doAck(a)} title="acknowledge this alert">Ack</button>
+      )}
+      <button type="button" className="btn sm" disabled={busy === a.id}
+              onClick={() => doAssign(a)}
+              title={a.assigned_to ? `assigned to ${a.assigned_to}` : "assign to someone"}>
+        Assign
+      </button>
+      <button type="button" className="btn sm" disabled={busy === a.id}
+              onClick={() => doSuppress(a)}
+              title="suppress notifications for this device for one hour — the alert stays visible and keeps updating">
+        Suppress 1h
+      </button>
+    </React.Fragment>
+  ) : null;
+
   if (!rows) return <Loading what="alarms" />;
 
   const counts = {
@@ -638,7 +840,7 @@ export function AlarmsTab({ rows }) {
   };
   const shown = rows.filter((a) =>
     (sev === "all" || a.severity === sev)
-    && (ack === "all" || (ack === "unack" ? !a.acked_by : !!a.acked_by)));
+    && (ackFilter === "all" || (ackFilter === "unack" ? !a.acked_by : !!a.acked_by)));
 
   return (
     <React.Fragment>
@@ -657,15 +859,16 @@ export function AlarmsTab({ rows }) {
         <div className="trig-filter">
           {[["all", "Any", counts.all, ""], ["unack", "Unacked", counts.unack, "warn"],
             ["ack", "Acked", counts.ack, ""]].map(([k, label, n, cls]) => (
-            <span key={k} className={`tf ${cls} ${ack === k ? "active" : ""}`}
-                  onClick={() => setAck(k)}>{label} <b>{n}</b></span>
+            <span key={k} className={`tf ${cls} ${ackFilter === k ? "active" : ""}`}
+                  onClick={() => setAckFilter(k)}>{label} <b>{n}</b></span>
           ))}
         </div>
       </div>
 
       <Card tight
             kicker={`${shown.length} of ${rows.length} shown`}
-            link={{ href: "#/problems", label: "Acknowledge and assign on the Problems console" }}>
+            link={{ href: "#/problems", label: "Every alert, all domains → Problems" }}>
+        {err && <ErrorMsg error={err} />}
         {rows.length === 0 ? (
           <div className="msg" style={{ padding: 14 }}>
             No open alerts on cameras or recording servers.
@@ -673,18 +876,140 @@ export function AlarmsTab({ rows }) {
         ) : shown.length === 0 ? (
           <div className="msg" style={{ padding: 14 }}>No alarms match this filter.</div>
         ) : (
-          <AlarmFeed rows={shown} />
+          <AlarmFeed rows={shown} actions={rowActions} />
         )}
+        <div className="msg" style={{ fontSize: 11, padding: "10px 14px 0" }}>
+          {canAct ? (
+            <React.Fragment>
+              Acknowledge and assign write to the alert. <b>Suppress 1h</b>
+              {" "}opens a one-hour maintenance window on that device: it stops
+              the engine emailing about it and does not stop the state being
+              recorded, so the alert stays visible here and keeps updating.
+            </React.Fragment>
+          ) : (
+            <React.Fragment>
+              Acknowledging, assigning and suppressing need the operator role;
+              this session is read-only, so those actions are not shown rather
+              than shown and refused.
+            </React.Fragment>
+          )}
+        </div>
       </Card>
     </React.Fragment>
   );
 }
 
-export function StorageTab() {
+// ZCD's storage ring, drawn only when there is a fraction to draw. A ring is a
+// claim about *proportion*, so it must never be rendered from configured size
+// alone — an 84%-looking arc over a number nobody measured is the single most
+// misleading thing this page could show (CLAUDE.md §4.5).
+export function StorageRing({ pct, label, sub, tone = "ok", size = 96 }) {
+  const r = (size - 12) / 2;
+  const circ = 2 * Math.PI * r;
+  const frac = Math.max(0, Math.min(100, Number(pct) || 0)) / 100;
+  return (
+    <div className="ring" style={{ width: size, height: size }}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true">
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--bg-3)" strokeWidth="8" />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={sevColor(tone)}
+                strokeWidth="8" strokeLinecap="round"
+                strokeDasharray={`${circ * frac} ${circ}`}
+                transform={`rotate(-90 ${size / 2} ${size / 2})`} />
+      </svg>
+      <div className="ring-label">
+        <div className="ring-val">{label}</div>
+        {sub && <div className="ring-sub">{sub}</div>}
+      </div>
+    </div>
+  );
+}
+
+export function StorageTab({ summary, context }) {
   const [rows, setRows] = React.useState(null);
   React.useEffect(() => { getJSON("/api/surveillance/storage").then(setRows).catch(() => setRows([])); }, []);
   if (!rows) return <Loading what="storage" />;
+  return <StorageView rows={rows} summary={summary} context={context} />;
+}
+
+// The render half, split from the fetch so the render check can drive it with
+// fixed data — the same reason CamerasView is split, and the reason the
+// no-fraction branch below can be exercised at build time rather than only on
+// an estate that happens to lack a used figure.
+export function StorageView({ rows, summary, context }) {
+  const usedKnown = summary ? usedIsKnown(summary) : false;
+  const totalGb = summary ? Number(summary.storage_total_gb) || 0 : 0;
+  const pct = usedKnown && totalGb
+    ? Math.round((Number(summary.storage_used_gb) / totalGb) * 100) : null;
+  const sites = [...(context || [])]
+    .filter((c) => Number(c.storage_total_gb) > 0)
+    .sort((a, b) => Number(b.storage_total_gb) - Number(a.storage_total_gb));
+  const maxGb = Math.max(0, ...sites.map((c) => Number(c.storage_total_gb) || 0));
+
   return (
+    <React.Fragment>
+      <Card title="Fleet storage" source="milestone"
+            kicker={`${rows.length} recorder(s) · ${sites.length} school(s)`}>
+        <div className="fleet-storage">
+          {/* The ring slot. Filled with an arc only when a fraction exists;
+              otherwise it carries the configured total and the reason there is
+              no fraction, which is the honest version of the same slot. */}
+          {pct !== null ? (
+            <StorageRing pct={pct} label={`${pct}%`} sub="used"
+                         tone={pct >= 90 ? "crit" : pct >= 75 ? "warn" : "ok"} />
+          ) : (
+            <div className="fleet-nofrac">
+              <div className="v mono">{fmtGb(totalGb)}</div>
+              <div className="k">configured</div>
+            </div>
+          )}
+          <div className="fleet-note">
+            {pct !== null ? (
+              <React.Fragment>
+                {fmtGb(summary.storage_used_gb)} of {fmtGb(totalGb)} used across
+                every recorder.
+              </React.Fragment>
+            ) : (
+              <React.Fragment>
+                <b>Consumed space is not exposed.</b> The Config API on XProtect
+                2025 R2 publishes each storage's <em>configured</em> size and its
+                retention, and no field for what is on disk — so there is no
+                percentage to draw, and a ring here would be an invention. The
+                figure above is what the recorders are configured to hold.
+                Reading actual disk use needs WinRM access to the recorders
+                (OpenProject #111).
+              </React.Fragment>
+            )}
+            <div className="dim" style={{ marginTop: 6 }}>
+              Over-commit — configured capacity exceeding the physical disk —
+              cannot be checked for the same reason. It stays a named gap.
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      {sites.length > 0 && (
+        <Card title="Per-school capacity" source="milestone"
+              kicker="configured, largest first" tight>
+          <table className="link-tbl">
+            <thead><tr><th>School</th><th>Recorder</th><th>Configured</th><th>Retention</th></tr></thead>
+            <tbody>
+              {sites.map((c) => (
+                <tr key={c.site || "__none"}>
+                  <td>{c.site || <span className="dim">no site</span>}</td>
+                  <td className="mono" style={{ fontSize: 11 }}>
+                    {c.recorder_names
+                      ? String(c.recorder_names).split(", ").map((h) => h.split(".")[0]).join(", ")
+                      : <span className="dim">—</span>}
+                  </td>
+                  <td><CapacityBar gb={c.storage_total_gb} max={maxGb} /></td>
+                  <td className="mono dim">{c.retention_days ? `${c.retention_days}d` : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+
     <Card title="Storage volumes" source="milestone" kicker={`${rows.length} recorder(s)`}>
       {rows.length === 0 ? (
         <div className="msg">
@@ -719,6 +1044,48 @@ export function StorageTab() {
           </tbody>
         </table>
       )}
+    </Card>
+    </React.Fragment>
+  );
+}
+
+// ── Evidence Lock (S6) ────────────────────────────────────────────────────
+//
+// A tab with no data behind it, which exists so the nav matches ZCD's and says
+// what is missing. Probed against the live gateway on 2026-09-08:
+// `GET /api/rest/v1/evidenceLocks` answers **400 "Bad request: Unknown
+// request"**, and the singular spelling 404s — the Config API on 2025 R2 does
+// not publish evidence locks at all. They live in the Management/Event server
+// interface the MIP SDK speaks, which is a different protocol from the REST
+// API every other Milestone reader here uses.
+//
+// ZCD's own Evidence Lock tab was a mock: static rows, and Extend/Export
+// buttons that did nothing. An empty tab with the reason is worth more than a
+// convincing table of invented locks.
+export function EvidenceLockTab() {
+  return (
+    <Card title="Evidence Lock" source="milestone"
+          kicker="not exposed by the Config API">
+      <div className="msg">
+        <b>XProtect does not publish evidence locks over the REST Config API.</b>
+        {" "}Asked directly on 2026-09-08, the gateway answers
+        {" "}<span className="mono">GET /api/rest/v1/evidenceLocks</span> with
+        {" "}<span className="mono">400 · "Bad request: Unknown request"</span>,
+        and the singular spelling with a 404. Every other reader on this page —
+        cameras, recorders, storage, groups, licences — comes from that same
+        API, so there is nothing to fall back to.
+        <div style={{ marginTop: 8 }}>
+          Locks are managed through the Management/Event server interface, which
+          the MIP SDK speaks and NetMon does not. Until that is built, evidence
+          locks live in Smart Client: <em>Search → Evidence lock list</em>.
+        </div>
+        <div className="dim" style={{ marginTop: 8 }}>
+          The tab is here rather than hidden because ZCD's nav has it and
+          because a named gap outlasts a missing one. ZCD's own version was a
+          mock — static rows with inert Extend and Export buttons — so nothing
+          working is being lost.
+        </div>
+      </div>
     </Card>
   );
 }

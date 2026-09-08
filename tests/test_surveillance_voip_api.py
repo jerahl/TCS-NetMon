@@ -484,3 +484,65 @@ def test_camera_detail_carries_its_transition_history(tmp_path):
         # page renders "nothing has changed", which is a real answer.
         other = client.get("/api/surveillance/cameras/3").json()
         assert [e["dimension"] for e in other["events"]] == ["recording"]
+
+
+def test_site_context_carries_recorders_and_network_counts(tmp_path):
+    """The Sites tab's other half (spec 20 S6).
+
+    `/sites` counts cameras; this carries what sits beside them — which recorder
+    serves the school, how much storage it is configured for, and how much
+    network is installed there. Switch and AP counts come from the registry
+    rather than from a collector, so they stay true while XIQ is blind.
+    """
+    url = f"sqlite:///{tmp_path/'sc.db'}"
+    _seed(url)
+    with _client(tmp_path, url) as client:
+        rows = {r["site"]: r for r in client.get("/api/surveillance/site-context").json()}
+
+    central = rows["Central"]
+    assert central["recorders"] == 1
+    # The recorder is named, not just counted: at a school with one recorder the
+    # count is noise and the name answers "who records this".
+    assert central["recorder_names"] == "NVR-1"
+    assert central["storage_total_gb"] == 8000
+    assert central["retention_days"] == 30
+
+    # BHS has a switch and no recorder. It must still appear — an inner join
+    # would drop exactly the school whose cameras have nowhere to record.
+    assert rows["BHS"]["switches"] == 1
+    assert rows["BHS"]["recorders"] == 0
+    assert rows["BHS"]["recorder_names"] is None
+    assert rows["BHS"]["storage_total_gb"] is None
+    # Cameras and trunks are not network context and must not be counted as it.
+    assert rows["BHS"]["aps"] == 0
+
+
+def test_site_context_sums_storage_but_takes_the_longest_retention(tmp_path):
+    """Two recorders at one school: capacity adds, retention does not.
+
+    Retention in XProtect is cumulative from the moment of recording, so the
+    school's answer is the longest any recorder keeps — MAX, never SUM. Adding
+    them is the same class of error that reported 106 days for a 45-day live
+    plus 61-day archive (spec 19 §8).
+    """
+    url = f"sqlite:///{tmp_path/'sc2.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    now = datetime.now(timezone.utc)
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO devices (name, site, device_type, enabled) "
+                       "VALUES ('NVR-2','Central','recording_server',1)"))
+        c.execute(text(
+            "INSERT INTO recording_servers (device_id, hostname, storage_total_gb, "
+            "retention_days, updated_at) VALUES "
+            "((SELECT id FROM devices WHERE name='NVR-2'),'nvr-2.tcs',2000,61,:t)"),
+            {"t": now})
+    engine.dispose()
+
+    with _client(tmp_path, url) as client:
+        rows = {r["site"]: r for r in client.get("/api/surveillance/site-context").json()}
+
+    assert rows["Central"]["recorders"] == 2
+    assert rows["Central"]["storage_total_gb"] == 10000        # 8000 + 2000
+    assert rows["Central"]["retention_days"] == 61             # not 91
+    assert rows["Central"]["recorder_names"] == "NVR-1, NVR-2"
