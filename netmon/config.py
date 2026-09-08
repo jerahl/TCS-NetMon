@@ -165,6 +165,11 @@ class SnmpInventoryConfig:
     enabled: bool = False
     snmpbulkwalk_path: str = "snmpbulkwalk"
     concurrency: int = 8  # switches in flight
+    # Skip switches the native poller currently reports as not answering SNMP.
+    # They cost a full timeout per OID root and return nothing (docs/design/109
+    # measured 361s a pass on two such hosts); their rows go honestly stale
+    # instead. Set false to sweep every registered switch regardless.
+    skip_snmp_down: bool = True
     # Hard budget for ONE supervised run (all due sweeps across the fleet).
     # Deliberately decoupled from the sweep intervals: a run that overruns the
     # fastest interval just delays the next tick (cadence slips honestly); it
@@ -220,10 +225,20 @@ class CameraSnapshotConfig:
     vendor and firmware, so those cameras report "not configured" until someone
     confirms it against a real device — a wrong guess would serve a plausible
     image of the wrong place, which nobody would notice.
+
+    `password_backup` (`pass_backup` in the file) is a second password for the
+    *same* account, tried only after the camera answers 401 to the first. A
+    fleet of 2,651 cameras is not on one password: a rotation reaches the
+    cameras that were online for it, and the ones that were down, or were
+    installed before it, still answer to the previous one. Without a fallback
+    those tiles read "camera rejected the configured account" and someone has
+    to decide, per camera, which password it is on. Optional, and empty means
+    one credential is tried exactly as before.
     """
     enabled: bool = False
     user: str = ""
     password: str = ""
+    password_backup: str = ""
     # Cameras on the VMS network carry self-signed certificates, so verification
     # is off by default. Named rather than hidden: it is a real trade-off, and
     # the traffic stays inside the management network.
@@ -486,6 +501,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         enabled=_sbool("enabled", False),
         snmpbulkwalk_path=parser.get("snmp_inventory", "snmpbulkwalk_path", fallback="snmpbulkwalk").strip(),
         concurrency=_sint("concurrency", 8),
+        skip_snmp_down=_sbool("skip_snmp_down", True),
         run_timeout_s=_sint("run_timeout_s", 900),
         sweep_ports=_sbool("sweep_ports", True),
         ports_interval_s=_sint("ports_interval_s", 120),
@@ -539,6 +555,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         enabled=_as_bool(parser.get("camera_snapshot", "enabled", fallback="false")),
         user=parser.get("camera_snapshot", "user", fallback="").strip(),
         password=parser.get("camera_snapshot", "pass", fallback=""),
+        password_backup=parser.get("camera_snapshot", "pass_backup", fallback=""),
         verify_ssl=_as_bool(parser.get("camera_snapshot", "verify_ssl", fallback="false")),
         connect_timeout_s=parser.getfloat("camera_snapshot", "connect_timeout_s", fallback=3.0),
         timeout_s=parser.getfloat("camera_snapshot", "timeout_s", fallback=6.0),

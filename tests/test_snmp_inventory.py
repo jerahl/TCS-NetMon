@@ -502,3 +502,233 @@ def test_cancelled_run_keeps_completed_sweeps_and_records_health(tmp_path):
     h = db.fetch_one(engine, "SELECT * FROM collector_health WHERE name='snmp_inventory'")
     assert h["consecutive_failures"] == 1
     assert "cancelled" in (h["last_error"] or "")
+
+
+# ---- a walk that did not complete is not evidence (docs/design/109) --------
+
+def _walk_proc(returncode: int, stdout: str, stderr: str = ""):
+    """Stand in for asyncio.create_subprocess_exec's process object."""
+    class _P:
+        def __init__(self):
+            self.returncode = returncode
+
+        async def communicate(self):
+            return stdout.encode(), stderr.encode()
+    return _P()
+
+
+def _snmpbulkwalk_with(monkeypatch, returncode, stdout, stderr=""):
+    async def fake_exec(*cmd, **kw):
+        return _walk_proc(returncode, stdout, stderr)
+    monkeypatch.setattr(si.asyncio, "create_subprocess_exec", fake_exec)
+
+
+def test_timed_out_walk_raises_instead_of_returning_empty(monkeypatch):
+    """snmpbulkwalk exits 1 on timeout. Returning its text would let the write
+    path prune every row it 'did not see'."""
+    import pytest
+    _snmpbulkwalk_with(monkeypatch, 1, "", "Timeout: No Response from 192.0.2.2")
+    c = si.SnmpInventory(None, SnmpInventoryConfig(enabled=True),
+                         PollerConfig(snmp_community="test-ro"))
+    with pytest.raises(si.SnmpWalkError) as exc:
+        asyncio.run(c._snmpbulkwalk("192.0.2.2", [si.OID["fdb_port"]]))
+    assert "Timeout: No Response" in str(exc.value)
+
+
+def test_partial_walk_raises_even_though_it_returned_rows(monkeypatch):
+    """The dangerous case: rows emitted, THEN a timeout. 16 of 7,065 live walks
+    looked like this, and each would have pruned the rows it never reached."""
+    import pytest
+    _snmpbulkwalk_with(monkeypatch, 1, FIXTURE, "Timeout: No Response from 192.0.2.2")
+    c = si.SnmpInventory(None, SnmpInventoryConfig(enabled=True),
+                         PollerConfig(snmp_community="test-ro"))
+    with pytest.raises(si.SnmpWalkError):
+        asyncio.run(c._snmpbulkwalk("192.0.2.2", [si.OID["if_oper"]]))
+
+
+def test_complete_empty_walk_is_accepted_as_zero_rows(monkeypatch):
+    """rc=0 with no output is a real answer — an empty table, not a failure."""
+    _snmpbulkwalk_with(monkeypatch, 0, "")
+    c = si.SnmpInventory(None, SnmpInventoryConfig(enabled=True),
+                         PollerConfig(snmp_community="test-ro"))
+    out = asyncio.run(c._snmpbulkwalk("192.0.2.2", [si.OID["fdb_port"]]))
+    assert out == {si.OID["fdb_port"]: ""}
+
+
+def test_failed_switch_keeps_its_previous_rows(tmp_path):
+    """The whole point of raising: last good inventory survives, visibly stale,
+    rather than being deleted by a lost packet."""
+    engine = _engine_with_switch(tmp_path)
+    asyncio.run(_collector(engine).run_once())
+    before = db.fetch_one(engine, "SELECT COUNT(*) AS n FROM switch_ports")["n"]
+    assert before > 0
+    stamps = db.fetch_one(engine, "SELECT MAX(updated_at) AS t FROM switch_ports")["t"]
+
+    async def always_times_out(host, roots):
+        raise si.SnmpWalkError("timeout")
+
+    c = si.SnmpInventory(engine, SnmpInventoryConfig(enabled=True),
+                         PollerConfig(snmp_community="test-ro"), walk_fn=always_times_out)
+    c._force_all = True
+    # One switch in the fleet and it failed → fail loud, don't report success.
+    import pytest
+    with pytest.raises(RuntimeError):
+        asyncio.run(c.run_once())
+    assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM switch_ports")["n"] == before
+    assert db.fetch_one(engine, "SELECT MAX(updated_at) AS t FROM switch_ports")["t"] == stamps
+
+
+# ---- walk planning: one walk per small table, columns elsewhere ------------
+
+def test_plan_walks_collapses_a_shared_small_table():
+    c = si.SnmpInventory(None, SnmpInventoryConfig(enabled=True), PollerConfig())
+    keys = list(si._SWEEP_OIDS["poe"][2])
+    roots, source = c._plan_walks(keys)
+    table = "1.3.6.1.4.1.1916.1.27.1.2.1"
+    # six extremePethSlotTable columns become one walk of the table…
+    assert table in roots
+    assert all(source[k] == table for k in keys if k.startswith("poe_slot_"))
+    # …while pethPsePortTable columns (measured slower merged) keep their own.
+    assert source["poe_admin"] == si.OID["poe_admin"]
+    assert len(roots) == 5  # 1 table + poe_admin/detect/class + poe_power_mw
+
+
+def test_plan_walks_leaves_wide_tables_column_by_column():
+    """ifTable/ifXTable/entPhysicalTable merged measured 1.3-3.7x SLOWER."""
+    c = si.SnmpInventory(None, SnmpInventoryConfig(enabled=True), PollerConfig())
+    for sweep in ("ports", "entity", "vlans"):
+        keys = list(si._SWEEP_OIDS[sweep][2])
+        roots, source = c._plan_walks(keys)
+        assert roots == [si.OID[k] for k in keys]
+        assert all(source[k] == si.OID[k] for k in keys)
+
+
+def test_plan_walks_does_not_merge_a_lone_column():
+    """One column of a table: walking the whole table is more data, same answer."""
+    c = si.SnmpInventory(None, SnmpInventoryConfig(enabled=True), PollerConfig())
+    roots, source = c._plan_walks(["edp_name", "cpu_5m"])
+    assert roots == [si.OID["edp_name"], si.OID["cpu_5m"]]
+
+
+def test_stack_columns_are_never_merged():
+    """extremeStackMember* answers as a scalar at the column OID on non-stacked
+    switches, so an entry-root walk misses it — measured on 36 of 40 live
+    switches. Faster, and wrong."""
+    c = si.SnmpInventory(None, SnmpInventoryConfig(enabled=True), PollerConfig())
+    keys = list(si._SWEEP_OIDS["stack"][2])
+    roots, source = c._plan_walks(keys)
+    assert roots == [si.OID[k] for k in keys]
+
+
+def test_grouped_table_walk_still_parses_every_column():
+    """Demultiplexing a table walk must yield exactly the per-column dicts."""
+    c = si.SnmpInventory(None, SnmpInventoryConfig(enabled=True), PollerConfig(),
+                         walk_fn=None)
+    seen: list[list[str]] = []
+
+    async def fake_walk(host, roots):
+        seen.append(roots)
+        return {root: POE_FIXTURE for root in roots}
+
+    c._walk = fake_walk
+    walks = asyncio.run(c._walk_keys("192.0.2.2", list(si._SWEEP_OIDS["poe"][2])))
+    assert "1.3.6.1.4.1.1916.1.27.1.2.1" in seen[0]
+    direct = si.parse_walk(POE_FIXTURE, si.OID["poe_slot_budget"])
+    assert walks["poe_slot_budget"] == direct and direct  # non-empty, identical
+
+
+# ---- skipping switches the poller says are not answering SNMP -------------
+
+def _sw(state=None, at_offset_s=0, claimants=1):
+    from datetime import datetime, timedelta, timezone
+    at = None if state is None else (
+        datetime.now(timezone.utc) - timedelta(seconds=at_offset_s))
+    return {"id": 1, "name": "BHS-Core-1", "mgmt_ip": "192.0.2.2",
+            "snmp_state": state, "snmp_state_at": at, "ip_claimants": claimants}
+
+
+def _skipper(**cfg_kw):
+    cfg = SnmpInventoryConfig(enabled=True, **cfg_kw)
+    c = si.SnmpInventory(None, cfg, PollerConfig(snmp_community="x"))
+    return c, c._snmp_down_cutoff()
+
+
+def test_skips_a_switch_the_poller_reports_snmp_down():
+    c, cutoff = _skipper()
+    assert c._skip_reason(_sw("down", 60), cutoff) is not None
+
+
+def test_does_not_skip_on_up_unknown_or_missing_state():
+    """Only an explicit `down` counts. A switch the poller has never reached
+    must keep being swept, or a registry addition would never be monitored."""
+    c, cutoff = _skipper()
+    for state in ("up", "unknown", None):
+        assert c._skip_reason(_sw(state, 60), cutoff) is None
+
+
+def test_does_not_skip_on_a_stale_down_verdict():
+    """A wedged or disabled SNMP poller leaves its last verdict behind; an old
+    `down` must not exile a switch that has since recovered."""
+    c, cutoff = _skipper()
+    assert c._skip_reason(_sw("down", 60), cutoff) is not None
+    assert c._skip_reason(_sw("down", 86400), cutoff) is None
+
+
+def test_does_not_skip_on_a_contested_address():
+    """Two devices on one mgmt_ip: the probe cannot say which answered, so it
+    cannot condemn either (state.native_trustworthy, same rule)."""
+    c, cutoff = _skipper()
+    assert c._skip_reason(_sw("down", 60, claimants=2), cutoff) is None
+
+
+def test_skip_is_reversible_by_config():
+    c, cutoff = _skipper(skip_snmp_down=False)
+    assert c._skip_reason(_sw("down", 60), cutoff) is None
+
+
+def test_whole_fleet_down_fails_loud_rather_than_sweeping_nothing(tmp_path):
+    """Skipping every switch would otherwise report a cheerful 0-row success."""
+    import pytest
+    from datetime import datetime, timezone
+    from sqlalchemy import text
+    engine = _engine_with_switch(tmp_path)
+    with engine.begin() as conn:
+        down_id = conn.execute(
+            text("SELECT id FROM devices WHERE name = 'BHS-Core-1'")).scalar()
+        conn.execute(text(
+            "INSERT INTO device_state (device_id, dimension, value, severity, source, updated_at) "
+            "VALUES (:d, 'snmp', 'down', 'crit', 'poller', :now)"),
+            {"d": down_id, "now": datetime.now(timezone.utc)})
+    c = _collector(engine)
+    with pytest.raises(RuntimeError, match="no switch is answering SNMP"):
+        asyncio.run(c.run_once())
+
+
+def test_snmp_down_switch_is_excluded_from_the_pass(tmp_path):
+    """End to end: a down switch is not walked, and a live one still is."""
+    from datetime import datetime, timezone
+    from sqlalchemy import text
+    engine = _engine_with_switch(tmp_path)
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO devices (name, site, device_type, mgmt_ip, "
+                          "snmp_capable, enabled) VALUES "
+                          "('BHS-Core-2','BHS','switch','192.0.2.9',1,1)"))
+        # NB _engine_with_switch already inserted an AP, so the new switch is
+        # not device 2 — look its id up rather than assuming.
+        down_id = conn.execute(
+            text("SELECT id FROM devices WHERE name = 'BHS-Core-2'")).scalar()
+        conn.execute(text(
+            "INSERT INTO device_state (device_id, dimension, value, severity, source, updated_at) "
+            "VALUES (:d, 'snmp', 'down', 'crit', 'poller', :now)"),
+            {"d": down_id, "now": datetime.now(timezone.utc)})
+    walked: list[str] = []
+
+    async def fake_walk(host, roots):
+        walked.append(host)
+        return {root: ALL_FIXTURES for root in roots}
+
+    c = si.SnmpInventory(engine, SnmpInventoryConfig(enabled=True),
+                         PollerConfig(snmp_community="test-ro"), walk_fn=fake_walk)
+    c._force_all = True
+    asyncio.run(c.run_once())
+    assert set(walked) == {"192.0.2.2"}  # the down switch was never contacted

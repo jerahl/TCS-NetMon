@@ -28,7 +28,7 @@ import logging
 import re
 import time
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -158,6 +158,22 @@ def parse_walk(output: str, root: str) -> dict[str, str]:
             continue
         out[suffix] = _clean_value(raw)
     return out
+
+
+def _as_utc(v) -> datetime | None:
+    """Coerce a ``device_state.updated_at`` to an aware UTC datetime.
+
+    MariaDB hands back a naive ``datetime`` and SQLite a string, and both are
+    stored as UTC — so a naive value is stamped UTC rather than localised.
+    """
+    if isinstance(v, str):
+        try:
+            v = datetime.fromisoformat(v)
+        except ValueError:
+            return None
+    if not isinstance(v, datetime):
+        return None
+    return v.replace(tzinfo=timezone.utc) if v.tzinfo is None else v.astimezone(timezone.utc)
 
 
 def _to_int(v: str | None):
@@ -607,10 +623,25 @@ def compute_rates(row: dict, prev: dict | None, now_ts: float) -> dict:
 
 WalkFn = Callable[[str, list[str]], Awaitable[dict[str, str]]]
 
+
+class SnmpWalkError(RuntimeError):
+    """A walk did not complete — its text must not be treated as the truth."""
+
+
+# ``snmp_capable`` is a registry flag (is this thing *meant* to answer SNMP),
+# not a reading, so the sweep also carries the poller's live ``snmp`` verdict
+# and the claimant count that says whether that verdict can be believed.
 _SWITCHES_SQL = """
-SELECT id, name, mgmt_ip FROM devices
-WHERE enabled = 1 AND device_type = 'switch' AND snmp_capable = 1 AND mgmt_ip IS NOT NULL
-ORDER BY id
+SELECT d.id, d.name, d.mgmt_ip,
+       s.value AS snmp_state,
+       s.updated_at AS snmp_state_at,
+       (SELECT COUNT(*) FROM devices x
+         WHERE x.enabled = 1 AND x.mgmt_ip = d.mgmt_ip) AS ip_claimants
+FROM devices d
+LEFT JOIN device_state s ON s.device_id = d.id AND s.dimension = 'snmp'
+WHERE d.enabled = 1 AND d.device_type = 'switch'
+  AND d.snmp_capable = 1 AND d.mgmt_ip IS NOT NULL
+ORDER BY d.id
 """
 
 # sweep name -> (config-enabled attr, interval attr, OID keys it needs)
@@ -633,6 +664,41 @@ _SWEEP_OIDS = {
     "stack": ("sweep_stack", "stack_interval_s",
               ["stack_status", "stack_temp", "cpu_5m", "mem_total", "mem_avail"]),
 }
+
+
+# Tables worth fetching whole instead of column by column. Every entry here was
+# A/B-measured against the live fleet (docs/design/109 §3); the ones that are
+# *absent* matter just as much, because the intuition is wrong for most of them:
+#
+#   poe_slot  (6 cols)  104.0s -> 27.7s   +73%   <- kept
+#   edp       (5 cols)    5.5s ->  1.1s   +80%   <- kept
+#   stack     (2 cols)    2.6s ->  2.2s   +15%   <- REJECTED, see below
+#   poe_port  (3 cols)   25.5s -> 27.3s    -7%   <- rejected
+#   vlans     (3 cols)    3.3s ->  4.3s   -30%   <- rejected
+#   ifTable   (8 cols)   42.8s -> 99.1s  -132%   <- rejected
+#   ifXTable  (5 cols)   21.7s -> 77.5s  -257%   <- rejected
+#   entity    (5 cols)   22.9s -> 86.3s  -277%   <- rejected
+#
+# The rule the numbers describe: merging wins when the columns we skip are few
+# and cheap, and loses badly on wide tables with many rows (entPhysicalTable and
+# ifTable/ifXTable carry ~3x the lines we need).
+#
+# ``stack`` is the cautionary one. It measured *faster* and was still wrong: on
+# a non-stacked switch the EXOS agent answers extremeStackMemberOperStatus as a
+# **scalar at the column OID itself** (suffix ``''``, no table index), which a
+# walk of the entry root does not return. An equivalence check across 40 live
+# switches found the merged walk returning nothing where the column walk
+# returned a value, on 36 of them — it would have quietly emptied
+# ``stack_members`` for most of the fleet. Speed is not the only axis: any
+# addition here must be proved to return identical keys, not just to run faster.
+_WALK_TABLES = {
+    "1.3.6.1.4.1.1916.1.27.1.2.1": (          # extremePethSlotTable
+        "poe_slot_budget", "poe_slot_alloc", "poe_slot_status",
+        "poe_slot_avail", "poe_slot_capacity", "poe_slot_measured"),
+    "1.3.6.1.4.1.1916.1.13.2.1": (            # extremeEdpNeighborTable
+        "edp_name", "edp_version", "edp_slot", "edp_port", "edp_age"),
+}
+_TABLE_OF_COLUMN = {OID[k]: table for table, keys in _WALK_TABLES.items() for k in keys}
 
 
 class SnmpInventory:
@@ -673,7 +739,19 @@ class SnmpInventory:
     # -- subprocess walk (the only non-pure part) --
     async def _snmpbulkwalk(self, host: str, roots: list[str]) -> dict[str, str]:
         """Run one read-only snmpbulkwalk per root; return combined -On text
-        keyed by root OID. GET-only; no writes ever issued."""
+        keyed by root OID. GET-only; no writes ever issued.
+
+        A non-zero exit raises :class:`SnmpWalkError`. That matters more than it
+        looks: ``snmpbulkwalk`` exits 1 on timeout having printed *whatever it
+        received before giving up*, so a dropped response is indistinguishable
+        from a short table in the text alone. Returning it would feed the write
+        path a truncated row set, and ``_upsert_many`` prunes everything it did
+        not see — a single lost UDP packet would delete a switch's ports and
+        stamp the survivors fresh. Measured on the live fleet (docs/design/109):
+        195 of 7,065 walks exited 1, and 16 of those had already emitted rows.
+        Raising here lets ``run_once``'s per-switch boundary skip the device and
+        leave its last good rows visibly stale, which is the §4.5 contract.
+        """
         results: dict[str, str] = {}
         for root in roots:
             cmd = [
@@ -691,12 +769,19 @@ class SnmpInventory:
             )
             out, err = await proc.communicate()
             text = out.decode(errors="replace")
-            results[root] = text
+            stderr = err.decode(errors="replace").strip()
             if log.isEnabledFor(logging.DEBUG):
                 log.debug("walk %s %s: rc=%s, %d line(s), %.2fs%s",
                           host, root, proc.returncode, len(text.splitlines()),
                           time.monotonic() - t0,
-                          f", stderr: {err.decode(errors='replace').strip()}" if err.strip() else "")
+                          f", stderr: {stderr}" if stderr else "")
+            if proc.returncode != 0:
+                raise SnmpWalkError(
+                    f"{host} {root}: snmpbulkwalk exited {proc.returncode} after "
+                    f"{time.monotonic() - t0:.1f}s with {len(text.splitlines())} "
+                    f"line(s){': ' + stderr if stderr else ''}"
+                )
+            results[root] = text
         return results
 
     def _due(self, sweep: str, now: float) -> bool:
@@ -708,10 +793,36 @@ class SnmpInventory:
         last = self._last_run.get(sweep)
         return last is None or (now - last) >= getattr(self.cfg, interval_attr)
 
+    def _plan_walks(self, keys: list[str]) -> tuple[list[str], dict[str, str]]:
+        """Decide which OIDs to actually walk for ``keys``.
+
+        Returns ``(roots_to_walk, {key: root_carrying_it})``. Keys that share a
+        table root in :data:`_WALK_TABLES` collapse into one walk of that root;
+        everything else keeps its own column walk. A table root is only used
+        when two or more of its columns are wanted — walking a whole table for
+        a single column is strictly more data for the same answer.
+        """
+        by_table: dict[str, list[str]] = {}
+        for k in keys:
+            table = _TABLE_OF_COLUMN.get(OID[k])
+            if table:
+                by_table.setdefault(table, []).append(k)
+        source: dict[str, str] = {}
+        roots: list[str] = []
+        for k in keys:
+            table = _TABLE_OF_COLUMN.get(OID[k])
+            root = table if table and len(by_table[table]) > 1 else OID[k]
+            source[k] = root
+            if root not in roots:
+                roots.append(root)
+        return roots, source
+
     async def _walk_keys(self, host: str, keys: list[str]) -> dict[str, dict[str, str]]:
-        roots = [OID[k] for k in keys]
+        roots, source = self._plan_walks(keys)
         raw = await self._walk(host, roots)
-        return {k: parse_walk(raw.get(OID[k], ""), OID[k]) for k in keys}
+        # parse_walk filters by root prefix, so demultiplexing a table walk back
+        # into its columns needs nothing more than asking for each column OID.
+        return {k: parse_walk(raw.get(source[k], ""), OID[k]) for k in keys}
 
     # Fleet-pass order when several sweeps are due at once: cheap/high-cadence
     # first, so a cancelled run has already banked the data operators watch
@@ -753,6 +864,38 @@ class SnmpInventory:
                 self.poller.snmp_version, len(community), fp,
             )
 
+    def _snmp_down_cutoff(self) -> datetime:
+        """A ``snmp = down`` verdict is only actionable while it is current.
+
+        If the SNMP poller is disabled or wedged its last verdict sits in the
+        table forever, and an old ``down`` must not exile a switch that has
+        since come back. Three poll intervals (floor 15 min) is late enough to
+        be sure and early enough to stop paying for a dead host all day.
+        """
+        window = max(3 * self.poller.snmp_interval_s, 900)
+        return datetime.now(timezone.utc) - timedelta(seconds=window)
+
+    def _skip_reason(self, sw, cutoff: datetime) -> str | None:
+        """Why this switch is not worth walking this pass, or None to sweep it.
+
+        Deliberately narrow: only a *fresh, uncontested, explicit* ``down``
+        skips. No state row (a switch the poller has not reached yet), an
+        ``unknown``, or a stale verdict all sweep as before — the cost of
+        walking a live switch needlessly is far smaller than silently ceasing
+        to monitor one.
+        """
+        if not self.cfg.skip_snmp_down or sw.get("snmp_state") != "down":
+            return None
+        # A probe is keyed by address: when two devices share one, the verdict
+        # cannot say which answered, so it cannot condemn either (state.py's
+        # native_trustworthy, same rule).
+        if int(sw.get("ip_claimants") or 1) > 1:
+            return None
+        at = _as_utc(sw.get("snmp_state_at"))
+        if at is None or at < cutoff:
+            return None
+        return f"snmp down since {at:%Y-%m-%d %H:%M}Z"
+
     async def run_once(self) -> int:
         now = time.monotonic()
         due = [s for s in self._SWEEP_ORDER if self._due(s, now)]
@@ -762,7 +905,31 @@ class SnmpInventory:
         # Owner-editable decode maps, read once per run (picked up on the next
         # sweep after an admin edits them — no restart).
         self._stack_status_map = enums.effective_map(self.engine, "stack_status")
-        switches = db.fetch_all(self.engine, _SWITCHES_SQL)
+        registered = db.fetch_all(self.engine, _SWITCHES_SQL)
+        cutoff = self._snmp_down_cutoff()
+        switches: list = []
+        skipped: list[tuple[dict, str]] = []
+        for sw in registered:
+            reason = self._skip_reason(sw, cutoff)
+            if reason:
+                skipped.append((sw, reason))
+            else:
+                switches.append(sw)
+        if skipped:
+            # Loud, not silent: these switches' inventory rows are about to stop
+            # being refreshed, and an operator reading a stale port list deserves
+            # to find the reason in the log rather than infer it.
+            log.warning(
+                "skipping %d switch(es) not answering SNMP; their inventory rows "
+                "will age without refresh: %s",
+                len(skipped),
+                ", ".join(f"{sw['name']} ({sw['mgmt_ip']}, {why})" for sw, why in skipped),
+            )
+        if not switches:
+            raise RuntimeError(
+                f"no switch is answering SNMP ({len(registered)} registered, "
+                f"{len(skipped)} skipped as down) — sweeping nothing"
+            )
         log.info("run: sweep(s) due: %s · %d switch(es), concurrency %d",
                  ", ".join(due), len(switches), self.cfg.concurrency)
         total = 0

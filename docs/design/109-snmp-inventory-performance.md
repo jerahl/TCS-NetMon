@@ -214,3 +214,189 @@ pattern, if you find a genuinely unbatched write path somewhere else.
 for S4; the `channel_param` for 178 multi-imager cameras; whether
 "Service Available Critical" on 11 of 22 recorders (timestamps months old) is
 real; and D11's proving ground for bulk camera firmware.
+
+---
+
+# Part 2 — the measurements, and what was done (2026-09-08, later session)
+
+Part 1 above is the handoff. This part is the answer to it. Where Part 1
+speculated, the numbers below replace the speculation; two of its three
+hypotheses turned out to be secondary, and the largest finding was not a
+performance problem at all.
+
+## 7. What the fleet actually costs
+
+Method: a read-only harness walked all 45 OID roots of all seven sweeps against
+all 157 switches at `concurrency = 8`, timing each `snmpbulkwalk` and writing
+**nothing** to the database — so it never raced the supervised task (§5). 7,065
+walks, 487.9 s wall, **3,421 CPU-seconds** of walk time (7.0x parallel — the
+pool is saturated, so wall time tracks total walk time closely).
+
+| Sweep | Walk time | Share | Walks | Lines | s/walk |
+|---|---|---|---|---|---|
+| `ports` | 1,282 s | 37.5% | 2,198 | 319,630 | 0.58 |
+| `poe` | 1,239 s | 36.2% | 1,570 | 67,521 | 0.79 |
+| `entity` | 425 s | 12.4% | 942 | 176,754 | 0.45 |
+| `fdb` | 248 s | 7.3% | 314 | 78,955 | 0.79 |
+| `edp` | 92 s | 2.7% | 785 | 1,590 | 0.12 |
+| `stack` | 79 s | 2.3% | 785 | 1,790 | 0.10 |
+| `vlans` | 56 s | 1.6% | 471 | 5,645 | 0.12 |
+
+**`fdb` was not the problem.** Part 1 named it "the obvious suspect" at 49,265
+rows; it is 7.3% of the cost. The suspects are `poe` — 36% of all walk time for
+2% of the lines — and the long tail of hosts that do not answer.
+
+Distribution is extreme: **median switch 10.4 s, p90 41.6 s, max 311.6 s.** The
+eight worst switches account for ~45% of the total.
+
+## 8. 21% of the sweep was spent learning nothing
+
+**718 s — 21% of all walk time — went on walks that returned zero lines**, each
+costing exactly 4.0 s (`snmp_timeout_s = 2` x `snmp_retries = 1`, two roots'
+worth of retry). Two switches, `Old TCT Automotive` (192.168.88.250) and
+`X465-48P` (10.10.252.89), failed **45 of 45** walks and burned **361 s a pass
+between them**. Both answer ICMP; neither answers SNMP.
+
+The remaining empties are scattered and non-repeating — `poe_slot_avail` empty
+on 15 switches, `poe_slot_capacity` on 14, but not the same 14 — which is the
+signature of **response loss under load**, not of missing OIDs.
+
+## 9. The defect that fell out of it
+
+`snmpbulkwalk` exits 1 on timeout **after printing whatever it already
+received**. The old `_snmpbulkwalk` ignored the exit code and returned that text
+as the answer. So:
+
+- 179 walks returned nothing and were parsed as "this table is empty";
+- **16 walks returned rows and *then* timed out** and were parsed as complete.
+
+`_upsert_many` prunes every row it did not see. A single lost UDP response
+therefore **deleted a switch's FDB, VLANs, neighbours or stack members** — and a
+*partial* walk deleted every port past the truncation point while stamping the
+survivors with a fresh `updated_at`. Not stale: confidently wrong, and badged
+healthy. `fdb_port` timed out on 11 of 157 switches in one observed pass, so
+this was routine, not theoretical.
+
+Observed live during the verification run, unedited:
+
+```
+entity OKD-MDF (10.64.0.1) failed: snmpbulkwalk exited 1 after 13.4s
+    with 280 line(s): Timeout: No Response from 10.64.0.1
+vlans SouthView-RM1203 (192.168.153.252) failed: exited 1 after 6.5s
+    with 10 line(s)
+```
+
+Both of those row sets would previously have been written as the truth.
+
+`_snmpbulkwalk` now raises `SnmpWalkError` on any non-zero exit. `run_once`'s
+existing per-switch boundary catches it, logs the switch, and moves on — last
+good rows survive with their original timestamps, which is the §4.5 contract.
+The docstring that claimed "a failed sweep raised earlier, so stale rows stay
+visible, never blanked" is now true; it was not before.
+
+## 10. What was changed, and what it bought
+
+**10.1 A walk that did not complete is not evidence** (§9). Correctness, not
+speed — it makes the sweep slightly *more* likely to skip a switch, and that is
+the point.
+
+**10.2 Skip switches the poller says are not answering.** `snmp_capable` is a
+registry flag meaning "this is meant to answer SNMP"; the poller's `snmp`
+dimension is a live reading, and it already knew about both dead hosts. The
+sweep now consults it: **361 s a pass, removed.** Deliberately narrow — only a
+*fresh* (within 3 SNMP poll intervals), *uncontested* (one device on the
+address, per `state.native_trustworthy`), *explicit* `down` skips. Unknown,
+missing, and stale verdicts all sweep as before, because failing to monitor a
+live switch is far worse than walking a dead one. Reversible via
+`[snmp_inventory] skip_snmp_down`. Skipped hosts are logged at WARNING and their
+rows age visibly; if every switch is down the run fails loud rather than
+reporting a cheerful zero-row success.
+
+**10.3 Fetch a small table in one walk instead of column by column.** Six of
+`poe`'s ten roots are columns of one tiny table (extremePethSlotTable) fetched
+in six separate round trips returning ~2 lines each.
+
+A/B on 30 clean switches, per-column vs one table walk:
+
+| Group | Cols | Per-column | Table walk | Verdict |
+|---|---|---|---|---|
+| poe_slot | 6 | 104.0 s | 27.7 s | **+73% — kept** |
+| edp | 5 | 5.5 s | 1.1 s | **+80% — kept** |
+| stack | 2 | 2.6 s | 2.2 s | +15% — **rejected, see below** |
+| poe_port | 3 | 25.5 s | 27.3 s | −7% — rejected |
+| vlans | 3 | 3.3 s | 4.3 s | −30% — rejected |
+| ifTable | 8 | 42.8 s | 99.1 s | −132% — rejected |
+| ifXTable | 5 | 21.7 s | 77.5 s | −257% — rejected |
+| entity | 5 | 22.9 s | 86.3 s | −277% — rejected |
+
+The intuition is wrong for five of the eight. Wide tables (entPhysicalTable,
+ifTable, ifXTable) carry ~3x the lines we want, and merging them would have made
+the two most expensive sweeps dramatically worse.
+
+**`stack` is why speed alone is not enough to justify an entry.** It measured
+15% *faster* and was wrong: an equivalence check across 40 live switches found
+the merged walk returning **nothing** where the column walk returned a value, on
+36 of them. On a non-stacked switch the EXOS agent answers
+`extremeStackMemberOperStatus` as a **scalar at the column OID itself** (suffix
+`''`, no table index), which a walk of the entry root never reaches. Merging it
+would have quietly emptied `stack_members` for most of the fleet. It was dropped
+before shipping; `_WALK_TABLES` carries the reason so nobody re-adds it.
+
+**Effect at fleet scale**, 3 alternating old/new reps over 155 switches (medians,
+because single runs on a live fleet are noise-dominated — see §11):
+
+| Sweep | Before | After | Change |
+|---|---|---|---|
+| `poe` | 144.8 s | 113.3 s | **−22%** |
+| `edp` | 15.0 s | 5.1 s | **−66%** |
+
+Failures fell with it — `poe` from ~20 switches a pass to ~13 — because six
+chances to time out became one, and ~1,000 more rows landed per pass as a
+result. The isolated +73%/+80% did not translate fully: at fleet scale the
+process pool, not the round trips, is the binding constraint.
+
+**10.4 Make the instrumentation reachable.** §4.1 asked the next agent to "turn
+on DEBUG for one full run". That was impossible on the deployed box: uvicorn
+configures only its own loggers and leaves the root at WARNING, so **every INFO
+line this codebase emits was being discarded** — including the per-sweep
+durations §4.1 depends on. `netmon.app.configure_logging()` now gives the
+`netmon` tree a level and a handler:
+
+```
+systemctl set-environment NETMON_LOG_LEVEL=DEBUG
+systemctl set-environment NETMON_DEBUG_LOGGERS=netmon.snmp_inventory
+```
+
+(The logger is `netmon.snmp_inventory`, not `netmon.poller.snmp_inventory`.)
+
+## 11. Two notes for whoever measures next
+
+**Single runs on a live fleet are worthless.** The first before/after comparison
+of a full `run_once` read 398 s → 516 s, i.e. the change looked 30% *slower*. In
+the same pair `entity` doubled — a sweep the change cannot touch. It was ambient
+load. Everything in §10.3 is a median of alternating runs; do the same, and be
+suspicious of any result that moves a sweep you did not modify.
+
+**Measure equivalence, not just duration.** The `stack` merge would have shipped
+on its timing alone. A speed change that alters what the sweep returns is worse
+than the slowness it fixes.
+
+## 12. Still open
+
+- **`ports` (37.5%) is untouched.** It is 14 column walks over ifTable/ifXTable
+  and merging them is *much* worse (§10.3). If it needs to come down, the levers
+  are dropping columns nobody reads or splitting the pass, not batching.
+- **Response loss under load** (§8) is unexplained: hundreds of seconds a pass
+  go on scattered, non-repeating timeouts. Whether the constraint is the box,
+  the network, or the agents is unknown — raising `concurrency` before that is
+  understood is as likely to hurt as help. Part 1 §4.2's advice to raise it last
+  still stands, and now has a reason.
+- **The two dead hosts are a real question, not just cost.** `Old TCT
+  Automotive` and `X465-48P` answer ICMP and not SNMP. Wrong community,
+  SNMP disabled, or an ACL — worth ten minutes with the switches, and until then
+  their inventory is honestly stale rather than silently deleted.
+- **Part 1 §4.2's first suggestion — grouping due sweeps per switch — was not
+  done.** The measurement removed its urgency (a grouped-by-switch pass measured
+  487.9 s against the per-sweep shape's comparable figure, within noise) and it
+  conflicts with the "bank completed sweeps on cancellation" property that Part 1
+  rightly insisted on keeping. Left alone deliberately.

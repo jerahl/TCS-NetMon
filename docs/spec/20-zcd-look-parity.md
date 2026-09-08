@@ -766,6 +766,17 @@ now, but it is what makes every other collector's cycle slow, and it deserves
 its own look — the switch sweep is the obvious candidate for the same batching
 treatment `write_states` just applied here.
 
+> **Followed up 2026-09-08** — and the guess in that last sentence was wrong.
+> The sweep's writes were *already* batched; its cost is SNMP walk time. Taken
+> up in `docs/design/109-snmp-inventory-performance.md`, which measured the
+> fleet and found the real items: 21% of every pass spent timing out against two
+> switches that do not answer SNMP, `poe` costing 36% of the walk time for 2% of
+> the data, and — the one that mattered — **a truncated walk being written as
+> fact**. `snmpbulkwalk` exits 1 on timeout after printing what it already
+> received, and the sweep ignored the exit code, so a lost packet pruned every
+> row it never reached and stamped the survivors fresh. Fixed, along with a
+> down-host skip and a measured table-walk merge (`poe` −22%, `edp` −66%).
+
 ## 4. Rules that hold throughout
 
 - **Copy the layout, not the promise.** Every slot ZCD fills with a zero or a

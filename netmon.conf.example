@@ -172,6 +172,15 @@ enabled = false
 # snmpbulkwalk_path = snmpbulkwalk
 # Switches swept concurrently (bounded so a fleet sweep finishes in-interval).
 concurrency = 8
+# Skip switches the native poller currently reports as NOT answering SNMP.
+# A silent host costs a full timeout (snmp_timeout_s x snmp_retries) on every
+# OID root and returns nothing: measured 361s a pass on two such switches out
+# of 157. Their inventory rows then age without refresh, which the UI badges
+# honestly, and the sweep resumes on its own within one poll of the host
+# answering again. Only a fresh, uncontested `snmp = down` verdict skips --
+# never an unknown, a stale one, or a shared management address.
+# Set false to sweep every registered switch regardless.
+skip_snmp_down = true
 # Hard budget (seconds) for ONE full run — all due sweeps across the fleet.
 # The first run after startup has every sweep due at once and legitimately
 # outlives ports_interval_s; overrunning an interval just delays the next

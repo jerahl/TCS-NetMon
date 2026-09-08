@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -50,6 +51,42 @@ from netmon.poller.snmp_inventory import SnmpInventory
 from netmon.supervisor import Supervisor, _heartbeat
 
 log = logging.getLogger("netmon.app")
+
+
+def configure_logging() -> None:
+    """Give netmon's own loggers a level and a handler.
+
+    uvicorn configures only the ``uvicorn*`` loggers and leaves the root at
+    WARNING, so every INFO this codebase emits — sweep durations, per-pass
+    progress, the collector timings you need to diagnose anything — was being
+    dropped on the deployed box. docs/design/109 §4.1 asks the next agent to
+    "turn on DEBUG for one full run"; until now there was no way to do that
+    short of editing code, and no way to see INFO at all.
+
+    Level comes from ``NETMON_LOG_LEVEL`` (default INFO), and
+    ``NETMON_DEBUG_LOGGERS`` takes a comma-separated list of logger names to
+    raise to DEBUG on their own — targeted tracing without drowning the journal:
+
+        systemctl set-environment NETMON_DEBUG_LOGGERS=netmon.snmp_inventory
+
+    SQLAlchemy is pinned at WARNING because its INFO level means "echo every
+    statement", which is not what asking netmon for detail should mean.
+    """
+    level = os.environ.get("NETMON_LOG_LEVEL", "INFO").upper()
+    netmon_log = logging.getLogger("netmon")
+    netmon_log.setLevel(getattr(logging, level, logging.INFO))
+    if not netmon_log.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s %(message)s"))
+        netmon_log.addHandler(handler)
+    # Propagation is left ON deliberately. Muting it stops duplicate lines if
+    # something ever adds a root handler, but it also blindfolds every consumer
+    # that listens at the root — pytest's caplog included — and a test that
+    # cannot see a warning is worse than a line printed twice.
+    for name in os.environ.get("NETMON_DEBUG_LOGGERS", "").split(","):
+        if name.strip():
+            logging.getLogger(name.strip()).setLevel(logging.DEBUG)
+    logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
 
 
 def register_tasks(app: FastAPI, cfg: Config, engine) -> None:
@@ -213,6 +250,7 @@ def create_app(
     ``config``/``supervisor`` are injectable for tests; production passes
     neither and the config is loaded from disk.
     """
+    configure_logging()
     cfg = config or load_config()
 
     app = FastAPI(
