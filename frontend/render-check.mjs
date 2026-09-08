@@ -10,6 +10,7 @@ export * as surveillance from "./src/pages/surveillance.jsx";
 export * as cameraDetail from "./src/pages/camera_detail.jsx";
 export * as cameras from "./src/pages/cameras.jsx";
 export * as netmonStatus from "./src/pages/netmon_status.jsx";
+export * as cameraOps from "./src/pages/camera_ops.jsx";
 export * as cameraSnapshot from "./src/pages/camera_snapshot.jsx";
 export * as primitives from "./src/primitives.jsx";
 export { default as React } from "react";
@@ -24,7 +25,8 @@ const require = createRequire(import.meta.url);
 const mod = { exports: {} };
 new Function("module", "exports", "require", res.outputFiles[0].text)(mod, mod.exports, require);
 const { surveillance: S, cameraDetail: D, cameras: C, cameraSnapshot: SNAP,
-        netmonStatus: NS, primitives: P, React, renderToString } = mod.exports;
+        netmonStatus: NS, cameraOps: OPS, primitives: P, React,
+        renderToString } = mod.exports;
 
 const CAM = (over) => ({ device_id: 1, name: "chs-cam-1", site: "Central High",
   model: "Bosch FLEXIDOME", recording_state: "up", recording_server: "CHS-BCD-DVR",
@@ -575,6 +577,72 @@ const cases = [
      const text = html.replace(/<!-- -->/g, "");
      if (/>Ack</.test(text)) throw new Error("Ack offered on an already-acked alarm");
      if (!text.includes("Assign")) throw new Error("Assign should still be available");
+   }],
+
+  // ─── S8: the bulk-operations surface ───────────────────────────────────
+  ["GateStrip · every gate closed says so", OPS.GateStrip, {
+    status: { enabled: false, dry_run: true, firmware_update: false,
+              account_configured: false, proving_device_id: 1592 } },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     // Five gates, all shut. A page that rendered them as open would be lying
+     // about the only thing on it that matters.
+     if ((text.match(/gate shut/g) || []).length !== 5) {
+       throw new Error("a closed gate rendered as open");
+     }
+     if (!text.includes("proving camera #1592")) throw new Error("proving camera not named");
+   }],
+
+  ["GateStrip · armed and live", OPS.GateStrip, {
+    status: { enabled: true, dry_run: false, firmware_update: true,
+              account_configured: true, proving_device_id: 0 } },
+   (html) => {
+     if (html.includes("gate shut")) throw new Error("an open gate rendered as closed");
+   }],
+
+  ["BatchItems · the four outcomes read differently", OPS.BatchItems, {
+    items: [
+      { id: 1, name: "alb-cam-44", ip: "10.21.18.44", ring: 0, status: "verified",
+        before_value: "7.83.0027", after_value: "7.93.0024", verified_by: "vendor" },
+      { id: 2, name: "cam-b", ip: "10.1.1.2", ring: 1, status: "indeterminate",
+        before_value: "783", after_value: "793", verified_by: "milestone",
+        message: "reported '793', which cannot prove 7.93.0024" },
+      { id: 3, name: "cam-c", ip: "10.1.1.3", ring: 1, status: "failed",
+        before_value: "7.83.0027", after_value: "7.83.0027", message: "did not reach" },
+      { id: 4, name: "cam-d", ip: "10.1.1.4", ring: 1, status: "skipped",
+        message: "already on 7.93.0024" },
+    ] },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (!text.includes("canary")) throw new Error("ring 0 not labelled as the canary");
+     for (const w of ["verified", "indeterminate", "failed", "skipped"]) {
+       if (!text.includes(w)) throw new Error(`${w} missing`);
+     }
+     // Provenance of the confirmation is on the row: the two are not worth the same.
+     if (!text.includes("vendor") || !text.includes("milestone")) {
+       throw new Error("verified_by not shown");
+     }
+   }],
+
+  ["BatchCard · a dry run says so and offers no abort", OPS.BatchCard, {
+    batch: { id: 7, op: "firmware_update", status: "done", dry_run: 1,
+             firmware_version: "7.93.0024",
+             items: [{ id: 1, name: "alb-cam-44", ip: "10.21.18.44", ring: 0,
+                       status: "would_run", before_value: "7.83.0027" }] } },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (!text.includes("DRY RUN")) throw new Error("a dry run did not say so");
+     if (text.includes("Abort")) throw new Error("abort offered on a finished batch");
+   }],
+
+  ["ImageRow · an image with no platform is flagged", OPS.ImageRow, {
+    image: { id: 1, version: "7.93.0024", platform: null, filename: "b793.fw",
+             size_bytes: 95217328, models: ["FLEXIDOME IP 5000i IR"], sha256: "66989c27" },
+    selected: false, onSelect: () => {} },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (!text.includes("not stated")) throw new Error("a missing platform passed silently");
+     if (!text.includes("91 MiB")) throw new Error("size not human-readable");
    }],
 
   ["EssLiveCard · a healthy stream", NS.EssLiveCard, {

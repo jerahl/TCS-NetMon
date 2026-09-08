@@ -28,9 +28,9 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 from netmon import __version__, db, migrate
 from netmon import settings as settings_engine
 from netmon.api import (
-    actions, alerts, auth_routes, devices, events, health, history as history_api, nac,
-    registry, search, settings, sites, status, summary, surveillance, switches,
-    voip, wireless,
+    actions, alerts, auth_routes, camera_ops, devices, events, health,
+    history as history_api, nac, registry, search, settings, sites, status, summary,
+    surveillance, switches, voip, wireless,
 )
 from netmon.auth.sessions import DbSessionStore, SessionStore
 from netmon.engine.engine import AlertEngine
@@ -305,6 +305,10 @@ def create_app(
     app.include_router(alerts.router)
     app.include_router(settings.router)
     app.include_router(actions.router)
+    # Camera-hardware writes (spec 20 S8 / D11): admin-only, dry-run by default,
+    # and refused outright unless [camera_ops] says otherwise. Registered after
+    # surveillance so its /api/surveillance/* paths sit beside the read ones.
+    app.include_router(camera_ops.router)
 
     # Static React UI (Phase 4), if built. Guarded so the app still boots when
     # the bundle is absent (fresh clone / API-only dev). Build with

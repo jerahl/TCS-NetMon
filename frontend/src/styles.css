@@ -4868,6 +4868,24 @@ kbd.k { font-family: var(--mono); font-size: 10px; background: var(--bg-2); bord
 .state-pill.warn { background: rgba(245,179,0,0.10);  border-color: rgba(245,179,0,0.30);  color: var(--warn); }
 .state-pill.err  { background: rgba(242,95,92,0.12);  border-color: rgba(242,95,92,0.35);  color: var(--err); }
 
+/* ───────── S8: bulk camera operations ───────── */
+
+/* The gates between a click and a camera being flashed, in the order the code
+   checks them. Closed ones are tinted rather than hidden: "why is the button
+   disabled" deserves an answer on the page. */
+.gate-strip { display: flex; flex-wrap: wrap; gap: 8px; }
+.gate {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 10.5px; padding: 3px 9px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--bg-2);
+}
+.gate.shut { border-color: rgba(245,179,0,0.35); background: rgba(245,179,0,0.07); }
+.gate .gl { color: var(--fg-2); font-family: var(--mono); }
+.gate .gv { color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; }
+.link-tbl tr.sel td { background: rgba(52,152,219,0.10); }
+.link-tbl tr.sel td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+.warn-text { color: var(--warn); }
+
 /* ───────── S6: sites / storage / alarm actions ───────── */
 
 /* Configured-capacity cell. The bar compares recorders (or schools) to each

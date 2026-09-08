@@ -3,6 +3,7 @@ import { getJSON, qs } from "../api.js";
 import { Card, Loading, ErrorMsg, Dot, SourceBadge, sevColor, PageHeader } from "../primitives.jsx";
 import { CameraDetailPage } from "./camera_detail.jsx";
 import { CamThumb } from "./camera_snapshot.jsx";
+import { CameraOpsTab } from "./camera_ops.jsx";
 
 // Cameras — the camera fleet as its own page, navigated by Milestone's own
 // group tree (spec 20 S3, owner-directed 2026-09-07).
@@ -166,6 +167,17 @@ export function CamerasPage({ id, query = {} }) {
   const [seeded, setSeeded] = React.useState(false);
   const [status, setStatus] = React.useState(query.status || "");
   const [q, setQ] = React.useState(query.q || "");
+  // Only to decide whether the bulk-operations pane may render at all; the API
+  // enforces the same floor, so this is about not showing an admin surface to
+  // someone who would only be refused.
+  const [role, setRole] = React.useState(null);
+
+  React.useEffect(() => {
+    let live = true;
+    getJSON("/auth/me").then((me) => live && setRole(me?.role || "viewer"))
+      .catch(() => live && setRole("viewer"));
+    return () => { live = false; };
+  }, []);
 
   React.useEffect(() => {
     let live = true;
@@ -221,7 +233,7 @@ export function CamerasPage({ id, query = {} }) {
     <CamerasView groups={groups} cams={cams} activeId={activeId} query={query}
                  collapsed={collapsed} onToggle={toggle} onAllCollapsed={setAllCollapsed}
                  status={status} onStatus={setStatus}
-                 q={q} onQ={setQ} />
+                 q={q} onQ={setQ} role={role} />
   );
 }
 
@@ -229,7 +241,7 @@ export function CamerasPage({ id, query = {} }) {
 // it with fixed data — a component that only renders after a fetch is never
 // exercised at build time, which is how "usedKnown is not defined" shipped.
 export function CamerasView({ groups, cams, activeId, collapsed, onToggle, onAllCollapsed,
-                              status = "", onStatus, q, onQ, query = {} }) {
+                              status = "", onStatus, q, onQ, query = {}, role = null }) {
   const n = (v) => Number(v) || 0;
   const needle = (q || "").trim().toLowerCase();
   const isProblem = (c) => c.source_status === "blind"
@@ -297,6 +309,14 @@ export function CamerasView({ groups, cams, activeId, collapsed, onToggle, onAll
                     onClick={() => onAllCollapsed(allIds, !allCollapsed)}>
               {allCollapsed ? "Expand all" : "Collapse all"}
             </button>
+            {role === "admin" && (
+              <a className="linkish" style={{ marginLeft: 8 }}
+                 href={"#/cameras?tab=ops" + (q ? `&q=${encodeURIComponent(q)}` : "")
+                       + (status ? `&status=${encodeURIComponent(status)}` : "")}
+                 title="bulk firmware operations — admin only, dry-run by default">
+                Bulk ops
+              </a>
+            )}
           </div>
           <div className="host-nav-tools">
             <select className="cfb-select" style={{ width: "100%" }} value={status}
@@ -338,7 +358,15 @@ export function CamerasView({ groups, cams, activeId, collapsed, onToggle, onAll
         </div>
 
         <div className="sw-main">
-          {activeId ? (
+          {query.tab === "ops" && role === "admin" ? (
+            // Bulk operations, admin only (spec 20 S8 / D11). Reached by URL
+            // rather than by a tab strip: this is not somewhere to land while
+            // browsing a wall of stills, and a viewer who types the URL gets
+            // the wall, not a page of buttons the API would refuse anyway.
+            <CameraOpsTab
+              deviceIds={shown.slice(0, 50).map((c) => c.device_id)}
+              deviceNames={Object.fromEntries(shown.map((c) => [c.device_id, c.name]))} />
+          ) : activeId ? (
             <CameraDetailPage id={activeId} embedded query={query} />
           ) : (
             <ThumbnailWall rows={shown} total={cams.length} problems={problems}

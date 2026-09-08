@@ -1058,9 +1058,46 @@ file as bytes and handed the same buffer to every concurrent upload. It now
 verifies the SHA-256 by streaming and returns the *path*, and each upload opens
 its own handle — a gigabyte of resident data per batch bought nothing.
 
-**Outstanding before the first canary:** the admin API and UI (a batch can only
-be created from Python today), and the owner's decision on whether alb-cam-44 —
-a live recording camera at TASPA — is really the one to flash first.
+**8. The admin surface, built 2026-09-08.** `netmon/api/camera_ops.py` (15
+tests) and a Bulk-ops pane on the Cameras page (5 render-check cases).
+
+* `GET /firmware`, `PUT /firmware/{vendor}/{filename}`, `POST /firmware`,
+  `GET|POST /batches`, `GET /batches/{id}`, `POST /batches/{id}/start|abort`,
+  `GET /camera-ops`. **Admin on every one** — D4's actions are operator, and
+  this goes straight to hardware.
+* **Upload is a raw streamed body, not multipart.** Parsing a 988 MiB multipart
+  form needs `python-multipart`, a dependency this project has not taken and did
+  not need: there is one file and its name is already in the path. The body is
+  written to disk in chunks and hashed as it lands.
+* **Placing a file and registering it are two acts.** Placing decides nothing;
+  registering is where the model allow-list and platform are typed, and those
+  are what decide which cameras may ever receive the image.
+* **Arming takes two locks.** A request cannot set `dry_run = false` while
+  config says dry-run, so no single request and no single mistake can put
+  firmware on a camera.
+* `start` runs the guards *before* creating the task — flags, schedule, a
+  missing or altered image — so a caller is told now rather than finding a
+  failed batch later. It returns when the batch is running, not when it
+  finishes: a roll takes minutes per ring and progress lives in the rows.
+* `abort` stops the batch progressing; it deliberately cannot interrupt an
+  upload in flight, because a half-written flash is worse than a finished one.
+
+The UI leads with the **gates** — every condition between a click and a camera
+being flashed, in the order the code checks them, closed ones tinted. "Why is
+the button disabled" deserves an answer on the page. There is no select-all (a
+full roll is many batches by design), no config-change tab (the catalogue is
+deferred, so a button there could only ever be refused), and the pane is reached
+by URL rather than a tab strip — it is not somewhere to land while browsing a
+wall of stills.
+
+**Owner confirmed 2026-09-08:** alb-cam-44 is the proving camera, knowing it is
+a live recording camera at TASPA and that a flash interrupts its recording for
+the reboot.
+
+**Outstanding before the first canary:** arming `[camera_ops]`
+(`enabled = true`, `firmware_update = true`, `dry_run = false`) — which is the
+owner's to type, deliberately, when they are watching. Everything else is built,
+tested, and proven as far as it can be without sending bytes to a camera.
 
 **Fleet shape for the build:** 2,528 of 2,651 cameras are Bosch (2,019
 `Bosch1ch` + 509 `Bosch`) — 95%, confirming Bosch as the pilot vendor; 32 Axis;
