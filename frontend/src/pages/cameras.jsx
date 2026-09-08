@@ -342,7 +342,8 @@ export function CamerasView({ groups, cams, activeId, collapsed, onToggle, onAll
             <CameraDetailPage id={activeId} embedded query={query} />
           ) : (
             <ThumbnailWall rows={shown} total={cams.length} problems={problems}
-                           onProblems={() => onStatus("problems")} />
+                           onProblems={() => onStatus("problems")}
+                           resetKey={`${status}|${q || ""}`} />
           )}
         </div>
       </div>
@@ -352,17 +353,40 @@ export function CamerasView({ groups, cams, activeId, collapsed, onToggle, onAll
 
 
 // ZCD's camera wall, in the pane the detail will occupy once a camera is
-// picked: browse the stills, click through to one. Capped at ZCD's 48 — beyond
-// that it is 48 simultaneous proxied fetches into the camera VLAN, and nobody
-// reads a wall of 2,662 tiles anyway.
-const WALL_CAP = 48;
+// picked: browse the stills, click through to one.
+//
+// 48 tiles per page, which was ZCD's hard cap and is now the page size: it is
+// 48 simultaneous proxied fetches into the camera VLAN, bounded server-side by
+// `[camera_snapshot] max_concurrent`, and it is about as many stills as anyone
+// reads at once. The cap used to be the end of the wall — "first 48 of 1,204,
+// narrow the filter to see others" — which meant the other 1,156 cameras were
+// unreachable from here unless you could name them. Paging keeps the same
+// bounded page and lets you walk the rest (owner-directed 2026-09-08).
+const WALL_PAGE = 48;
 
-export function ThumbnailWall({ rows, total, problems, onProblems }) {
-  const shown = rows.slice(0, WALL_CAP);
+export function ThumbnailWall({ rows, total, problems, onProblems, resetKey = "" }) {
+  const [page, setPage] = React.useState(0);
+
+  // Back to page 1 when the *filter* changes, not when the data refreshes. The
+  // page reloads the fleet every 30s and hands down a fresh array each time; if
+  // that reset the page, a wall left open on page 7 would jump home twice a
+  // minute.
+  React.useEffect(() => { setPage(0); }, [resetKey]);
+
+  const pages = Math.max(1, Math.ceil(rows.length / WALL_PAGE));
+  // Clamped rather than corrected in state: a filter that shrinks the fleet
+  // while page 7 is open must render page 4's last tiles, not an empty grid,
+  // and doing it here keeps the render a pure function of props + page.
+  const current = Math.min(page, pages - 1);
+  const start = current * WALL_PAGE;
+  const shown = rows.slice(start, start + WALL_PAGE);
+  const go = (n) => setPage(Math.max(0, Math.min(pages - 1, n)));
+
   return (
     <Card title="Camera wall" source="milestone"
-          kicker={rows.length > WALL_CAP
-            ? `first ${WALL_CAP} of ${rows.length.toLocaleString()} — narrow the filter to see others`
+          kicker={pages > 1
+            ? `${(start + 1).toLocaleString()}–${(start + shown.length).toLocaleString()}`
+              + ` of ${rows.length.toLocaleString()} · page ${current + 1} of ${pages}`
             : `${rows.length.toLocaleString()} camera(s)`}
           tight>
       {rows.length === 0 ? (
@@ -380,10 +404,36 @@ export function ThumbnailWall({ rows, total, problems, onProblems }) {
           <div className="cam-grid">
             {shown.map((c) => <CamThumb key={c.device_id} cam={c} />)}
           </div>
+          {pages > 1 && (
+            <nav className="cam-wall-pager" aria-label="Camera wall pages">
+              <button type="button" className="btn sm" disabled={current === 0}
+                      onClick={() => go(current - 1)}
+                      title="previous 48 cameras">‹ Prev</button>
+              <span className="cwp-at" aria-live="polite">
+                Page {current + 1} of {pages}
+                <span className="dim">
+                  {" · "}{(start + 1).toLocaleString()}–{(start + shown.length).toLocaleString()}
+                  {" of "}{rows.length.toLocaleString()}
+                </span>
+              </span>
+              <button type="button" className="btn sm" disabled={current >= pages - 1}
+                      onClick={() => go(current + 1)}
+                      title="next 48 cameras">Next ›</button>
+              {pages > 2 && (
+                <span className="cwp-jump">
+                  <button type="button" className="linkish" disabled={current === 0}
+                          onClick={() => go(0)}>first</button>
+                  <button type="button" className="linkish" disabled={current >= pages - 1}
+                          onClick={() => go(pages - 1)}>last</button>
+                </span>
+              )}
+            </nav>
+          )}
           <div className="msg" style={{ fontSize: 11, padding: "10px 14px 0" }}>
             Stills are fetched through NetMon so the camera login never reaches
             the browser. A tile that cannot show one says why rather than going
             blank — pick a camera for its full detail.
+            {pages > 1 && " Each page fetches its own 48 stills when you open it."}
           </div>
         </React.Fragment>
       )}

@@ -4583,6 +4583,23 @@ table.grid.kv td:first-child { color: var(--muted); width: 160px; }
 @keyframes blink { 50% { opacity: 0.3; } }
 .cam-tile .stamp { position: absolute; bottom: 8px; right: 8px; font-size: 9px; color: rgba(255,255,255,0.85); }
 
+/* Camera wall pager (48 tiles a page). Sits between the grid and the
+   explanatory footer, on its own hairline so it reads as a control strip
+   rather than as part of the last tile row. */
+.cam-wall-pager {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px 0;
+  border-top: 1px solid var(--line);
+  margin-top: 10px;
+}
+.cam-wall-pager .cwp-at {
+  font-size: 11px; color: var(--fg-2); font-family: var(--mono);
+}
+.cam-wall-pager .cwp-jump { margin-left: auto; display: flex; gap: 10px; }
+.cam-wall-pager .btn:disabled,
+.cam-wall-pager .linkish:disabled { opacity: 0.45; cursor: default; }
+.cam-wall-pager .linkish:disabled:hover { text-decoration: none; }
+
 /* Bird-eye dot for camera shape */
 .cam-tile.ptz .frame::before {
   content: ""; position: absolute; left: 50%; top: 50%;

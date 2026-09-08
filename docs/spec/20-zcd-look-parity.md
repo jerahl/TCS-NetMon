@@ -364,6 +364,23 @@ for where you are rather than needing a mode switch. Capped at ZCD's 48 with the
 cap stated, because beyond that it is 48 simultaneous proxied fetches into the
 camera VLAN and nobody reads 2,662 tiles.
 
+**Paged, not truncated (added 2026-09-08, owner-directed).** 48 stays the page
+size — it is the proxy's concurrency bound, not a cosmetic limit — but it is no
+longer the end of the wall. "First 48 of 1,204, narrow the filter to see
+others" meant the other 1,156 cameras were unreachable from this pane unless
+you could already name one, which is the opposite of what a wall is for.
+Prev/Next plus first/last (shown only past two pages), the range and page
+position in both the card kicker and the pager strip, and Prev/Next present but
+disabled at the ends rather than vanishing.
+
+Two details that are the whole reason it is not three lines: the page resets on
+a **filter** change and not on a data refresh (the fleet reloads every 30s and
+hands down a fresh array; resetting on that would send a wall left open on page
+7 home twice a minute), and the page index is **clamped at render** rather than
+corrected in state, so a filter that shrinks the fleet while page 7 is open
+shows the new last page instead of an empty grid. Each page fetches its own 48
+stills on open, which the footer says.
+
 ### S4 — camera snapshot proxy (D7) — **built 2026-09-07, default-off**
 
 Everything except the credential, which is the owner's to provision. The code

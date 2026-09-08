@@ -233,13 +233,50 @@ const cases = [
      if (!html.includes("NO SIGNAL")) throw new Error("tile did not say why it is blank");
      if (!html.includes("cam-tile err")) throw new Error("down tile not tinted");
    }],
-  ["ThumbnailWall · capped and says so", C.ThumbnailWall, {
+  ["ThumbnailWall · pages beyond the first 48", C.ThumbnailWall, {
     rows: Array.from({ length: 60 }, (_, i) => ({
       device_id: i + 1, name: `cam-${i}`, reachability: "up" })),
     total: 2662, problems: 0, onProblems: () => {} },
    (html) => {
      const text = html.replace(/<!-- -->/g, "");
-     if (!text.includes("first 48 of 60")) throw new Error("cap not disclosed");
+     if (!text.includes("page 1 of 2")) throw new Error("page position not disclosed");
+     if (!text.includes("1–48 of 60")) throw new Error("the range on show is not stated");
+     // 48 tiles, not 60 and not all of them: the page size is the proxy's
+     // concurrency bound, not a cosmetic choice. Counted on the tile's note
+     // element, which appears exactly once per tile — "cam-tile" itself also
+     // matches "cam-tile-note" and doubles the count.
+     const tiles = text.split("cam-tile-note").length - 1;
+     if (tiles !== 48) throw new Error(`page rendered ${tiles} tiles, expected 48`);
+     if (!text.includes("Next")) throw new Error("no way forward from page 1");
+     // Prev must be dead on the first page rather than absent.
+     if (!/‹ Prev<\/button>/.test(text) || !text.includes("disabled")) {
+       throw new Error("Prev not present-and-disabled on the first page");
+     }
+     // Two pages only — the first/last shortcuts would just repeat Prev/Next.
+     if (text.includes(">first<")) throw new Error("jump links shown for a 2-page wall");
+   }],
+
+  ["ThumbnailWall · a single page keeps its plain kicker", C.ThumbnailWall, {
+    rows: Array.from({ length: 12 }, (_, i) => ({
+      device_id: i + 1, name: `cam-${i}`, reachability: "up" })),
+    total: 12, problems: 0, onProblems: () => {} },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (!text.includes("12 camera(s)")) throw new Error("count not shown");
+     if (text.includes("cam-wall-pager")) throw new Error("pager rendered for one page");
+   }],
+
+  ["ThumbnailWall · a long fleet offers the jump links", C.ThumbnailWall, {
+    rows: Array.from({ length: 1204 }, (_, i) => ({
+      device_id: i + 1, name: `cam-${i}`, reachability: "up" })),
+    total: 2662, problems: 0, onProblems: () => {} },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (!text.includes("page 1 of 26")) throw new Error("page count wrong for 1,204 rows");
+     if (!text.includes(">first<") || !text.includes(">last<")) {
+       throw new Error("no shortcut to the ends of a 26-page wall");
+     }
+     if (!text.includes("1,204")) throw new Error("total not thousands-separated");
    }],
   ["ThumbnailWall · empty with a way out", C.ThumbnailWall, {
     rows: [], total: 2662, problems: 229, onProblems: () => {} },
