@@ -1,4 +1,6 @@
 import asyncio
+
+import pytest
 from datetime import datetime, timezone
 
 from sqlalchemy import text
@@ -1125,3 +1127,69 @@ def test_relation_id_checks_the_type(tmp_path):
     assert _relation_id(hw, "hardware") == ""          # self is not parent
     assert _relation_id({}, "recordingServers") == ""
     assert _relation_id({"relations": None}, "recordingServers") == ""
+
+
+def test_a_slow_bulk_endpoint_does_not_blind_the_estate(tmp_path):
+    """Blinding needs evidence that the *source* is gone, not that one endpoint
+    was slow.
+
+    /cameras is 2.9 MB and its latency swings from 5s to 19s, so three timeouts
+    in a row says little about the VMS. Blinding on it manufactured an
+    estate-wide outage about eleven times a day — 940 cameras at a time, ~19,000
+    state events daily — and each episode is the storm spec 19 §12 fixed once
+    already. If the cheap /sites call answers, the source is reachable and the
+    honest state is the previous one, left visibly stale.
+    """
+    e = _engine(tmp_path)
+    fake = FakeMs()
+    fake.servers = [{"id": "RS1", "running": True}]
+    fake.cameras_data = [{"id": "CAM1", "recordingEnabled": True}]
+    col = MilestoneCollector(e, fake, blind_after_failures=2)
+    asyncio.run(col.run_once())
+    assert _state(e, "source_status")           # a real verdict exists
+
+    # The bulk endpoint starts failing, but the gateway still answers /sites.
+    fake.fail = MilestoneError("Milestone ReadTimeout on /api/rest/v1/cameras")
+    fake.site_data = {"displayName": "CO-MILESTONE", "version": "25.2.0.1"}
+    for _ in range(4):
+        with pytest.raises(MilestoneError):
+            asyncio.run(col.run_once())
+    blind = db.fetch_one(e, "SELECT COUNT(*) n FROM device_state "
+                            "WHERE dimension='source_status' AND value='blind'")["n"]
+    assert blind == 0, "a slow endpoint blinded the estate"
+
+
+def test_a_genuinely_unreachable_gateway_still_blinds(tmp_path):
+    """The protection that must survive: when nothing answers, stale rows would
+    read as healthy, so blind is the truth (§4.5)."""
+    e = _engine(tmp_path)
+    fake = FakeMs()
+    fake.servers = [{"id": "RS1", "running": True}]
+    fake.cameras_data = [{"id": "CAM1", "recordingEnabled": True}]
+    col = MilestoneCollector(e, fake, blind_after_failures=2)
+    asyncio.run(col.run_once())
+
+    fake.fail = MilestoneError("Milestone ConnectError on /api/rest/v1/cameras")
+    fake.site_fail = MilestoneError("Milestone ConnectError on /api/rest/v1/sites")
+    for _ in range(2):
+        with pytest.raises(MilestoneError):
+            asyncio.run(col.run_once())
+    blind = db.fetch_one(e, "SELECT COUNT(*) n FROM device_state "
+                            "WHERE dimension='source_status' AND value='blind'")["n"]
+    assert blind > 0, "an unreachable gateway must still blind — stale must not read healthy"
+
+
+def test_supervisor_timeout_has_headroom_over_the_interval():
+    """A healthy cycle must not be killed by contention.
+
+    The cycle's own work is ~20s, but this collector shares a host with the
+    SNMP inventory sweep (156s), so an overlapping-but-healthy Milestone cycle
+    measures ~110s. With the boundary tied to the 120s interval those cycles
+    were cancelled, and three cancellations in a row blinded 940 cameras.
+    """
+    e = None
+    col = MilestoneCollector(e, FakeMs(), interval_s=120.0)
+    assert col.timeout_s >= 300.0
+    assert col.timeout_s > col.interval_s * 2, "no headroom over the interval"
+    # A long interval still scales rather than being capped at the floor.
+    assert MilestoneCollector(e, FakeMs(), interval_s=600.0).timeout_s == 1500.0

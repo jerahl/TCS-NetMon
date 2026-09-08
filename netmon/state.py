@@ -18,6 +18,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from netmon import db
@@ -96,6 +97,81 @@ def device_down(d: dict[str, Any]) -> bool:
         return bool(d.get("source_down"))
     native_up = d.get("ping_up") or d.get("snmp_up")
     return bool(d.get("ping_down") or (d.get("source_down") and not native_up))
+
+
+def write_states(
+    engine: Engine,
+    rows: list[tuple[int, str, str, str, str]],
+) -> int:
+    """Batched :func:`write_state` — same semantics, three statements.
+
+    ``rows`` is ``(device_id, dimension, value, severity, source)``.
+    Returns how many values actually changed.
+
+    Why this exists: ``write_state`` does a SELECT plus an upsert, each in its
+    own transaction, which is fine for a switch sweep and ruinous for a camera
+    fleet. The Milestone cycle writes `recording` for 2,662 cameras plus
+    `source_status` for as many again and 22 recorders — over 5,000 calls, so
+    more than 10,000 round trips, which measured **68 seconds** of a 120-second
+    supervisor boundary and timed out 61 of 517 cycles. The HTTP it was blamed
+    on totals 21 s.
+
+    The semantics are deliberately identical, including the parts that are easy
+    to lose in a batch: a previously-absent state still counts as coming from
+    ``unknown`` so a first observation is a recorded transition, and
+    ``updated_at`` is refreshed for every row whether or not the value moved,
+    because liveness is what the staleness badges read.
+    """
+    if not rows:
+        return 0
+    now = datetime.now(timezone.utc)
+    # Deduplicate on (device_id, dimension), last write winning, so a caller
+    # that writes the same pair twice in one pass cannot produce two conflicting
+    # UPDATEs in one executemany.
+    latest: dict[tuple[int, str], tuple[int, str, str, str, str]] = {}
+    for r in rows:
+        latest[(int(r[0]), r[1])] = r
+
+    with engine.begin() as conn:
+        keys = list(latest)
+        current: dict[tuple[int, str], str] = {}
+        # Chunked so the IN-list cannot outgrow the placeholder limit on a
+        # fleet-sized write.
+        ids = sorted({k[0] for k in keys})
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            ph = ", ".join(f":d{j}" for j in range(len(chunk)))
+            for row in conn.execute(
+                    text(f"SELECT device_id, dimension, value FROM device_state "
+                         f"WHERE device_id IN ({ph})"),
+                    {f"d{j}": v for j, v in enumerate(chunk)}):
+                current[(int(row[0]), row[1])] = row[2]
+
+        updates, inserts, events = [], [], []
+        for key, (dev, dim, value, severity, source) in latest.items():
+            payload = {"d": dev, "dim": dim, "value": value,
+                       "severity": severity, "source": source, "at": now}
+            (updates if key in current else inserts).append(payload)
+            old = current.get(key, "unknown")
+            if old != value:
+                events.append({**payload, "old": old})
+
+        if updates:
+            conn.execute(text(
+                "UPDATE device_state SET value = :value, severity = :severity, "
+                "source = :source, updated_at = :at "
+                "WHERE device_id = :d AND dimension = :dim"), updates)
+        if inserts:
+            conn.execute(text(
+                "INSERT INTO device_state (device_id, dimension, value, severity, "
+                "source, updated_at) VALUES (:d, :dim, :value, :severity, :source, :at)"),
+                inserts)
+        if events:
+            conn.execute(text(
+                "INSERT INTO state_events (device_id, dimension, old_value, new_value, "
+                "severity, source, occurred_at) "
+                "VALUES (:d, :dim, :old, :value, :severity, :source, :at)"), events)
+    return len(events)
 
 
 def write_state(

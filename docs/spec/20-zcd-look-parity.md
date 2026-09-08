@@ -721,6 +721,51 @@ S1–S6 have been on the glass for a while — the 120 s cadence has been adequa
 
 ---
 
+### S2 follow-up — the Milestone cycle was timing out (2026-09-08)
+
+Reported from the glass: the degraded banner said "groups could not be read"
+and NetMon Status showed `milestone` with **61 failures in 517 runs** and
+"timed out after 120s". Three separate causes, only one of them mine.
+
+**1. `write_state` per device, 10,000 round trips.** The cycle writes
+`recording` for 2,662 cameras plus `source_status` for as many again — over
+5,000 calls, each a SELECT plus an upsert in its own transaction. Measured **68s
+of a 120s boundary**, while the HTTP it was blamed on totals **21s**. Added
+`state.write_states()`: one chunked read-back, one executemany UPDATE, one
+INSERT, one event INSERT. Same semantics, including the two that are easy to
+lose in a batch — a first observation still counts as a transition from
+`unknown`, and `updated_at` is refreshed whether or not the value moved.
+**Cycle 68s → 20.5s** for identical output.
+
+**2. A slow endpoint blinded the whole estate.** Three consecutive `/cameras`
+failures wrote `source_status = blind` for every registered device. `/cameras`
+is 2.9 MB with latency swinging 5–19s, so this fired **about eleven times a day,
+940 cameras at a time — roughly 19,000 state events daily**, each episode a
+miniature of the storm spec 19 §12 spent a day undoing. Blinding now asks one
+cheap question first: `/sites` is a single small record answering in
+milliseconds, and if it answers the source is *not* blind — the honest state is
+the previous one, left visibly stale. A genuinely unreachable gateway still
+blinds, because then stale rows would read as healthy; both halves are pinned by
+tests.
+
+**3. The supervisor boundary was tied to the interval.** `timeout_s = max(60,
+interval)` = 120s. But this collector shares a host with the SNMP inventory
+sweep, which runs **156s**, so a perfectly healthy Milestone cycle measures
+~110s when the two overlap — and the boundary killed it, which fed cause 2. Now
+`max(300, interval × 2.5)`: long enough that contention alone cannot trip it,
+short enough that a genuinely hung cycle is still cancelled. The supervisor
+reschedules after completion rather than firing concurrently, so a longer
+boundary cannot stack runs.
+
+Verified after: cycle 94s under live contention, 0 failures, no degradation,
+blind steady at 139 real cameras rather than 940 fabricated ones.
+
+**Left for the owner, not fixed here:** `snmp_inventory` runs **156s** and is
+the box's largest consumer by a wide margin. Nothing is failing because of it
+now, but it is what makes every other collector's cycle slow, and it deserves
+its own look — the switch sweep is the obvious candidate for the same batching
+treatment `write_states` just applied here.
+
 ## 4. Rules that hold throughout
 
 - **Copy the layout, not the promise.** Every slot ZCD fills with a zero or a

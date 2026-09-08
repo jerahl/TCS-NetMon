@@ -34,7 +34,7 @@ from netmon.collectors.milestone_client import MilestoneClient, MilestoneError
 from netmon.config import Config
 from netmon.seed import canon_mac
 from netmon.snapshots import write_snapshot
-from netmon.state import write_state
+from netmon.state import write_state, write_states
 from netmon.collectors.ws_milestone import MilestoneEss
 
 # ESS event-type names → camera source_status. Resolved authoritatively from
@@ -462,7 +462,18 @@ class MilestoneCollector(Collector):
         self.identity_batch = identity_batch
         self.identity_concurrency = max(1, identity_concurrency)
         self.interval_s = interval_s
-        self.timeout_s = max(60.0, interval_s)
+        # Headroom over the interval, not equal to it. The cycle's own work is
+        # ~20s (measured: 21s of HTTP, three batched statements of DB), but this
+        # collector shares a box with the SNMP inventory sweep, which runs 156s
+        # — so a perfectly healthy Milestone cycle measures 110s when the two
+        # overlap. Tying the boundary to the interval killed those cycles, and
+        # three killed cycles in a row used to blind 940 cameras.
+        #
+        # 2.5× the interval: long enough that contention alone cannot trip it,
+        # short enough that a genuinely hung cycle is still cancelled rather
+        # than waited out forever. Overlapping runs are not a risk — the
+        # supervisor reschedules after completion, it does not fire concurrently.
+        self.timeout_s = max(300.0, interval_s * 2.5)
 
     @classmethod
     def from_config(cls, engine: Engine, cfg: Config) -> "MilestoneCollector":
@@ -710,9 +721,31 @@ class MilestoneCollector(Collector):
             # outage; collector_health records the failure either way.
             self._consecutive_failures += 1
             if self._consecutive_failures >= self.blind_after_failures:
-                for r in registry.values():
-                    write_state(self.engine, int(r["id"]), "source_status",
-                                "blind", "warn", "milestone")
+                # One more question before declaring the estate blind: is the
+                # gateway actually unreachable, or was a bulk endpoint merely
+                # slow? `/cameras` is 2.9 MB and its latency swings from 5s to
+                # 19s, so three timeouts in a row is weak evidence that the VMS
+                # is gone — and blinding on it manufactured an estate-wide
+                # outage roughly eleven times a day, 940 cameras at a time,
+                # about 19,000 state events daily. `/sites` is one small record
+                # and answers in milliseconds; if it answers, the source is not
+                # blind and the honest state is the previous one, left visibly
+                # stale (§4.5).
+                alive = False
+                try:
+                    alive = bool(await self.client.site_info())
+                except MilestoneError:
+                    alive = False
+                if alive:
+                    log.warning(
+                        "milestone bulk endpoint failed %d cycle(s) in a row but the "
+                        "gateway answers /sites — leaving prior state stale rather "
+                        "than blinding %d device(s); the slow endpoint is the fault",
+                        self._consecutive_failures, len(registry))
+                    raise
+                blind_rows = [(int(r["id"]), "source_status", "blind", "warn", "milestone")
+                              for r in registry.values()]
+                write_states(self.engine, blind_rows)
                 log.warning("milestone unreachable for %d consecutive cycle(s) — "
                             "marking %d device(s) blind",
                             self._consecutive_failures, len(registry))
@@ -774,23 +807,31 @@ class MilestoneCollector(Collector):
                             "up" if running else "down",
                             "ok" if running else "crit", "milestone")
             written += 1
+        # Batched rather than one call per camera per dimension. Per-call, this
+        # loop was over 5,000 write_state invocations — each a SELECT plus an
+        # upsert in its own transaction, so more than 10,000 round trips — which
+        # measured 68s of the collector's 120s supervisor boundary and timed out
+        # 61 of 517 cycles. The HTTP it looked like a network problem for
+        # totals 21s.
+        cam_states: list[tuple[int, str, str, str, str]] = []
         for cam in cameras:
             r = registry.get(str(cam.get("id")))
             if r is None:
                 continue
             linked_cameras += 1
             recording = _truthy(cam.get("recordingEnabled"), cam.get("recording"), cam.get("enabled"))
-            write_state(self.engine, int(r["id"]), "recording",
-                        "up" if recording else "down", "ok" if recording else "crit", "milestone")
-            written += 1
+            cam_states.append((int(r["id"]), "recording",
+                               "up" if recording else "down",
+                               "ok" if recording else "crit", "milestone"))
             if ess_status is not None:
                 # A camera absent from the snapshot has no Communication state
                 # published, which is not the same as being down.
                 verdict = ess_status.get(str(cam.get("id")))
                 if verdict:
-                    write_state(self.engine, int(r["id"]), "source_status",
-                                verdict[0], verdict[1], "milestone-ess")
-                    written += 1
+                    cam_states.append((int(r["id"]), "source_status",
+                                       verdict[0], verdict[1], "milestone-ess"))
+        write_states(self.engine, cam_states)
+        written += len(cam_states)
 
         # Fail loud on the silent-empty trap: Milestone answered, but none of its
         # entities are linked to a registry device (nothing seeded
