@@ -18,10 +18,15 @@ from netmon.api import surveillance
 from netmon.app import create_app
 from netmon.config import load_config
 from netmon.snapshot import (
-    SnapshotUnavailable, build_url, normalise_size, vendor_profile,
+    SnapshotUnavailable, build_candidates, normalise_size, vendor_profile,
 )
 from netmon.supervisor import Supervisor
 from tests.conftest import create_core_tables, write_config
+
+
+def _first(cam, **kw):
+    """The candidate that gets tried first — https, always."""
+    return build_candidates(cam, **kw)[0]
 
 
 def _cam(**over):
@@ -33,34 +38,42 @@ def _cam(**over):
 
 # ───────────────────────────── the URL builder ─────────────────────────────
 
-def test_scheme_comes_from_httpsenabled_not_from_the_address():
-    """The single most consequential field.
+def test_both_schemes_are_offered_https_first():
+    """The stored scheme is not the answer, so it is not the only attempt.
 
     Milestone stores every hardware address as `http://<ip>/` — 100% of 2,489
-    records — while hardwareDriverSettings says whether the camera actually
-    speaks TLS. 1,695 of 2,651 cameras here do and 956 do not, so assuming
-    either scheme fails on hundreds.
+    records — while hardwareDriverSettings claims whether the camera speaks TLS:
+    1,695 of 2,651 say yes, 956 say no, and the claim was wrong in the field
+    (owner, 2026-09-08). So both are built, https first, whatever the field
+    says — including when it was never collected.
     """
-    assert build_url(_cam(https_enabled=0)).url.startswith("http://10.32.18.4/snap.jpg")
-    assert build_url(_cam(https_enabled=1)).url.startswith("https://10.32.18.4/snap.jpg")
-    # Not yet collected → treated as plain http rather than guessed as TLS.
-    assert build_url(_cam(https_enabled=None)).url.startswith("http://")
+    for https_enabled in (0, 1, None):
+        got = [t.scheme for t in build_candidates(_cam(https_enabled=https_enabled))]
+        assert got == ["https", "http"], https_enabled
+    urls = [t.url for t in build_candidates(_cam(https_enabled=0))]
+    assert urls == ["https://10.32.18.4/snap.jpg?JpegSize=M",
+                    "http://10.32.18.4/snap.jpg?JpegSize=M"]
 
 
-def test_default_ports_are_omitted_and_explicit_ones_kept():
+def test_each_scheme_carries_the_port_that_belongs_to_it():
     """Six cameras carry an explicit port, five of them `:443` on an http
-    scheme. Dropping it sends the request to the wrong socket; inferring the
-    scheme from it would contradict what the field says."""
-    # 443 with TLS on is the default — no need to spell it out.
-    assert build_url(_cam(https_enabled=1, https_port=443)).url == \
+    scheme. Dropping it sends the request to the wrong socket, and carrying it
+    onto the other scheme invents a socket that is not there."""
+    # 443 under https and 80 under http are defaults — not spelled out.
+    assert build_candidates(_cam(https_enabled=1, https_port=443))[0].url == \
         "https://10.32.18.4/snap.jpg?JpegSize=M"
-    # A non-default TLS port must survive.
-    assert "10.32.18.4:8443" in build_url(_cam(https_enabled=1, https_port=8443)).url
-    # The live oddity: http scheme, port 443.
-    u = build_url(_cam(https_enabled=0, http_port=443)).url
-    assert u.startswith("http://10.32.18.4:443/"), u
-    # Port 80 on http is the default and is dropped.
-    assert build_url(_cam(https_enabled=0, http_port=80)).url.startswith("http://10.32.18.4/")
+    assert build_candidates(_cam(http_port=80))[1].url.startswith("http://10.32.18.4/")
+    # A non-default TLS port must survive — and must not leak into the http
+    # candidate, where 8443 means nothing.
+    tls, plain = build_candidates(_cam(https_enabled=1, https_port=8443))
+    assert "10.32.18.4:8443" in tls.url
+    assert plain.url.startswith("http://10.32.18.4/")
+    # The live oddity — http scheme, port 443 — is the one case where the port
+    # does carry over, because there it is the other scheme's own default: the
+    # camera answers on 443 either way, so both candidates point at it.
+    tls, plain = build_candidates(_cam(http_port=443))
+    assert tls.url.startswith("https://10.32.18.4/"), tls.url
+    assert plain.url.startswith("http://10.32.18.4:443/"), plain.url
 
 
 def test_vendor_profile_matches_the_driver_name_by_prefix():
@@ -75,8 +88,8 @@ def test_vendor_profile_matches_the_driver_name_by_prefix():
 
 
 def test_bosch_and_axis_paths():
-    assert build_url(_cam(vendor="Bosch1ch"), size="XL").url.endswith("/snap.jpg?JpegSize=XL")
-    axis = build_url(_cam(vendor="Axis1ChDevice"), size="L").url
+    assert _first(_cam(vendor="Bosch1ch"), size="XL").url.endswith("/snap.jpg?JpegSize=XL")
+    axis = _first(_cam(vendor="Axis1ChDevice"), size="L").url
     assert "/axis-cgi/jpg/image.cgi?resolution=640x480" in axis
 
 
@@ -84,17 +97,17 @@ def test_onvif_is_refused_with_a_reason_rather_than_a_guessed_path():
     """ONVIF publishes its snapshot URI through the Media service over SOAP.
     A guessed path would 404 on all 91 cameras reporting this driver."""
     with pytest.raises(SnapshotUnavailable) as err:
-        build_url(_cam(vendor="ONVIF"))
+        build_candidates(_cam(vendor="ONVIF"))
     assert err.value.status == 501
     assert "Media service" in err.value.reason
 
 
 def test_unknown_driver_and_missing_address():
     with pytest.raises(SnapshotUnavailable) as err:
-        build_url(_cam(vendor="Hanwha"))
+        build_candidates(_cam(vendor="Hanwha"))
     assert err.value.status == 501
     with pytest.raises(SnapshotUnavailable) as err:
-        build_url(_cam(ip=None))
+        build_candidates(_cam(ip=None))
     assert err.value.status == 404          # cannot be addressed at all
 
 
@@ -106,25 +119,25 @@ def test_multi_imager_is_refused_until_the_parameter_is_confirmed():
     is worse than an error, so it is refused until the parameter is configured.
     """
     with pytest.raises(SnapshotUnavailable) as err:
-        build_url(_cam(channel=2))
+        build_candidates(_cam(channel=2))
     assert err.value.status == 501
     assert "different imager" in err.value.reason
 
     # Configured → used, with the off-by-one both vendors' CGIs need (Milestone
     # counts imagers from 0, the cameras from 1).
-    u = build_url(_cam(channel=2), channel_param="channel").url
+    u = _first(_cam(channel=2), channel_param="channel").url
     assert u.endswith("&channel=3"), u
     # Channel 0 needs no selector at all — 2,473 of 2,651 cameras.
-    assert "&channel" not in build_url(_cam(channel=0), channel_param="channel").url
+    assert "&channel" not in _first(_cam(channel=0), channel_param="channel").url
 
 
 def test_channel_param_is_validated_not_interpolated_blindly():
     """It comes from config, but config is not a licence to build a query
     string out of arbitrary text."""
     with pytest.raises(SnapshotUnavailable):
-        build_url(_cam(channel=1), channel_param="chan&JpegSize=XL&x")
+        build_candidates(_cam(channel=1), channel_param="chan&JpegSize=XL&x")
     with pytest.raises(SnapshotUnavailable):
-        build_url(_cam(channel=1), channel_param="../../etc")
+        build_candidates(_cam(channel=1), channel_param="../../etc")
 
 
 def test_size_is_whitelisted():
@@ -139,7 +152,7 @@ def test_size_is_whitelisted():
 def test_tls_verification_is_off_and_says_so():
     """Cameras on the VMS network carry self-signed certificates. Returned
     rather than assumed, so the caller cannot forget it is a choice."""
-    assert build_url(_cam(https_enabled=1)).verify is False
+    assert all(t.verify is False for t in build_candidates(_cam(https_enabled=1)))
 
 
 # ───────────────────────────── the endpoint ─────────────────────────────
@@ -214,19 +227,23 @@ def test_snapshot_enabled_without_an_account_is_refused_at_load(tmp_path):
     assert "camera_snapshot" in str(err.value)
 
 
-# ──────────────────────── the backup camera password ────────────────────────
+# ─────────────── what the proxy tries: schemes and passwords ───────────────
 
-class _FakeClient:
-    """Stands in for httpx.AsyncClient, recording the password each GET used.
+class _FakeCamera:
+    """Stands in for httpx.AsyncClient: one camera, on one scheme, with one
+    password.
 
-    ``answers`` maps a password to the status the fake camera replies with, so
-    a test can say "this camera is still on the old password" without a camera.
+    The two things being tested are what the proxy *tries* and in what order,
+    so the fake records every attempt as `(scheme, password)` and refuses the
+    wrong scheme the way a closed port does — with a transport error, not a
+    status code. That distinction is the whole mechanism: a transport failure
+    means try the other scheme, a 401 means try the other password.
     """
 
-    calls: list[str] = []
+    calls: list[tuple[str, str]] = []
 
-    def __init__(self, answers, **_kw):
-        self._answers = answers
+    def __init__(self, camera, **_kw):
+        self._camera = camera
 
     async def __aenter__(self):
         return self
@@ -235,28 +252,55 @@ class _FakeClient:
         return False
 
     async def get(self, url, *, auth=None, headers=None):
-        password = getattr(auth, "_password", None) or auth._password  # httpx DigestAuth
+        scheme = url.split("://", 1)[0]
+        password = auth._password
         if isinstance(password, bytes):
             password = password.decode()
-        type(self).calls.append(password)
-        status = self._answers.get(password, 401)
-        return httpx.Response(status, content=b"\xff\xd8jpeg",
+        type(self).calls.append((scheme, password))
+        request = httpx.Request("GET", url)
+        if scheme != self._camera.get("scheme"):
+            raise httpx.ConnectError("connection refused", request=request)
+        if password != self._camera.get("password"):
+            return httpx.Response(401, request=request)
+        return httpx.Response(200, content=b"\xff\xd8jpeg",
                               headers={"content-type": "image/jpeg"},
-                              request=httpx.Request("GET", url))
+                              request=request)
 
 
 @pytest.fixture
 def fake_camera(monkeypatch):
-    """Patch the endpoint's HTTP client. Returns a setter for the answers."""
-    state: dict = {"answers": {}}
-
-    def factory(**kw):
-        return _FakeClient(state["answers"], **kw)
-
-    monkeypatch.setattr(surveillance.httpx, "AsyncClient", factory)
-    _FakeClient.calls = []
+    """Patch the endpoint's HTTP client. Mutate the returned dict to say which
+    scheme and password the camera on the other end actually answers to."""
+    camera: dict = {"scheme": "https", "password": "new-pw"}
+    monkeypatch.setattr(surveillance.httpx, "AsyncClient",
+                        lambda **kw: _FakeCamera(camera, **kw))
+    _FakeCamera.calls = []
+    surveillance._snap_scheme.clear()
     surveillance._snap_cred.clear()
-    return state
+    return camera
+
+
+def test_https_is_tried_first(tmp_path, fake_camera):
+    url = f"sqlite:///{tmp_path / 'sn5.db'}"
+    _seed(url)
+    with _client(tmp_path, url, enabled="true", user="ro",
+                 **{"pass": "new-pw"}) as client:
+        r = client.get("/api/surveillance/cameras/1/snapshot")
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "image/jpeg"
+    assert _FakeCamera.calls == [("https", "new-pw")]
+
+
+def test_http_is_tried_when_https_will_not_connect(tmp_path, fake_camera):
+    """956 of 2,651 cameras do not speak TLS, and the stored flag saying which
+    is which was wrong in the field — so a refused https is not the answer."""
+    url = f"sqlite:///{tmp_path / 'sn6.db'}"
+    _seed(url)
+    fake_camera["scheme"] = "http"
+    with _client(tmp_path, url, enabled="true", user="ro",
+                 **{"pass": "new-pw"}) as client:
+        assert client.get("/api/surveillance/cameras/1/snapshot").status_code == 200
+    assert _FakeCamera.calls == [("https", "new-pw"), ("http", "new-pw")]
 
 
 def test_backup_password_is_tried_after_a_401(tmp_path, fake_camera):
@@ -265,54 +309,71 @@ def test_backup_password_is_tried_after_a_401(tmp_path, fake_camera):
     Without this the tile reads "camera rejected the configured account" and
     someone has to work out, per camera, which password it is on.
     """
-    url = f"sqlite:///{tmp_path / 'sn5.db'}"
-    _seed(url)
-    fake_camera["answers"] = {"old-pw": 200}
-    with _client(tmp_path, url, enabled="true", user="ro",
-                 **{"pass": "new-pw", "pass_backup": "old-pw"}) as client:
-        r = client.get("/api/surveillance/cameras/1/snapshot")
-        assert r.status_code == 200
-        assert r.headers["content-type"] == "image/jpeg"
-    assert _FakeClient.calls == ["new-pw", "old-pw"]
-
-
-def test_the_working_password_is_remembered_per_camera(tmp_path, fake_camera):
-    """The fallback must not double the request count.
-
-    A camera wall asks for up to 48 stills at once and refreshes; rediscovering
-    the same 401 on every fetch would mean two connections per tile forever.
-    """
-    url = f"sqlite:///{tmp_path / 'sn6.db'}"
-    _seed(url)
-    fake_camera["answers"] = {"old-pw": 200}
-    with _client(tmp_path, url, enabled="true", user="ro",
-                 **{"pass": "new-pw", "pass_backup": "old-pw"}) as client:
-        assert client.get("/api/surveillance/cameras/1/snapshot").status_code == 200
-        _FakeClient.calls = []
-        assert client.get("/api/surveillance/cameras/1/snapshot").status_code == 200
-    assert _FakeClient.calls == ["old-pw"]
-
-
-def test_both_passwords_rejected_says_so(tmp_path, fake_camera):
     url = f"sqlite:///{tmp_path / 'sn7.db'}"
     _seed(url)
-    fake_camera["answers"] = {}
+    fake_camera["password"] = "old-pw"
+    with _client(tmp_path, url, enabled="true", user="ro",
+                 **{"pass": "new-pw", "pass_backup": "old-pw"}) as client:
+        assert client.get("/api/surveillance/cameras/1/snapshot").status_code == 200
+    assert _FakeCamera.calls == [("https", "new-pw"), ("https", "old-pw")]
+
+
+def test_a_401_does_not_send_the_password_to_the_other_scheme(tmp_path, fake_camera):
+    """A camera that answered 401 speaks this scheme. Retrying the same
+    rejected passwords over http would double every failure for nothing."""
+    url = f"sqlite:///{tmp_path / 'sn8.db'}"
+    _seed(url)
+    fake_camera["password"] = "neither"
     with _client(tmp_path, url, enabled="true", user="ro",
                  **{"pass": "new-pw", "pass_backup": "old-pw"}) as client:
         r = client.get("/api/surveillance/cameras/1/snapshot")
         assert r.status_code == 502
         assert "both configured passwords" in r.headers["X-NetMon-Reason"]
-    assert _FakeClient.calls == ["new-pw", "old-pw"]
+    assert _FakeCamera.calls == [("https", "new-pw"), ("https", "old-pw")]
 
 
-def test_one_password_configured_is_tried_once(tmp_path, fake_camera):
-    """No backup configured behaves exactly as before: one request, one reason."""
-    url = f"sqlite:///{tmp_path / 'sn8.db'}"
+def test_what_worked_is_remembered_per_camera(tmp_path, fake_camera):
+    """The fallbacks must not multiply the request count.
+
+    A camera wall asks for up to 48 stills at once and refreshes; rediscovering
+    the same dead socket and the same 401 on every fetch would mean four
+    attempts per tile forever.
+    """
+    url = f"sqlite:///{tmp_path / 'sn9.db'}"
     _seed(url)
-    fake_camera["answers"] = {}
+    fake_camera.update(scheme="http", password="old-pw")
+    with _client(tmp_path, url, enabled="true", user="ro",
+                 **{"pass": "new-pw", "pass_backup": "old-pw"}) as client:
+        assert client.get("/api/surveillance/cameras/1/snapshot").status_code == 200
+        assert len(_FakeCamera.calls) == 3      # https×2 refused, then http/old
+        _FakeCamera.calls = []
+        assert client.get("/api/surveillance/cameras/1/snapshot").status_code == 200
+    assert _FakeCamera.calls == [("http", "old-pw")]
+
+
+def test_neither_scheme_answering_names_both(tmp_path, fake_camera):
+    """The reason has to separate a wrong scheme from an unreachable camera,
+    now that both were tried."""
+    url = f"sqlite:///{tmp_path / 'sn10.db'}"
+    _seed(url)
+    fake_camera["scheme"] = "none"
+    with _client(tmp_path, url, enabled="true", user="ro",
+                 **{"pass": "new-pw"}) as client:
+        r = client.get("/api/surveillance/cameras/1/snapshot")
+        assert r.status_code == 504
+        reason = r.headers["X-NetMon-Reason"]
+        assert "ConnectError" in reason and "https and http" in reason
+    assert _FakeCamera.calls == [("https", "new-pw"), ("http", "new-pw")]
+
+
+def test_one_password_configured_is_tried_once_per_scheme(tmp_path, fake_camera):
+    """No backup configured behaves as before: one password, one reason."""
+    url = f"sqlite:///{tmp_path / 'sn11.db'}"
+    _seed(url)
+    fake_camera["password"] = "neither"
     with _client(tmp_path, url, enabled="true", user="ro",
                  **{"pass": "new-pw"}) as client:
         r = client.get("/api/surveillance/cameras/1/snapshot")
         assert r.status_code == 502
         assert "the configured account" in r.headers["X-NetMon-Reason"]
-    assert _FakeClient.calls == ["new-pw"]
+    assert _FakeCamera.calls == [("https", "new-pw")]

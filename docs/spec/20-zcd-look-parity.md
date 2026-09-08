@@ -424,6 +424,26 @@ under `[camera_snapshot]` (`enabled = true`, `user`, `pass`) and restart. The
 section is documented in `netmon.conf.example`. Loading a config that enables it
 with no `user` is refused at boot rather than serving silent 503s.
 
+**Both schemes, tried in order (added 2026-09-08, owner instruction).** The
+proxy no longer trusts `cameras.https_enabled` as its single attempt: it builds
+two candidates per camera — **https first, then http** — and moves to the second
+when the first fails at the transport (`build_candidates` in `netmon/snapshot.py`
+replaces `build_url`). The stored flag comes from `hardwareDriverSettings.
+httpSEnabled` and splits the estate 1,695 TLS / 956 plain, but it was wrong in
+the field, and a camera that answers on the other scheme is a working camera
+showing an empty tile. Each candidate carries the port that belongs to *its*
+scheme, so `https_port = 8443` does not leak into the http URL; the one case
+where a port does carry over is the five `http://ip:443` cameras, where 443 is
+the other scheme's own default and the camera answers there either way.
+
+The order is a preference, not a sweep: a transport failure moves to the other
+scheme, a 401 moves to the other password (never to the other scheme — a camera
+that answered 401 speaks this one), and any other answer is the answer. Failing
+both names both, so the tile can separate a wrong scheme from an unreachable
+camera. Trying https first is cheap when it is wrong — a closed 443 refuses the
+connection rather than burning `connect_timeout_s` — and the scheme that
+answered is remembered per camera alongside the password.
+
 **Two passwords, one account (added 2026-09-08).** `pass_backup` is an optional
 second password for the same account, tried only after a camera answers 401 to
 `pass`. 2,651 cameras are not all on one password: a rotation reaches the
@@ -431,9 +451,9 @@ cameras that were online for it, while the ones that were down, or were
 installed before it, still answer to the previous one — and with one credential
 those tiles read "camera rejected the configured account", leaving someone to
 work out per camera which password it is on. The winner is remembered per
-`device_id` in a process-local map (`_snap_cred`), because a 48-tile wall that
-refreshes would otherwise pay the same 401 twice per tile forever; the map is an
-optimisation only — empty costs one extra 401 per camera, a stale entry
+`device_id` in a process-local map (`_snap_cred`, beside `_snap_scheme`), because
+a 48-tile wall that refreshes would otherwise pay the same dead socket and the
+same 401 on every tile forever; the maps are an optimisation only — empty costs one extra 401 per camera, a stale entry
 self-corrects on the next fetch, and nothing is persisted. Empty passwords are
 dropped rather than sent, so a blank credential cannot masquerade as a rejected
 account. With no `pass_backup` the path is exactly as before: one request, and

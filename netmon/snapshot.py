@@ -9,11 +9,16 @@ oddities.
 Four things this module exists to get right, each of which was a live finding
 rather than a guess:
 
-1. **The scheme is not in the address.** Milestone stores every hardware
-   address as ``http://<ip>/`` — 100% of 2,489 records — while
-   ``hardwareDriverSettings.httpSEnabled`` says whether the camera actually
-   speaks TLS. On this estate **1,695 of 2,651 cameras (64%) do and 956 do
-   not**, so assuming either scheme fails on hundreds of them.
+1. **The scheme is neither in the address nor reliably in a field.** Milestone
+   stores every hardware address as ``http://<ip>/`` — 100% of 2,489 records —
+   while ``hardwareDriverSettings.httpSEnabled`` claims whether the camera
+   speaks TLS: **1,695 of 2,651 cameras (64%) say yes and 956 say no**. Trusting
+   that field as the single answer was wrong in the field (owner, 2026-09-08:
+   "some cameras are http and some are https, it will need to try both"), so
+   this module returns an ordered *list* of candidates — **https first, then
+   http** — and the caller tries the next one when the transport fails. The
+   field still shapes the ports, and the endpoint remembers per camera which
+   scheme answered so the extra attempt is paid once, not per tile refresh.
 2. **``httpSEnabled`` is the string ``'Yes'``**, not a boolean (handled at
    collection time, migration 027; the column here is already 1/0/NULL).
 3. **A camera can be one imager of several on a shared device.** 178 cameras
@@ -21,8 +26,8 @@ rather than a guess:
    the *wrong imager* — silently, with a plausible picture. That is worse than
    an error, so an unverified channel parameter is refused rather than guessed.
 4. **Six cameras carry an explicit port**, five of them ``:443`` on an ``http``
-   scheme. Dropping the port sends the request to the wrong socket; inferring
-   the scheme from the port contradicts what the field says.
+   scheme. Dropping the port sends the request to the wrong socket, so each
+   candidate scheme carries the port that belongs to it (see :func:`_hostport`).
 
 The vendor string is Milestone's *driver* name, not a tidy vendor: this estate
 reports ``Bosch1ch`` (2,019), ``Bosch`` (509), ``ONVIF`` (91) and four Axis
@@ -62,6 +67,10 @@ class SnapshotUnavailable(Exception):
 @dataclass(frozen=True)
 class SnapshotTarget:
     url: str
+    #: ``https`` or ``http``. Named rather than re-parsed out of the URL because
+    #: the endpoint remembers it: whichever scheme a camera answers on is worth
+    #: trying first next time.
+    scheme: str
     #: Whether TLS verification should be attempted. Cameras on the VMS network
     #: carry self-signed certificates, so this is False in practice — but it is
     #: returned rather than assumed so the caller cannot forget it is a choice.
@@ -99,12 +108,24 @@ def vendor_profile(vendor: Any) -> str:
     return ""
 
 
-def build_url(cam: dict, *, size: str = "M", channel_param: str = "") -> SnapshotTarget:
-    """Snapshot URL for one stored camera row.
+def build_candidates(cam: dict, *, size: str = "M",
+                     channel_param: str = "") -> list[SnapshotTarget]:
+    """Snapshot URLs to try for one stored camera row, best first.
 
     ``cam`` is a row from the ``cameras`` table: ``ip``, ``http_port``,
     ``https_enabled``, ``https_port``, ``vendor``, ``channel``. Nothing is taken
     from a caller except the size, which is whitelisted.
+
+    Two candidates, **https then http**, because the stored scheme is not
+    trustworthy (see this module's docstring) and a camera that answers on the
+    other one is a working camera showing an empty tile. Trying https first
+    costs almost nothing when it is wrong: a camera with 443 closed refuses the
+    connection immediately rather than timing out, and the endpoint remembers
+    the scheme that answered.
+
+    The two differ only in scheme and port, so everything that can be refused —
+    no address, unknown driver, ONVIF, an unconfigured multi-imager — is refused
+    once, for both, by raising :class:`SnapshotUnavailable`.
 
     ``channel_param`` enables multi-imager support once someone has confirmed
     the parameter name against a real device — see :func:`_channel_query`.
@@ -125,15 +146,6 @@ def build_url(cam: dict, *, size: str = "M", channel_param: str = "") -> Snapsho
             "ONVIF cameras publish their snapshot URI through the Media service, "
             "which NetMon does not speak", 501)
 
-    tls = cam.get("https_enabled") == 1
-    scheme = "https" if tls else "http"
-    # The port that belongs to the scheme being used. `http_port` is the
-    # explicit port on the stored address (six cameras have one); `https_port`
-    # comes from hardwareDriverSettings.
-    port = cam.get("https_port") if tls else cam.get("http_port")
-    default = 443 if tls else 80
-    hostport = f"{ip}:{port}" if port and int(port) != default else ip
-
     size = normalise_size(size)
     chan = _channel_query(cam, profile, channel_param)
 
@@ -143,7 +155,39 @@ def build_url(cam: dict, *, size: str = "M", channel_param: str = "") -> Snapsho
     else:  # axis
         path = f"/axis-cgi/jpg/image.cgi?resolution={_AXIS_RESOLUTION.get(size, size)}"
 
-    return SnapshotTarget(url=f"{scheme}://{hostport}{path}{chan}", verify=False)
+    return [SnapshotTarget(url=f"{scheme}://{_hostport(cam, scheme)}{path}{chan}",
+                           scheme=scheme, verify=False)
+            for scheme in ("https", "http")]
+
+
+def _hostport(cam: dict, scheme: str) -> str:
+    """``ip`` or ``ip:port`` for one scheme.
+
+    Six cameras carry an explicit port, five of them ``:443`` on an ``http``
+    scheme — dropping it sends the request to the wrong socket. So each scheme
+    prefers the port recorded for it (``https_port`` from
+    hardwareDriverSettings, ``http_port`` from the stored address), and will
+    borrow the other's only when that port is this scheme's own default: the
+    ``http://ip:443`` cameras therefore get ``https://ip`` and ``http://ip:443``
+    as their two candidates, both pointing at the socket that exists. A port
+    recorded for the other scheme and meaning nothing here (``:8080`` under
+    https) is not carried over, and a default port is omitted.
+    """
+    ip = str(cam.get("ip") or "").strip()
+    own, other, default = (
+        ("https_port", "http_port", 443) if scheme == "https"
+        else ("http_port", "https_port", 80))
+    port = _port(cam.get(own))
+    if port is None and _port(cam.get(other)) == default:
+        port = default
+    return f"{ip}:{port}" if port and port != default else ip
+
+
+def _port(value: Any) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _channel_query(cam: dict, profile: str, channel_param: str) -> str:

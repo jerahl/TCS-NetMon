@@ -20,7 +20,7 @@ from netmon import db
 from netmon.api.deps import get_config, get_engine, require_role
 from netmon.config import Config
 from netmon.models.schemas import Role
-from netmon.snapshot import SnapshotUnavailable, build_url
+from netmon.snapshot import SnapshotUnavailable, build_candidates
 from netmon.snapshots import read_snapshot
 from netmon.uplink import uplink_for_mac
 
@@ -434,6 +434,13 @@ async def camera_snapshot(
     camera, and only for a device whose `device_type` is `camera`. `size` is
     whitelisted (`netmon.snapshot.normalise_size`).
 
+    **What it tries.** Up to two schemes (https, then http) and up to two
+    passwords for the one configured account, because neither the stored scheme
+    nor a single password holds across 2,651 cameras. The order is a preference,
+    not a sweep: a transport failure moves to the other scheme, a 401 moves to
+    the other password, any other answer is the answer, and whatever worked is
+    remembered per camera so a refreshing wall pays the discovery once.
+
     Every failure answers with a reason in `X-NetMon-Reason` so the tile can say
     why it is empty instead of showing a broken image: a blank frame that might
     mean "camera down" and might mean "proxy disabled" is the thing this whole
@@ -458,34 +465,62 @@ async def camera_snapshot(
         return _snap_error(404, "no such camera")
 
     try:
-        target = build_url(dict(row), size=size, channel_param=conf.channel_param)
+        targets = build_candidates(dict(row), size=size,
+                                   channel_param=conf.channel_param)
     except SnapshotUnavailable as exc:
         return _snap_error(exc.status, exc.reason)
+    targets = _ordered_schemes(targets, device_id)
 
     creds = _credentials(conf, device_id)
     if not creds:
         return _snap_error(503, "no camera password configured")
 
+    resp = None
+    failure: Exception | None = None
     timeout = httpx.Timeout(conf.timeout_s, connect=conf.connect_timeout_s)
     async with _semaphore(conf.max_concurrent):
-        try:
-            async with httpx.AsyncClient(timeout=timeout, verify=target.verify,
-                                         follow_redirects=False) as client:
+        # Every candidate for a camera shares `verify`: the certificates on this
+        # network are self-signed, and the field exists so that is a decision
+        # rather than an omission.
+        async with httpx.AsyncClient(timeout=timeout, verify=targets[0].verify,
+                                     follow_redirects=False) as client:
+            for target in targets:
                 for which, password in creds:
                     # Basic first, then Digest: Bosch and Axis both answer 401
                     # with a challenge, and httpx picks the scheme from it.
-                    resp = await client.get(
-                        target.url,
-                        auth=httpx.DigestAuth(conf.user, password),
-                        headers={"Accept": "image/jpeg,image/*"})
+                    try:
+                        resp = await client.get(
+                            target.url,
+                            auth=httpx.DigestAuth(conf.user, password),
+                            headers={"Accept": "image/jpeg,image/*"})
+                    except httpx.HTTPError as exc:
+                        # A transport failure is about the scheme and port, not
+                        # the password, so stop cycling credentials against a
+                        # socket that is not there and try the other scheme.
+                        failure, resp = exc, None
+                        break
+                    # Any HTTP answer — 401 included — proves this scheme is the
+                    # one the camera speaks. Worth remembering even when the
+                    # password was wrong.
+                    _remember_scheme(device_id, target.scheme)
                     if resp.status_code != 401:
                         _remember_credential(device_id, which)
                         break
-        except httpx.HTTPError as exc:
-            # The class is the diagnosis: ConnectTimeout means the camera is not
-            # answering, ConnectError means the address is wrong or the port
-            # closed. Both are useful on the tile; neither is "camera down".
-            return _snap_error(504, f"{type(exc).__name__} fetching the still")
+                if resp is not None:
+                    # A camera answered. The other scheme would answer the same
+                    # way at best, so this is the answer.
+                    break
+
+    if resp is None:
+        # The class is the diagnosis: ConnectTimeout means the camera is not
+        # answering, ConnectError means the address is wrong or the port closed.
+        # Both are useful on the tile; neither is "camera down". Naming the
+        # schemes matters now that both were tried — otherwise the reader cannot
+        # tell a wrong scheme from an unreachable camera.
+        _forget_scheme(device_id)
+        schemes = " and ".join(t.scheme for t in targets)
+        return _snap_error(504, f"{type(failure).__name__} fetching the still "
+                                f"over {schemes}")
 
     if resp.status_code == 401:
         _forget_credential(device_id)
@@ -503,15 +538,28 @@ async def camera_snapshot(
                     headers={"Cache-Control": f"private, max-age={conf.cache_s}"})
 
 
-# Which password last worked for a camera, by device_id. The estate is not on
-# one password — a rotation reaches the cameras that were up for it — so the
-# proxy carries a fallback and tries it after a 401. Remembering the winner is
-# what keeps that from doubling the request count: a camera wall asks for up to
-# 48 stills at once and refreshes, and re-discovering the same 401 every time
-# would mean two connections per tile forever. Process-local and purely an
-# optimisation: an empty map costs one extra 401 per camera, and a wrong entry
-# self-corrects on the next fetch, so it is never persisted.
+# What last worked for a camera, by device_id: which scheme answered and which
+# password it accepted. Both exist because the proxy now tries more than one of
+# each — the estate is not on one password (a rotation reaches the cameras that
+# were up for it) and not on one scheme (2,651 cameras, 64% claiming TLS, and
+# the claim is not reliable). Remembering the winner is what keeps trying both
+# from multiplying the request count: a camera wall asks for up to 48 stills at
+# once and refreshes, and rediscovering the same dead socket or the same 401
+# every time would mean two connections per tile forever.
+#
+# Process-local and purely an optimisation: an empty map costs one extra
+# attempt per camera, a wrong entry self-corrects on the next fetch, and
+# neither is ever persisted.
+_snap_scheme: dict[int, str] = {}
 _snap_cred: dict[int, str] = {}
+
+
+def _ordered_schemes(targets: list, device_id: int) -> list:
+    """The candidates, with the scheme this camera last answered on first."""
+    last = _snap_scheme.get(device_id)
+    if last:
+        targets = sorted(targets, key=lambda t: t.scheme != last)
+    return targets
 
 
 def _credentials(conf, device_id: int) -> list[tuple[str, str]]:
@@ -527,6 +575,14 @@ def _credentials(conf, device_id: int) -> list[tuple[str, str]]:
     if last in order:
         order.sort(key=lambda name: name != last)
     return [(name, by_name[name]) for name in order if by_name[name]]
+
+
+def _remember_scheme(device_id: int, scheme: str) -> None:
+    _snap_scheme[device_id] = scheme
+
+
+def _forget_scheme(device_id: int) -> None:
+    _snap_scheme.pop(device_id, None)
 
 
 def _remember_credential(device_id: int, which: str) -> None:
