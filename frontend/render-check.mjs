@@ -645,6 +645,53 @@ const cases = [
      if (!text.includes("91 MiB")) throw new Error("size not human-readable");
    }],
 
+  ["CameraPicker · eligibility comes from the image", OPS.CameraPicker, {
+    image: { id: 1, version: "7.93.0024", platform: "CPP6/7/7.3",
+             models: ["FLEXIDOME IP 5000i IR"] },
+    cameras: [
+      { device_id: 1, name: "cam-ok", ip: "10.1.1.1", site: "BHS",
+        model: "FLEXIDOME IP 5000i IR", firmware: "7.83.0027",
+        platform: "CPP6/7/7.3", reachability: "up" },
+      // Already there, in the compact form 888 cameras report. Offering this
+      // one would build a batch the server refuses.
+      { device_id: 2, name: "cam-current", ip: "10.1.1.2", site: "BHS",
+        model: "FLEXIDOME IP 5000i IR", firmware: "793",
+        platform: "CPP6/7/7.3", reachability: "up" },
+      { device_id: 3, name: "cam-down", ip: "10.1.1.3", site: "BHS",
+        model: "FLEXIDOME IP 5000i IR", firmware: "7.83.0027",
+        platform: "CPP6/7/7.3", reachability: "down_confirmed" },
+      { device_id: 4, name: "cam-wrong-cpp", ip: "10.1.1.4", site: "BHS",
+        model: "FLEXIDOME IP 5000i IR", firmware: "7.83.0027",
+        platform: "CPP14/15/16", reachability: "up" },
+      // A different model entirely: not listed at all, because the image's
+      // allow-list is what decides what is even a candidate.
+      { device_id: 5, name: "cam-5100i", ip: "10.1.1.5", site: "BHS",
+        model: "FLEXIDOME indoor 5100i IR", firmware: "9.00.0210",
+        platform: "CPP14/15/16", reachability: "up" },
+    ],
+    selected: [1], onToggle: () => {}, onBulk: () => {}, maxBatch: 50 },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (text.includes("cam-5100i")) throw new Error("a camera outside the allow-list was listed");
+     if (!text.includes("already on 7.93.0024")) {
+       throw new Error("the compact firmware form was not recognised as current");
+     }
+     if (!text.includes("camera is CPP14/15/16, image is CPP6/7/7.3")) {
+       throw new Error("platform mismatch not explained");
+     }
+     if (!text.includes("reachability is down_confirmed")) throw new Error("down camera not ruled out");
+     if (!text.includes("1</b> eligible now")) throw new Error("eligible count wrong");
+   }],
+
+  ["CameraPicker · no image chosen yet", OPS.CameraPicker, {
+    image: null, cameras: [], selected: [], onToggle: () => {}, onBulk: () => {},
+    maxBatch: 50 },
+   (html) => {
+     if (!html.includes("Choose a firmware image first")) {
+       throw new Error("no guidance before an image is picked");
+     }
+   }],
+
   ["EssLiveCard · a healthy stream", NS.EssLiveCard, {
     live: { connected: true, reconnects: 0, frames: 7366, events: 24000, applied: 3,
             last_message_at: Date.now() / 1000,

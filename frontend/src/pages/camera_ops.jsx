@@ -165,8 +165,124 @@ export function BatchCard({ batch, onAbort, busy }) {
   );
 }
 
-export function CameraOpsTab({ deviceIds = [], deviceNames = {} }) {
+// Which cameras an image may go to, worked out from the image rather than from
+// whatever the operator happened to be filtering.
+//
+// This is the Surveillance-page way in: there is no navigator selection here, so
+// the batch is built the other way round — pick the image, and the page shows
+// the cameras it is *built for*, already ruled out where they are ineligible.
+// The server pre-flights again and is the authority; this is so an admin can see
+// the shape of the batch before creating one, and cannot casually select 400
+// cameras the roll would refuse anyway.
+export function CameraPicker({ image, cameras, selected, onToggle, onBulk, maxBatch }) {
+  if (!image) {
+    return (
+      <div className="msg">
+        Choose a firmware image first. The cameras it may go to follow from the
+        image's own model allow-list — that is the list that decides what is
+        eligible, not the filter you were browsing with.
+      </div>
+    );
+  }
+  const models = new Set(image.models || []);
+  const rows = (cameras || []).filter((c) => models.has(c.model));
+  // Why each ineligible camera is out, computed the same way pre-flight does so
+  // the preview and the batch agree.
+  const why = (c) => {
+    if (image.platform && c.platform && image.platform !== c.platform) {
+      return `camera is ${c.platform}, image is ${image.platform}`;
+    }
+    if (sameRelease(c.firmware, image.version)) return `already on ${image.version}`;
+    if (c.reachability !== "up") return `reachability is ${c.reachability || "unknown"}`;
+    if (c.source_status === "blind") return "Milestone has no verdict";
+    return null;
+  };
+  const eligible = rows.filter((c) => !why(c));
+  const blocked = rows.filter((c) => why(c));
+
+  return (
+    <div>
+      <div className="msg" style={{ fontSize: 11, marginBottom: 8 }}>
+        {rows.length.toLocaleString()} camera(s) match this image's models
+        {" · "}<b>{eligible.length.toLocaleString()}</b> eligible now
+        {blocked.length > 0 && <> · {blocked.length.toLocaleString()} ruled out</>}
+        {" · "}batches are capped at {maxBatch}
+      </div>
+      {eligible.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          <button type="button" className="btn sm"
+                  onClick={() => onBulk(eligible.slice(0, maxBatch).map((c) => c.device_id))}
+                  title={`select the first ${maxBatch}, in name order`}>
+            Select first {Math.min(maxBatch, eligible.length)}
+          </button>{" "}
+          <button type="button" className="btn sm" onClick={() => onBulk([])}>
+            Clear
+          </button>
+        </div>
+      )}
+      <table className="link-tbl">
+        <thead>
+          <tr><th style={{ width: 22 }}></th><th>Camera</th><th>Site</th><th>Model</th>
+              <th>Firmware</th><th>Platform</th><th>Why not</th></tr>
+        </thead>
+        <tbody>
+          {rows.slice(0, 200).map((c) => {
+            const reason = why(c);
+            const on = selected.includes(c.device_id);
+            return (
+              <tr key={c.device_id} className={on ? "sel" : ""}>
+                <td>
+                  <input type="checkbox" checked={on} disabled={!!reason}
+                         onChange={() => onToggle(c.device_id)} />
+                </td>
+                <td>{c.name}<div className="dim mono" style={{ fontSize: 10 }}>{c.ip}</div></td>
+                <td className="dim" style={{ fontSize: 11 }}>{c.site || "—"}</td>
+                <td style={{ fontSize: 11 }}>{c.model}</td>
+                <td className="mono">{c.firmware || "—"}</td>
+                <td className="mono dim">{c.platform || "—"}</td>
+                <td className="dim" style={{ fontSize: 11 }}>{reason || ""}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {rows.length > 200 && (
+        <div className="msg" style={{ fontSize: 11, padding: "8px 0 0" }}>
+          Showing the first 200 of {rows.length.toLocaleString()}. A roll is many
+          batches by design, so there is nothing to gain from listing them all.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The same comparison pre-flight makes, in the browser: `783` and `7.83.0027`
+// are one release written two ways, and 888 cameras here report the compact
+// form. Getting this wrong in the UI would offer an operator a batch the server
+// then refuses entirely.
+export function sameRelease(current, target) {
+  const parse = (raw) => {
+    const s = String(raw ?? "").trim();
+    let m = s.match(/^(\d+)\.(\d+)(?:\.(\d+))?(?:\.(\d+))?$/);
+    if (m) return m.slice(1).filter((x) => x !== undefined).map(Number);
+    m = s.match(/^(\d)(\d{2})$/);
+    if (m) return [Number(m[1]), Number(m[2])];
+    return null;
+  };
+  const a = parse(current);
+  const b = parse(target);
+  if (!a || !b) return false;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i += 1) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+export function CameraOpsTab({ deviceIds = null, deviceNames = {}, pick = false }) {
   const [status, setStatus] = React.useState(null);
+  // Picker mode (the Surveillance page): the tab chooses its own cameras from
+  // the image, instead of inheriting a navigator selection.
+  const [cameras, setCameras] = React.useState(null);
+  const [picked, setPicked] = React.useState([]);
   const [images, setImages] = React.useState(null);
   const [batches, setBatches] = React.useState(null);
   const [open, setOpen] = React.useState(null);      // batch detail
@@ -180,6 +296,11 @@ export function CameraOpsTab({ deviceIds = [], deviceNames = {} }) {
     getJSON("/api/surveillance/firmware").then(setImages).catch(() => setImages([]));
     getJSON("/api/surveillance/batches").then(setBatches).catch(() => setBatches([]));
   }, []);
+
+  React.useEffect(() => {
+    if (!pick) return;
+    getJSON("/api/surveillance/cameras").then(setCameras).catch(() => setCameras([]));
+  }, [pick]);
 
   React.useEffect(() => {
     load();
@@ -202,9 +323,12 @@ export function CameraOpsTab({ deviceIds = [], deviceNames = {} }) {
     try { await fn(); load(); } catch (e) { setError(e); } finally { setBusy(false); }
   }
 
+  const targets = pick ? picked : (deviceIds || []);
+  const image = (images || []).find((im) => im.id === imageId) || null;
+
   const createBatch = () => act(async () => {
     const r = await postJSON("/api/surveillance/batches", {
-      op: "firmware_update", device_ids: deviceIds, firmware_id: imageId,
+      op: "firmware_update", device_ids: targets, firmware_id: imageId,
     });
     setPreview(r.preflight);
     const detail = await getJSON(`/api/surveillance/batches/${r.batch_id}`);
@@ -266,17 +390,39 @@ export function CameraOpsTab({ deviceIds = [], deviceNames = {} }) {
         )}
       </Card>
 
+      {pick && (
+        <Card title="Cameras for this image" source="milestone"
+              kicker={cameras ? `${picked.length} selected` : "loading the fleet"} tight>
+          <div style={{ padding: 14 }}>
+            {!cameras ? <Loading what="cameras" /> : (
+              <CameraPicker image={image} cameras={cameras} selected={picked}
+                            maxBatch={status.max_batch}
+                            onBulk={setPicked}
+                            onToggle={(id) => setPicked((prev) =>
+                              prev.includes(id) ? prev.filter((x) => x !== id)
+                                                : prev.concat(id))} />
+            )}
+          </div>
+        </Card>
+      )}
+
       <Card title="New batch" source="netmon"
-            kicker={`${deviceIds.length} camera(s) selected`}>
-        {deviceIds.length === 0 ? (
+            kicker={`${targets.length} camera(s) selected`}>
+        {targets.length === 0 ? (
           <div className="msg">
-            Pick cameras from the navigator first. A batch names the cameras it
-            will touch; there is no "everything" button.
+            {pick ? "Choose an image, then the cameras it is built for."
+                  : "Pick cameras from the navigator first."}
+            {" "}A batch names the cameras it will touch; there is no
+            "everything" button.
           </div>
         ) : (
           <div>
             <div style={{ fontSize: 11, marginBottom: 8 }}>
-              {deviceIds.map((id) => deviceNames[id] || `#${id}`).join(", ")}
+              {targets.slice(0, 12).map((id) =>
+                deviceNames[id]
+                || (cameras || []).find((c) => c.device_id === id)?.name
+                || `#${id}`).join(", ")}
+              {targets.length > 12 && ` … and ${targets.length - 12} more`}
             </div>
             <button type="button" className="btn" disabled={!imageId || busy}
                     onClick={createBatch}

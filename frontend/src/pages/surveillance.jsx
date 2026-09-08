@@ -5,6 +5,7 @@ import {
   Sparkline,
 } from "../primitives.jsx";
 import { ageOf } from "../format.js";
+import { CameraOpsTab } from "./camera_ops.jsx";
 
 // Surveillance (Milestone) — Phase 10.4, given ZCD's shell in spec 20 S1.
 //
@@ -60,7 +61,8 @@ const fmtN = (v) => num(v).toLocaleString();
 // behind it and says so — the Config API on 2025 R2 answers `evidenceLocks`
 // with 400 "Unknown request" (probed 2026-09-08) — because the nav matching
 // ZCD is the point, and a named gap is worth more than a missing tab.
-const TAB_IDS = ["overview", "sites", "servers", "storage", "alarms", "evidence"];
+const TAB_IDS = ["overview", "sites", "servers", "storage", "alarms", "evidence",
+                 "firmware"];
 
 function StateDot({ value }) {
   const sev = value === "up" ? "ok" : value === "down" ? "crit" : value === "blind" ? "warn" : "unknown";
@@ -75,6 +77,11 @@ export function SurveillancePage({ query = {} }) {
   const [alarms, setAlarms] = React.useState(null);
   const [meta, setMeta] = React.useState(null);
   const [error, setError] = React.useState(null);
+  // Firmware is an admin tab. The API enforces the same floor on every one of
+  // its endpoints; asking here is so a viewer never sees a tab that would only
+  // answer 403 — and never sees the word "firmware" beside a fleet they cannot
+  // touch.
+  const [role, setRole] = React.useState(null);
   // Held in a ref so an alarm action can pull fresh rows the moment it lands,
   // rather than leaving the operator looking at the state they just changed
   // until the 30s tick.
@@ -88,6 +95,8 @@ export function SurveillancePage({ query = {} }) {
 
   React.useEffect(() => {
     getJSON("/api/meta").then(setMeta).catch(() => { /* header slot omitted */ });
+    getJSON("/auth/me").then((me) => setRole(me?.role || "viewer"))
+      .catch(() => setRole("viewer"));
   }, []);
 
   React.useEffect(() => {
@@ -138,7 +147,14 @@ export function SurveillancePage({ query = {} }) {
     { id: "alarms", label: "Alarms", badge: alarms ? fmtN(alarms.length) : "",
       kind: alarmCrit > 0 ? "err" : alarms && alarms.length ? "warn" : "" },
     { id: "evidence", label: "Evidence Lock" },
-  ];
+    // Last, and only for an admin. It is the one tab here that can change a
+    // camera rather than describe one, so it does not sit between two reading
+    // tabs where somebody lands on it by accident.
+    role === "admin"
+      ? { id: "firmware", label: "Firmware", title: "bulk firmware operations — "
+          + "admin only, gated, dry-run by default" }
+      : null,
+  ].filter(Boolean);
 
   return (
     <div className="page">
@@ -238,6 +254,15 @@ export function SurveillancePage({ query = {} }) {
         <AlarmsTab rows={alarms} onChanged={() => loadRef.current && loadRef.current()} />
       )}
       {tab === "evidence" && <EvidenceLockTab />}
+      {tab === "firmware" && (role === "admin"
+        ? <CameraOpsTab pick />
+        : <Card title="Firmware" source="netmon">
+            <div className="msg">
+              Bulk firmware operations are admin-only. Every endpoint behind this
+              tab enforces the same floor, so this is a closed door rather than a
+              hidden one.
+            </div>
+          </Card>)}
     </div>
   );
 }

@@ -1194,6 +1194,27 @@ cleanly instead of crashing the batch and leaving rows claiming `running`.
 * One camera is not a ring. The abort threshold and ring progression have been
   tested against a fake fleet, not against hardware.
 
+**A Firmware tab on Surveillance (owner-directed 2026-09-08).** The same
+machinery, reached from the NOC page rather than only from the Cameras
+navigator, and admin-only — a viewer does not see the tab at all, and typing the
+URL gets a closed door rather than a hidden one.
+
+The two entrances differ in how a batch is *built*, and the Surveillance one is
+the better shape: there is no navigator selection here, so **the image chooses
+the cameras**. Pick an image and the tab lists the cameras it is built for —
+its own model allow-list decides what is even a candidate — with the ineligible
+ones shown greyed and reasoned rather than omitted: `already on 7.93.0024`,
+`camera is CPP14/15/16, image is CPP6/7/7.3`, `reachability is down_confirmed`.
+
+That eligibility test repeats pre-flight's logic in the browser, including the
+compact-firmware comparison (`793` is `7.93.0024`), for one reason: offering an
+operator a batch the server will then refuse entirely is worse than not offering
+it. The server pre-flights again and remains the authority.
+
+Selection is capped at `max_batch` with a "select first N" rather than a select
+all, and the list stops at 200 rows — a roll is many batches by design, so there
+is nothing to gain from rendering 2,000.
+
 **Fleet shape for the build:** 2,528 of 2,651 cameras are Bosch (2,019
 `Bosch1ch` + 509 `Bosch`) — 95%, confirming Bosch as the pilot vendor; 32 Axis;
 91 ONVIF, which have no snapshot path either. 84 distinct model×firmware pairs
