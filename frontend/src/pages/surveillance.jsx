@@ -19,7 +19,12 @@ import { ageOf } from "../format.js";
 // sessions are absent here rather than shown as 0 — see §4 of spec 20 and the
 // storage note in OverviewTab.
 
-const REFRESH_MS = 30000;
+// 10s (spec 20 S7). The page reads NetMon's own DB, so the cost is a handful
+// of aggregate queries; what makes 10s worth having is the live ESS
+// subscription, which can move a camera's state seconds after it happens
+// instead of at the next 120s cycle. With `[milestone] ess_live = false` this
+// simply re-reads the same rows more often, which is harmless.
+const REFRESH_MS = 10000;
 
 // The domains whose open alerts are "VMS alarms" for this page's purposes.
 const ALARM_SCOPE = "camera,recording_server";

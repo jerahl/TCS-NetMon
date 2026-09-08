@@ -36,6 +36,7 @@ from netmon.auth.sessions import DbSessionStore, SessionStore
 from netmon.engine.engine import AlertEngine
 from netmon.history import HistorySampler
 from netmon.reachability import ReachabilityDeriver
+from netmon.collectors.ess_live import EssLive
 from netmon.collectors.milestone import MilestoneCollector, MilestoneError
 from netmon.collectors.packetfence import PfCollector
 from netmon.collectors.pf_client import PfError
@@ -151,6 +152,22 @@ def register_tasks(app: FastAPI, cfg: Config, engine) -> None:
         else:
             supervisor.register("milestone", ms.run_guarded, interval_s=ms.interval_s, timeout_s=ms.timeout_s)
             log.info("Milestone collector enabled: %ss", ms.interval_s)
+
+            # Live Events/State subscription (spec 20 S7). Default OFF: it is a
+            # second writer of camera `source_status` and a socket held open for
+            # hours, so it is a deliberate switch rather than something that
+            # arrives with an upgrade. With it off, the 120s snapshot inside the
+            # cycle above is unchanged and remains the only ESS reader.
+            ms_settings = (cfg.sources.get("milestone").settings
+                           if cfg.sources.get("milestone") else {})
+            if str(ms_settings.get("ess_live", "")).strip().lower() in ("1", "true", "yes", "on"):
+                ess_live = EssLive.from_collector(engine, ms, ms_settings)
+                app.state.ess_live = ess_live
+                supervisor.register("milestone_ess_live", ess_live.run,
+                                    interval_s=30.0, timeout_s=0.0, long_running=True)
+                log.info("Milestone live ESS enabled: flush %ss, watchdog %ss "
+                         "(camera source_status deltas)",
+                         ess_live.flush_s, ess_live.watchdog_s)
 
     if cfg.source_enabled("threecx"):
         try:

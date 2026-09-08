@@ -817,7 +817,77 @@ Bosch profile in dry-run (2 sessions), the Milestone-mediated investigation abov
 rings. Estimate 3–4 sessions for the machinery + Bosch profile, 1 per additional
 vendor.
 
-### S7 — Liveness (optional, after S1–S6)
+### S7 — Liveness — **built 2026-09-08, default-off**
+
+Built as described below, after measuring the stream rather than assuming it.
+The spec's own advice was to wait ("the 120 s cadence has been adequate"); the
+owner asked for it now, and the measurement is what shaped the result.
+
+**What the estate actually emits.** 120 s of live subscription, taken before any
+code was written, because the ESS event schema had never been validated against
+this VMS:
+
+    7,366 frames · ~24,000 events
+    frame:  {"events":[…]}  — no command or type at the top level
+    event:  id, source, specversion, stategroupid, time, type
+            — the same six keys a getState state carries, so one parser serves both
+
+    MotionStart 9,354 · MotionEnd 9,311 · RecordingStarted 2,406 ·
+    RecordingStopped 2,373 · Recording FPS Warning 520 · LiveClientFeedRequested 171
+    … and not one Communication event in the window
+
+Three consequences, which are the design:
+
+1. **Volume is the constraint, not latency.** ~200 events/second sustained. A
+   write per event would be 200 transactions/second against tables the
+   dashboards read. Events are filtered in memory against a per-connection type
+   map and coalesced per camera into one batched `write_states` every
+   `ess_live_flush_s` (default 5 s). A failed flush puts its deltas back — but
+   never over a newer verdict that arrived while the write was in flight.
+2. **Over 99% of the stream must be dropped.** Only `Communication*` moves
+   `source_status`. Motion and recording churn is counted and discarded:
+   `recording` is a Config-API fact here, and turning 24,000 motion events an
+   hour into `state_events` rows would bury the transition log NetMon treats as
+   its history (CLAUDE.md §6) under an estate behaving perfectly normally.
+3. **A quiet socket is not obviously a dead one.** Overnight the motion that
+   dominates this stream stops, so the watchdog is 180 s rather than ws.py's
+   60 s default — long enough that an idle night does not force a needless 4 MB
+   resync every minute, short enough to notice a dead socket.
+
+**Both readers stay.** The 120 s snapshot inside the Milestone cycle keeps
+running: both derive the same dimension from the same interface, `write_states`
+records a transition only when a value actually moves, and where they differ the
+newer observation wins. That makes the cycle a *repair* for anything the stream
+missed while reconnecting — worth more than the bytes it costs. Recording-server
+state columns stay the cycle's alone, because it owns that row with a
+replace-on-refresh upsert and a second writer would fight it; the live task
+therefore subscribes to `cameras` only.
+
+**Supervision.** `Supervisor.register(..., long_running=True)`: no per-run
+timeout, because staying connected for hours *is* success, while the exception
+boundary and reschedule still apply. Every reconnect re-runs the handshake and
+re-applies the full snapshot.
+
+**Observability.** A `collector_health` row (`milestone_ess_live`) plus a
+NetMon Status panel — socket state, reconnects, frames, events, state changes
+applied, busiest event types. Snapshot states are counted **apart from** stream
+events: a connect stages ~2,500 `CommunicationStarted` states, and folding those
+into the stream counters makes the stream look like it carries camera changes it
+does not. Event *types* are counted, never payloads, and the counter is capped
+at 200 keys.
+
+**Verified end-to-end against the live gateway** (2026-09-08, writing to a
+scratch DB so production state was untouched): 100 s → 6,168 frames, 21,458
+events, 0 reconnects, 2,512 cameras given a baseline from the connect snapshot
+(2,421 up / 91 down), and the motion churn dropped as designed.
+
+**Default off** (`[milestone] ess_live = false`). It is a second writer of
+camera `source_status` and a socket held open for hours; that is a switch the
+owner throws, not something that arrives with an upgrade. The Surveillance page
+now polls at 10 s either way, which is what makes the faster state visible.
+
+The original plan:
+
 
 ZCD patches camera state in the browser over a WebSocket it opens to the
 gateway. NetMon must not: pages read only NetMon's DB (CLAUDE.md §6 invariant),

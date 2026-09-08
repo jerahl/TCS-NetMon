@@ -148,11 +148,39 @@ Ported from `reference/zabbix/milestone/*`.
   for devices matched by `milestone_hardware_id`, `source_status` for recording
   servers (running → up/down) and the `recording` dimension for cameras. Blind
   on unreachable. Interval `[milestone] interval_s` (default 120s).
-- **Live Events/State WebSocket** (`ws.py` `ResilientWebSocket`): reconnect +
-  exponential backoff + watchdog (forces reconnect on silence). Built and
-  tested (forced-disconnect / watchdog), and runnable standalone. **Wiring it
-  to a live Milestone socket needs the `websockets` dependency (owner approval
-  pending)** — until then the Config-API poll provides state.
+- **Events/State snapshot** (inside the cycle): `startSession → addSubscription
+  → getState` over the ESS WebSocket, ~16,500 states out of one ~4 MB reply.
+  Gives per-camera `source_status` (the Config API has no such field) and the
+  four recording-server state columns. Runs every `interval_s`.
+- **Live Events/State subscription** (`ess_live.py`, spec 20 S7) — **default
+  off**, `[milestone] ess_live = true` to enable. Holds the same subscription
+  open and applies camera `source_status` as events arrive, instead of once a
+  cycle.
+  - *Stream shape (measured live 2026-09-08):* frames are `{"events":[…]}` with
+    no top-level command; each event carries the same six keys a `getState`
+    state does, so one parser serves both. ~61 frames/s, ~200 events/s.
+  - *What is written:* only `Communication*` events, which move
+    `source_status`. Motion and recording churn — 9,354 MotionStart and 2,406
+    RecordingStarted in one 120 s sample — is counted and **dropped**: writing
+    it would bury `state_events` under an estate behaving normally.
+  - *Batching:* deltas are coalesced per camera and written once per
+    `ess_live_flush_s` (default 5 s), never per event. A failed flush keeps its
+    deltas for the next one, and a newer verdict always wins over a retried one.
+  - *Reconnect:* `ws.py`'s backoff, watchdog `ess_live_watchdog_s` (default
+    180 s — higher than ws.py's 60 s because overnight the motion traffic that
+    dominates the stream stops). Every reconnect re-applies the full `getState`
+    snapshot, so anything missed while down is repaired immediately.
+  - *Two writers, on purpose:* the 120 s snapshot keeps running. Both derive the
+    same dimension from the same interface, `write_states` logs a transition
+    only when a value actually moves, and the newer observation wins — so the
+    cycle acts as a repair for anything the stream missed. Recording-server
+    state columns stay the cycle's alone (it owns that row with a
+    replace-on-refresh upsert).
+  - *Observability:* `collector_health` row `milestone_ess_live` plus a live
+    panel on NetMon Status (socket state, reconnects, frames, events, applied,
+    busiest event types). Snapshot states are counted apart from stream events,
+    because a connect stages ~2,500 `CommunicationStarted` states and mixing
+    them makes the stream look like it carries camera changes it does not.
 - **Device identity backfill** (`/api/rest/v1/hardware/{id}/hardwareDriverSettings`):
   MAC, serial, firmware and vendor per hardware record → `cameras.mac/serial/
   firmware/vendor` (migration 025). **This is the only place Milestone exposes a
@@ -172,7 +200,8 @@ Ported from `reference/zabbix/milestone/*`.
     rather than an error — `/hardware?fields=all` reports zero hardware. Treat
     an unexpectedly empty array as a malformed request, not an empty fleet.
 - **Config:** `[milestone] enabled, host, user, pass, scheme, client_id,
-  verify_ssl, interval_s, identity_batch, identity_concurrency`.
+  verify_ssl, interval_s, identity_batch, identity_concurrency, ess_live,
+  ess_live_flush_s, ess_live_watchdog_s`.
 
 Both collectors are standalone-runnable
 (`python -m netmon.collectors.packetfence|milestone --once|--loop`).

@@ -261,8 +261,31 @@ interval_s = 120
 # of the cycle is unaffected and MACs already stored are kept.
 identity_batch = 150
 identity_concurrency = 6
-# Live Events/State WebSocket wiring needs the `websockets` dependency
-# (owner approval pending); the Config-API poll above provides state until then.
+# Live Events/State subscription (spec 20 S7). Default OFF.
+#
+# With this false, the cycle above opens the ESS socket once per interval, reads
+# ~16,500 states out of one getState reply and closes it — so a camera that
+# stops talking is invisible for up to `interval_s`. With it true, a supervised
+# task holds the subscription open and applies camera `source_status` as the
+# events arrive, reconnecting with back-off and re-applying a full snapshot each
+# time it reconnects.
+#
+# Measured on this estate 2026-09-08: ~61 frames/s, ~200 events/s, of which over
+# 99% are motion and recording churn that is deliberately dropped — only
+# Communication* events move state. Deltas are coalesced and written once per
+# `ess_live_flush_s`, never per event.
+#
+# The 120s snapshot keeps running either way and repairs anything the stream
+# missed while reconnecting; both derive the same dimension from the same
+# interface, so they agree, and `write_states` logs a transition only when a
+# value actually moves.
+ess_live = false
+# How often staged deltas are written. Lower is fresher and chattier.
+ess_live_flush_s = 5
+# Reconnect if no frame arrives in this long. Higher than ws.py's 60s default on
+# purpose: overnight the motion traffic that dominates the stream stops, and a
+# 60s watchdog would force a needless 4 MB resync every minute until dawn.
+ess_live_watchdog_s = 180
 
 [threecx]
 # 3CX v20 REST API (voice). Read-only. OAuth2 client-credentials.

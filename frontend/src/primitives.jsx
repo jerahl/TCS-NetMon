@@ -187,9 +187,12 @@ export function StatCell({ label, value, unit, sub, subTone, severity, source, t
   );
 }
 
-export function Stat({ label, value, severity }) {
+export function Stat({ label, value, severity, title }) {
   return (
-    <div className="stat">
+    // `title` is a hover explanation for a number that needs one — a count
+    // whose meaning is not obvious from its label (spec 20 S7's "applied",
+    // which is mostly one connect's baseline rather than live changes).
+    <div className="stat" title={title || undefined}>
       <div className="stat-value" style={{ color: sevColor(severity) }}>{value}</div>
       <div className="stat-label">{label}</div>
     </div>

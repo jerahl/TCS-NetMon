@@ -309,6 +309,13 @@ class NetmonStatus(BaseModel):
     tasks: list[SupervisedTask] = Field(default_factory=list)
     collectors: list[CollectorHealth] = Field(default_factory=list)
     db: NetmonDbStats = Field(default_factory=NetmonDbStats)
+    #: The live Milestone subscription (spec 20 S7), when it is enabled. A
+    #: `collector_health` row alone cannot answer the question this task raises —
+    #: "is the socket up right now, and how often has it had to reconnect" —
+    #: because a stream that reconnects every minute and a stream that has been
+    #: up for a week both write the same successful flushes. Absent when the
+    #: task is off.
+    ess_live: dict | None = None
 
 
 class UiMeta(BaseModel):

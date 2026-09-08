@@ -9,6 +9,7 @@ const entry = `
 export * as surveillance from "./src/pages/surveillance.jsx";
 export * as cameraDetail from "./src/pages/camera_detail.jsx";
 export * as cameras from "./src/pages/cameras.jsx";
+export * as netmonStatus from "./src/pages/netmon_status.jsx";
 export * as cameraSnapshot from "./src/pages/camera_snapshot.jsx";
 export * as primitives from "./src/primitives.jsx";
 export { default as React } from "react";
@@ -23,7 +24,7 @@ const require = createRequire(import.meta.url);
 const mod = { exports: {} };
 new Function("module", "exports", "require", res.outputFiles[0].text)(mod, mod.exports, require);
 const { surveillance: S, cameraDetail: D, cameras: C, cameraSnapshot: SNAP,
-        primitives: P, React, renderToString } = mod.exports;
+        netmonStatus: NS, primitives: P, React, renderToString } = mod.exports;
 
 const CAM = (over) => ({ device_id: 1, name: "chs-cam-1", site: "Central High",
   model: "Bosch FLEXIDOME", recording_state: "up", recording_server: "CHS-BCD-DVR",
@@ -574,6 +575,28 @@ const cases = [
      const text = html.replace(/<!-- -->/g, "");
      if (/>Ack</.test(text)) throw new Error("Ack offered on an already-acked alarm");
      if (!text.includes("Assign")) throw new Error("Assign should still be available");
+   }],
+
+  ["EssLiveCard · a healthy stream", NS.EssLiveCard, {
+    live: { connected: true, reconnects: 0, frames: 7366, events: 24000, applied: 3,
+            last_message_at: Date.now() / 1000,
+            top_event_types: [["MotionStart", 9354], ["MotionEnd", 9311]] } },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (!text.includes("connected")) throw new Error("socket state not shown");
+     // The gap between events and applied is the filter working, and the card
+     // has to make that legible rather than look like a bug.
+     if (!text.includes("24,000") || !text.includes("MotionStart 9,354")) {
+       throw new Error("stream volume not reported");
+     }
+     if (!text.includes("never written")) throw new Error("dropped events unexplained");
+   }],
+
+  ["EssLiveCard · a socket that is down says so", NS.EssLiveCard, {
+    live: { connected: false, reconnects: 12, frames: 0, events: 0, applied: 0,
+            last_message_at: null, top_event_types: [] } },
+   (html) => {
+     if (!html.includes("down")) throw new Error("a dead socket rendered as fine");
    }],
 
   ["EvidenceLockTab · names the reason it is empty", S.EvidenceLockTab, {},

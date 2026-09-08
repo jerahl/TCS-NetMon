@@ -168,6 +168,9 @@ def netmon_status(
 
     started_at = getattr(request.app.state, "started_at", None)
     sessions = getattr(request.app.state, "sessions", None)
+    # Set only when [milestone] ess_live is on; None keeps the field absent
+    # rather than reporting a disconnected stream that was never asked for.
+    ess_live = getattr(request.app.state, "ess_live", None)
     return NetmonStatus(
         version=__version__,
         started_at=(
@@ -183,4 +186,5 @@ def netmon_status(
         tasks=tasks,
         collectors=_collector_health_rows(engine),
         db=_db_stats(engine, sessions.count() if sessions is not None else 0),
+        ess_live=ess_live.status() if ess_live is not None else None,
     )
