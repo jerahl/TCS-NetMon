@@ -181,7 +181,7 @@ ddi_addresses           PK (ip)
   last_seen, lease_state, lease_expires, reservation, device_name,
   interface_name, range_cidr, addr_ref, updated_at
   KEY (mac)          -- the fdb_entries / pf_nodes join key
-  KEY (dns_name)     -- search
+  KEY (dns_name)     -- name lookups (/api/ddi/addresses?q=)
   KEY (range_cidr)
 
 ddi_scopes              PK (scope_ref)
@@ -292,4 +292,11 @@ source. Standalone entry point: `python -m netmon.collectors.micetro --once`.
       range/record counts against Q1/Q2.
 - [ ] Answer Q3 before promising anyone an exhaustion alert.
 - [ ] Frontend: the port-detail MAC card currently renders the PF fields; add
-      the DNS name line (API already returns it).
+      the DNS name line (API already returns it). Nothing in the committed
+      bundle changed in this PR — the enrichment is present in the JSON and
+      ignored by the current UI, which is why it was safe to ship first.
+- [ ] Wire DDI into the ⌘K palette as a fourth group. Deliberately **not** in
+      this PR: it needs a `SearchResults` contract change plus an esbuild
+      rebuild of `netmon/web/`, which is a separate diff from a new collector.
+      `/api/ddi/addresses?q=` already answers the same question by IP,
+      hostname, or MAC in any separator style.

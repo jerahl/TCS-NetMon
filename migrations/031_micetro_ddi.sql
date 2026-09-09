@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS ddi_addresses (
     updated_at     TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (ip),
     KEY idx_ddi_addr_mac (mac),                       -- fdb/pf_nodes join key
-    KEY idx_ddi_addr_dns (dns_name),                  -- /api/search
+    KEY idx_ddi_addr_dns (dns_name),                  -- name lookups
     KEY idx_ddi_addr_range (range_cidr)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
