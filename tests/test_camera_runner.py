@@ -727,3 +727,171 @@ def test_an_unreadable_image_says_what_to_fix(tmp_path, monkeypatch):
     # And it names the fix, because the operator is the one who can apply it.
     assert "readable by the user the service runs as" in str(err.value)
     assert "chown" in str(err.value)
+
+
+# ── the registry learns the new version ───────────────────────────────────
+#
+# Missing this write kept 50 already-updated cameras on the "needs updating"
+# list on 2026-09-09. Their batch items said `after_value = 7.93.0024`,
+# verified by the camera's own API; `cameras.firmware` still read `7.10.0074`,
+# and both pre-flight and the UI key on `cameras.firmware`.
+
+def _fw(engine, device_id):
+    return db.fetch_one(engine, "SELECT firmware FROM cameras WHERE device_id = :d",
+                        {"d": device_id})["firmware"]
+
+
+def test_a_verified_flash_records_the_new_version_in_the_registry(tmp_path):
+    engine = _seed(f"sqlite:///{tmp_path/'r.db'}")
+    cfg = _cfg(tmp_path)
+    batch_id = _batch(engine, device_ids=[1, 2, 3])
+    # `vendor_reads` is keyed by IP: the camera answering for itself.
+    fleet = FakeCameraFleet(vendor_reads={"10.1.1.1": "7.90.0123",
+                                          "10.1.1.2": "7.90.0123",
+                                          "10.1.1.3": "7.90.0123"})
+    _run(engine, cfg, batch_id, fleet)
+
+    items = _items(engine, batch_id)
+    assert all(i["status"] == ops.VERIFIED for i in items.values())
+    # The point: the registry, not just the batch item.
+    for device_id in (1, 2, 3):
+        assert _fw(engine, device_id) == "7.90.0123"
+
+
+def test_the_registry_write_is_what_stops_a_re_offer(tmp_path):
+    """After a verified flash, pre-flight must refuse the same image."""
+    engine = _seed(f"sqlite:///{tmp_path/'r.db'}")
+    cfg = _cfg(tmp_path)
+    image = db.fetch_one(engine, "SELECT * FROM firmware_images WHERE id = 1")
+
+    before = ops.preflight_firmware(engine, cfg, [1], dict(image), now=NOW)
+    assert [r["device_id"] for r in before.allowed] == [1]
+
+    batch_id = _batch(engine, device_ids=[1])
+    _run(engine, cfg, batch_id,
+         FakeCameraFleet(vendor_reads={"10.1.1.1": "7.90.0123"}))
+
+    after = ops.preflight_firmware(engine, cfg, [1], dict(image), now=NOW)
+    assert after.allowed == []
+    assert "already on" in " ".join(r.reason for r in after.refused).lower()
+
+
+def test_a_dry_run_never_touches_the_registry(tmp_path):
+    engine = _seed(f"sqlite:///{tmp_path/'r.db'}")
+    cfg = _cfg(tmp_path)
+    batch_id = _batch(engine, device_ids=[1, 2, 3], dry=True)
+    _run(engine, cfg, batch_id,
+         FakeCameraFleet(vendor_reads={"10.1.1.1": "7.90.0123"}))
+    for device_id in (1, 2, 3):
+        assert _fw(engine, device_id) == "7.83.0027"
+
+
+def test_an_unprovable_version_is_not_recorded_so_the_retry_stays_possible(tmp_path):
+    """A bare Bosch `790` must NOT reach the registry.
+
+    `same_release` cannot read it, and pre-flight refuses an unreadable version
+    outright — so storing it would convert a camera that needs retrying into a
+    blocked one. 888 cameras here report versions in that form. The reading is
+    still kept where the evidence belongs: on the batch item.
+    """
+    engine = _seed(f"sqlite:///{tmp_path/'r.db'}")
+    cfg = _cfg(tmp_path)
+    batch_id = _batch(engine, device_ids=[1])
+    _run(engine, cfg, batch_id, FakeCameraFleet(vendor_reads={"10.1.1.1": "790"}))
+
+    item = _items(engine, batch_id)[1]
+    assert item["status"] == ops.INDETERMINATE
+    assert item["after_value"] == "790"          # evidence retained
+    assert _fw(engine, 1) == "7.83.0027"         # registry untouched
+    image = db.fetch_one(engine, "SELECT * FROM firmware_images WHERE id = 1")
+    still = ops.preflight_firmware(engine, cfg, [1], dict(image), now=NOW)
+    assert [r["device_id"] for r in still.allowed] == [1]
+
+
+def test_a_failed_flash_does_not_claim_the_new_version(tmp_path):
+    """A camera that never came back must not be recorded as updated."""
+    engine = _seed(f"sqlite:///{tmp_path/'r.db'}")
+    cfg = _cfg(tmp_path)
+    batch_id = _batch(engine, device_ids=[1])
+    _run(engine, cfg, batch_id, FakeCameraFleet())     # answers nothing
+
+    assert _items(engine, batch_id)[1]["status"] == ops.FAILED
+    assert _fw(engine, 1) == "7.83.0027"
+
+
+def test_record_observed_firmware_ignores_an_empty_reading(tmp_path):
+    from netmon.cameras.runner import record_observed_firmware
+    engine = _seed(f"sqlite:///{tmp_path/'r.db'}")
+    assert record_observed_firmware(engine, 1, None) is False
+    assert record_observed_firmware(engine, 1, "   ") is False
+    assert _fw(engine, 1) == "7.83.0027"
+    assert record_observed_firmware(engine, 1, "7.90.0123") is True
+    # Idempotent: no change means no write.
+    assert record_observed_firmware(engine, 1, "7.90.0123") is False
+
+
+# ── the repair for drift that already happened ────────────────────────────
+
+def _verified_item(engine, device_id, after, *, finished, status=ops.VERIFIED):
+    db.execute(engine, """
+        INSERT INTO camera_batches (op, firmware_id, status, dry_run, canary_count,
+            ring_size, max_concurrent, abort_pct, reboot_timeout_s, created_by, created_at)
+        VALUES ('firmware_update', 1, 'done', 0, 1, 10, 3, 10, 60, 'sappleby', :t)""",
+        {"t": NOW})
+    batch_id = int(db.fetch_one(engine, "SELECT MAX(id) AS id FROM camera_batches")["id"])
+    db.execute(engine, """
+        INSERT INTO camera_batch_items (batch_id, device_id, ring, status, after_value,
+            finished_at) VALUES (:b,:d,0,:s,:a,:f)""",
+        {"b": batch_id, "d": device_id, "s": status, "a": after, "f": finished})
+
+
+def test_reconcile_reports_drift_without_writing(tmp_path):
+    from netmon.cameras.runner import reconcile_observed_firmware
+    engine = _seed(f"sqlite:///{tmp_path/'r.db'}")
+    _verified_item(engine, 1, "7.93.0024", finished=NOW)
+
+    drift = reconcile_observed_firmware(engine)
+    assert [(d["device_id"], d["registry"], d["after_value"]) for d in drift] == [
+        (1, "7.83.0027", "7.93.0024")]
+    assert _fw(engine, 1) == "7.83.0027"          # report only
+
+
+def test_reconcile_apply_corrects_the_registry(tmp_path):
+    from netmon.cameras.runner import reconcile_observed_firmware
+    engine = _seed(f"sqlite:///{tmp_path/'r.db'}")
+    _verified_item(engine, 1, "7.93.0024", finished=NOW)
+    _verified_item(engine, 2, "7.93.0024", finished=NOW)
+
+    drift = reconcile_observed_firmware(engine, apply=True)
+    assert len(drift) == 2 and all(d["fixed"] for d in drift)
+    assert _fw(engine, 1) == "7.93.0024" and _fw(engine, 2) == "7.93.0024"
+    # Nothing left to do the second time.
+    assert reconcile_observed_firmware(engine, apply=True) == []
+
+
+def test_reconcile_ignores_dry_run_items(tmp_path):
+    """A `would_run` never touched the camera."""
+    from netmon.cameras.runner import reconcile_observed_firmware
+    engine = _seed(f"sqlite:///{tmp_path/'r.db'}")
+    _verified_item(engine, 1, None, finished=NOW, status=ops.WOULD_RUN)
+    assert reconcile_observed_firmware(engine, apply=True) == []
+    assert _fw(engine, 1) == "7.83.0027"
+
+
+def test_reconcile_ignores_a_failed_item(tmp_path):
+    from netmon.cameras.runner import reconcile_observed_firmware
+    engine = _seed(f"sqlite:///{tmp_path/'r.db'}")
+    _verified_item(engine, 1, "7.83.0027", finished=NOW, status=ops.FAILED)
+    assert reconcile_observed_firmware(engine, apply=True) == []
+
+
+def test_reconcile_takes_the_newest_verified_flash(tmp_path):
+    """Two rolls; the later one is the truth."""
+    from netmon.cameras.runner import reconcile_observed_firmware
+    engine = _seed(f"sqlite:///{tmp_path/'r.db'}")
+    _verified_item(engine, 1, "7.90.0123", finished=NOW - timedelta(days=2))
+    _verified_item(engine, 1, "7.93.0024", finished=NOW)
+
+    drift = reconcile_observed_firmware(engine, apply=True)
+    assert len(drift) == 1
+    assert _fw(engine, 1) == "7.93.0024"

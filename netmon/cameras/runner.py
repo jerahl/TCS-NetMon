@@ -403,6 +403,14 @@ class BatchRunner:
         # counts is the device coming back and reporting the new version.
         status, reported, by = await self._verify(item, base, str(image["version"]),
                                                   int(batch["reboot_timeout_s"]))
+        # The registry has to learn what the camera just told us, or this device
+        # is offered the same image again on the next roll (see
+        # `record_observed_firmware`). Only reached on a real run — the dry path
+        # returned at WOULD_RUN long before this — and only on a VERIFIED
+        # reading, because an unprovable one would block the retry this camera
+        # still needs.
+        if status == ops.VERIFIED:
+            record_observed_firmware(self.engine, device_id, reported)
         _set_item(self.engine, item_id, status=status, finished_at=_now(),
                   after_value=reported, verified_by=by, audit_id=audit.audit_id,
                   message={
@@ -511,6 +519,121 @@ class BatchRunner:
         return ((row or {}).get("firmware"), "milestone")
 
 
+def record_observed_firmware(engine: Engine, device_id: int, reported: str | None) -> bool:
+    """Persist the version a camera reported about itself. Returns True if changed.
+
+    Without this the registry keeps the *pre-flash* version forever and every
+    updated camera stays on the "needs updating" list — which is exactly what
+    happened to 50 cameras on 2026-09-09. The batch item recorded
+    ``after_value = 7.93.0024``, verified by the camera's own API, while
+    ``cameras.firmware`` still read ``7.10.0074``; pre-flight
+    (`ops.preflight_firmware`) and the UI both key on `cameras.firmware`, so all
+    50 were offered the image they already had.
+
+    Safe against the Milestone collector clobbering it back: the identity
+    backfill has no refresh pass (it queues on "not asked"), so once
+    `identity_at` is set it reads these values *out of this row* and writes the
+    same ones back. A vendor read is therefore durable — and it is the better
+    number anyway, being the device's own answer rather than Milestone's cached
+    `hardwareDriverSettings`, which is what was stale here.
+
+    Callers must pass only a **verified** reading. Recording an unprovable one
+    would be actively harmful, which is not obvious until you try it: a bare
+    Bosch ``790`` makes `firmware.same_release` return None, and pre-flight
+    refuses an unreadable version outright ("cannot read firmware ... refusing
+    rather than guessing"). So storing it would turn a camera that merely needs
+    retrying into one that is blocked — at a scale that matters, since 888
+    cameras on this estate report versions in that unparseable form. The
+    reading is not lost either way: it stays on the batch item as
+    ``after_value``, which is where the evidence belongs.
+    """
+    reported = (reported or "").strip()
+    if not reported:
+        return False
+    changed = db.execute(
+        engine,
+        "UPDATE cameras SET firmware = :f, updated_at = :now "
+        "WHERE device_id = :d AND (firmware IS NULL OR firmware <> :f)",
+        {"f": reported, "now": _now(), "d": device_id},
+    )
+    if changed:
+        log.info("camera %s firmware recorded as %s", device_id, reported)
+    return bool(changed)
+
+
+def reconcile_observed_firmware(engine: Engine, *, apply: bool = False) -> list[dict]:
+    """Find (and optionally fix) cameras whose registry firmware lags a verified flash.
+
+    The repair half of the bug `record_observed_firmware` prevents. Any camera
+    with a VERIFIED batch item is known to have reported ``after_value`` back to
+    NetMon; if ``cameras.firmware`` disagrees, the registry simply never learned
+    it. The newest verified item per device wins.
+
+    ``apply=False`` reports without writing, because a bulk correction to the
+    registry should be readable before it is run. Dry-run items are excluded by
+    the status filter — a `would_run` never touched the camera and its
+    ``after_value`` is NULL.
+    """
+    rows = db.fetch_all(
+        engine,
+        "SELECT i.device_id, i.after_value, i.finished_at, c.firmware AS registry, "
+        "       d.name "
+        "FROM camera_batch_items i "
+        "JOIN cameras c ON c.device_id = i.device_id "
+        "JOIN devices d ON d.id = i.device_id "
+        f"WHERE i.status = '{ops.VERIFIED}' AND i.after_value IS NOT NULL "
+        "  AND (c.firmware IS NULL OR c.firmware <> i.after_value) "
+        "ORDER BY i.device_id, i.finished_at DESC, i.id DESC",
+    )
+    newest: dict[int, dict] = {}
+    for r in rows:
+        newest.setdefault(int(r["device_id"]), dict(r))
+    drift = list(newest.values())
+    if apply:
+        for r in drift:
+            r["fixed"] = record_observed_firmware(
+                engine, int(r["device_id"]), str(r["after_value"]))
+        log.warning("firmware reconcile: corrected %d camera(s) whose registry "
+                    "lagged a verified flash", sum(1 for r in drift if r.get("fixed")))
+    return drift
+
+
+def main(argv: list[str] | None = None) -> int:
+    """``python -m netmon.cameras.runner --reconcile-firmware [--apply]``.
+
+    A one-shot, because the drift it repairs is historical: once
+    `record_observed_firmware` is in place, new flashes record themselves.
+    """
+    import argparse
+
+    from netmon import db as _db
+    from netmon.config import load_config
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--reconcile-firmware", action="store_true", required=True,
+                        help="report cameras whose registry firmware lags a verified flash")
+    parser.add_argument("--apply", action="store_true",
+                        help="write the corrections (default: report only)")
+    parser.add_argument("--config", default=None)
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
+    cfg = load_config(args.config)
+    engine = _db.make_engine(cfg.db.url)
+    drift = reconcile_observed_firmware(engine, apply=args.apply)
+    if not drift:
+        print("no drift: every verified flash is reflected in the registry")
+        return 0
+    print(f"{len(drift)} camera(s) {'corrected' if args.apply else 'need correcting'}:")
+    for r in drift[:60]:
+        print(f"  {r['name']:<40} {r['registry'] or '-':>12} -> {r['after_value']}")
+    if len(drift) > 60:
+        print(f"  ... and {len(drift) - 60} more")
+    if not args.apply:
+        print("\nre-run with --apply to write these")
+    return 0
+
+
 def _base_url(item: dict) -> str:
     """Where this camera answers, from the stored row — never a caller's string.
 
@@ -536,3 +659,7 @@ def _as_dt(value: Any) -> datetime:
 
 def image_models(image: dict) -> list[str]:
     return list(json.loads(image.get("models") or "[]"))
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())

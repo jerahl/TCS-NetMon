@@ -1193,3 +1193,50 @@ def test_supervisor_timeout_has_headroom_over_the_interval():
     assert col.timeout_s > col.interval_s * 2, "no headroom over the interval"
     # A long interval still scales rather than being capped at the floor.
     assert MilestoneCollector(e, FakeMs(), interval_s=600.0).timeout_s == 1500.0
+
+
+def test_a_stale_echo_cannot_undo_a_verified_flash(tmp_path):
+    """The 2026-09-09 bug: 50 flashed cameras kept their pre-flash version.
+
+    `replace_rows` rewrites the whole camera row from identity captured at the
+    start of the cycle, so echoing `firmware` back silently reverted anything
+    `cameras.runner` had recorded in between. Firmware is now written only when
+    Milestone was actually just asked, so a value NetMon learned from the
+    camera itself survives.
+    """
+    e = _identity_engine(tmp_path, ["C1"])
+    fake = FakeMs()
+    fake.cameras_data = [_cam("C1", "HW1")]
+    fake.hardware_data = [{"id": "HW1"}]
+    fake.settings_data = {"HW1": {"macAddress": "00075FD83950",
+                                  "firmwareVersion": "7.10.0074"}}
+    col = MilestoneCollector(e, fake)
+    asyncio.run(col.run_once())
+    assert db.fetch_one(e, "SELECT firmware FROM cameras")["firmware"] == "7.10.0074"
+
+    # A flash happens: the camera reported the new version and the runner
+    # recorded it. Milestone still believes the old one.
+    from netmon.cameras.runner import record_observed_firmware
+    device_id = db.fetch_one(e, "SELECT device_id FROM cameras")["device_id"]
+    record_observed_firmware(e, int(device_id), "7.93.0024")
+
+    fake.settings_calls.clear()
+    asyncio.run(col.run_once())
+    assert fake.settings_calls == []          # nothing re-asked, so nothing to write
+    assert db.fetch_one(e, "SELECT firmware FROM cameras")["firmware"] == "7.93.0024"
+    # And the MAC is still intact — the fix must not blank the other fields.
+    assert db.fetch_one(e, "SELECT mac FROM cameras")["mac"] == "00:07:5f:d8:39:50"
+
+
+def test_a_replaced_device_still_learns_its_firmware(tmp_path):
+    """Fresh hardware must still get firmware from Milestone.
+
+    Gating the write on "asked this cycle" must not mean "never written".
+    """
+    e = _identity_engine(tmp_path, ["C1"])
+    fake = FakeMs()
+    fake.cameras_data = [_cam("C1", "HW1")]
+    fake.hardware_data = [{"id": "HW1"}]
+    fake.settings_data = {"HW1": {"firmwareVersion": "8.00.0001"}}
+    asyncio.run(MilestoneCollector(e, fake).run_once())
+    assert db.fetch_one(e, "SELECT firmware FROM cameras")["firmware"] == "8.00.0001"
