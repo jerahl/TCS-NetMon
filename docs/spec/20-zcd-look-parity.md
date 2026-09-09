@@ -1290,6 +1290,38 @@ Three details that are decisions:
     TMS 130 · Southview 122 · Bryant High 110 · TASPA 107 · University Place 103
     · Eastwood Middle 100 · Rock Quarry 99 · TCTA 76 · Northridge High 72 · …
 
+### S8 — the proving ground lifted, 2026-09-09
+
+`proving_device_id = 0` at the owner's direction, after alb-cam-44 went
+7.83.0027 → 7.93.0024 verified by the camera's own RCP+ read. Every camera that
+passes pre-flight is now in scope; the config comment records what was lifted
+and when, and setting a device id back re-narrows the machinery to one camera
+without a deploy.
+
+**What that changes, stated plainly:** the canary is no longer a camera somebody
+nominated in advance. It is now the first camera of whatever batch is created —
+so *which camera is first* has become a real choice, made by whoever assembles
+the batch, and the picker's name-ordered selection decides it by default.
+
+**What still stands between a request and a camera** (unchanged, and the reason
+lifting this one gate is not the same as opening the door):
+
+* the model allow-list — 2 of 18 Bosch models on this estate, so 1,170 of 2,651
+  cameras are even candidates;
+* the vendor CPP table, exactly matched, with 419 CPP4 cameras and 69 unlisted
+  ones refused outright;
+* live reachability on both probes, plus Milestone's own verdict;
+* no active maintenance window;
+* the SHA-256 re-checked against the file on disk at run time;
+* a live platform probe immediately before each upload, which fails the item if
+  it contradicts the table;
+* canary → rings of 10 → halt above 10% failures, 50 per batch;
+* an audit row written before any bytes leave, per camera.
+
+Measured at TASPA the moment the gate came off: **137 up cameras → 106 allowed,
+31 refused**, every refusal on the allow-list or already-current. That is what a
+school looks like now: three batches, and 31 cameras this image was never for.
+
 **Fleet shape for the build:** 2,528 of 2,651 cameras are Bosch (2,019
 `Bosch1ch` + 509 `Bosch`) — 95%, confirming Bosch as the pilot vendor; 32 Axis;
 91 ONVIF, which have no snapshot path either. 84 distinct model×firmware pairs

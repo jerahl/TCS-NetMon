@@ -402,7 +402,12 @@ use_snapshot_credentials = false
 # pre-flight refuses every camera except this device id — whatever a batch asks
 # for. It exists because deferring the setting catalogue means firmware is the
 # first thing this machinery does, and the first live batches belong on one
-# nominated spare rather than on a school. 0 disables the restriction.
+# nominated camera rather than on a school.
+#
+# 0 = no restriction. Set an id while proving a new vendor, a new platform or a
+# new image; clear it once one camera has gone through and verified. Note what
+# clearing it changes: the canary stops being a camera somebody chose in advance
+# and becomes the first camera of whatever batch is created.
 proving_device_id = 0
 #
 # Vetted firmware images, one directory per vendor, outside the repo for the
