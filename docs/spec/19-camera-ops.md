@@ -913,6 +913,52 @@ the REST gateway maps `InvokeMethod` at all is unknown, and the only way to
 find out by experiment is POSTing guessed paths at a production VMS — where a
 wrong guess could disable hardware or start an unintended flash. Not done.
 
+### Resolved 2026-09-09: the owner supplied the endpoint, and it is BUILT
+
+The owner gave the path shape:
+``/api/config/v1/recordingServers/<rs>/hardwares/<hw>/tasks/UpdateHardware``.
+Two corrections from probing it live, both now in the code:
+
+- The prefix is **`/api/rest/v1`**, not `/api/config/v1` — the latter 404s at
+  the IIS level on this gateway (`co-milestone`, XProtect 25.2).
+- The resource is **`hardware`** singular; `hardwares` answers a JSON 404
+  "Unknown resource: hardwares".
+
+So the working path is
+``POST /api/rest/v1/recordingServers/{rs}/hardware/{hw}/tasks/UpdateHardware``.
+Evidence it is a real route: `GET` on it returns an IIS **500** where a
+genuinely unknown path returns a JSON 404 — the router matched and the wrong
+verb blew up. The nested read
+`GET /api/rest/v1/recordingServers/{rs}/hardware/{hw}` answers 200.
+
+**Built, and NOT yet executed against the live VMS.** The sandbox refused the
+canary POST, so this ships fixture-tested only, which is also why
+`[camera_ops] milestone_refresh` defaults **off** (§4.2). The first live call
+should be one camera with somebody watching.
+
+Shape of the implementation:
+
+- `MilestoneClient.update_hardware(hardware_id)` — the **only** non-GET in that
+  client besides the OAuth token, guarded by a test that parses the module AST.
+  Hardware ids are GUID-validated because they reach a URL path on the write
+  side. The parent recording server is resolved from `relations.parent` at call
+  time rather than stored: hardware does get moved between servers, and one
+  extra GET is cheaper than a migration plus a staleness bug. Never retried — a
+  task that timed out may still be running.
+- `ACTIONS["milestone_update_hardware"]` — in the same audited registry as the
+  D4 four, so what NetMon sent to a source lands in one table. Excluded from
+  `/api/actions` like `camera_firmware_update`: it is not an operator
+  row-action.
+- The runner calls it after a **verified** flash only, and **best effort**: a
+  failed refresh is audited and logged, never converted into a failed flash,
+  because the camera has already confirmed the new firmware to NetMon's face.
+- `python -m netmon.cameras.runner --refresh-milestone [--apply]` repairs the
+  cameras flashed before this existed. Scoped to devices with a verified flash
+  and sequential on purpose — a re-detect makes the recording server talk to
+  the device, and 50 at once is a load nobody asked for.
+
+### Older analysis — the two ways forward, before the endpoint was known
+
 Two ways forward, both owner decisions:
 
 1. **Confirm the REST mapping** (Milestone support, or watch what Management

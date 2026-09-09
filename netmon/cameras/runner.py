@@ -123,7 +123,8 @@ class BatchRunner:
     def __init__(self, engine: Engine, cfg: Any, batch_id: int, *,
                  actor: str = "netmon", role: str = "admin",
                  client_factory: Any = None, sleep: Any = None,
-                 milestone_firmware: Any = None) -> None:
+                 milestone_firmware: Any = None,
+                 milestone_client: Any = None) -> None:
         self.engine = engine
         self.cfg = cfg
         self.batch_id = batch_id
@@ -135,6 +136,9 @@ class BatchRunner:
         self._client_factory = client_factory
         self._sleep = sleep or asyncio.sleep
         self._milestone_firmware = milestone_firmware
+        #: Callable returning a MilestoneClient, or None. Injected so the
+        #: runner never builds one itself and tests never reach a network.
+        self._milestone_client = milestone_client
         self.aborted = False
 
     # ── guards ────────────────────────────────────────────────────────────
@@ -235,7 +239,9 @@ class BatchRunner:
     def _rings(self) -> list[tuple[int, list[dict]]]:
         rows = db.fetch_all(
             self.engine,
-            "SELECT i.*, d.name, c.ip, c.model, c.vendor, c.https_enabled, c.https_port "
+            "SELECT i.*, d.name, c.ip, c.model, c.vendor, c.https_enabled, c.https_port, "
+            # The Milestone hardware GUID, for the post-flash VMS refresh.
+            "c.hardware_id "
             "FROM camera_batch_items i "
             "JOIN devices d ON d.id = i.device_id "
             "LEFT JOIN cameras c ON c.device_id = i.device_id "
@@ -411,6 +417,14 @@ class BatchRunner:
         # still needs.
         if status == ops.VERIFIED:
             record_observed_firmware(self.engine, device_id, reported)
+            # NetMon's registry is now right, but Milestone's is not: its
+            # `hardwareDriverSettings.firmwareVersion` is a cache that does not
+            # move after a flash. Ask it to re-detect. Off by default, and
+            # deliberately *after* the item's own outcome is decided — a failed
+            # refresh must never turn a good flash into a failure, so it is
+            # logged and audited rather than raised.
+            if getattr(self.cfg.camera_ops, "milestone_refresh", False):
+                await self._refresh_in_milestone(item, device_id, target)
         _set_item(self.engine, item_id, status=status, finished_at=_now(),
                   after_value=reported, verified_by=by, audit_id=audit.audit_id,
                   message={
@@ -421,6 +435,49 @@ class BatchRunner:
                                   f"(last seen {reported!r})",
                   }.get(status))
         return status
+
+    async def _refresh_in_milestone(self, item: dict, device_id: int,
+                                    target: str) -> None:
+        """Ask Milestone to re-read this camera, audited, never fatal.
+
+        Best-effort by design. The flash already succeeded and was verified
+        against the camera itself; if the VMS will not re-detect, the right
+        outcome is a loud audit row and a warning, not a batch that reports
+        failure for a camera which is demonstrably running the new firmware.
+        """
+        hardware_id = str(item.get("hardware_id") or "").strip()
+        if not hardware_id:
+            log.warning("no Milestone hardware id for %s — cannot refresh the VMS view",
+                        item.get("name"))
+            return
+        try:
+            spec = action_or_refuse("milestone_update_hardware")
+        except ActionRefused as exc:
+            log.error("milestone refresh refused: %s", exc)
+            return
+        client = self._milestone_client() if self._milestone_client else None
+        if client is None:
+            log.warning("milestone refresh enabled but no Milestone client is "
+                        "configured — skipping for %s", item.get("name"))
+            return
+        with AuditedAction(self.engine, spec, actor=self.actor, role=self.role,
+                           device_id=device_id, target=target,
+                           params={"hardware_id": hardware_id,
+                                   "batch_id": self.batch_id}) as audit:
+            try:
+                status_code, body = await client.update_hardware(hardware_id)
+            except Exception as exc:                      # noqa: BLE001 — never fatal
+                audit.failed(f"UpdateHardware failed: {exc!r}")
+                log.warning("milestone refresh failed for %s: %r", item.get("name"), exc)
+                return
+            if status_code >= 400:
+                audit.failed(f"UpdateHardware answered HTTP {status_code}: {body[:200]}",
+                             http_status=status_code)
+                log.warning("milestone refresh for %s answered HTTP %s",
+                            item.get("name"), status_code)
+            else:
+                audit.ok("Milestone asked to re-detect the camera",
+                         http_status=status_code)
 
     async def _verify(self, item: dict, base: str, version: str,
                       timeout_s: int) -> tuple[str, str | None, str | None]:
@@ -598,6 +655,84 @@ def reconcile_observed_firmware(engine: Engine, *, apply: bool = False) -> list[
     return drift
 
 
+def milestone_stale_cameras(engine: Engine) -> list[dict]:
+    """Cameras NetMon believes are on a version, keyed for a VMS re-detect.
+
+    Scoped to cameras with a verified flash on record — the population whose
+    Milestone entry is known to be a stale cache — rather than the whole fleet,
+    so a bulk refresh cannot turn into 2,651 re-detects.
+    """
+    return [dict(r) for r in db.fetch_all(
+        engine,
+        "SELECT DISTINCT c.device_id, d.name, c.hardware_id, c.firmware "
+        "FROM camera_batch_items i "
+        "JOIN cameras c ON c.device_id = i.device_id "
+        "JOIN devices d ON d.id = i.device_id "
+        f"WHERE i.status = '{ops.VERIFIED}' AND i.after_value IS NOT NULL "
+        "  AND c.hardware_id IS NOT NULL "
+        "ORDER BY d.name",
+    )]
+
+
+def _cli_refresh_milestone(engine: Engine, cfg: Any, *, apply: bool) -> int:
+    """``--refresh-milestone`` — the repair for cameras already flashed.
+
+    The runner refreshes newly flashed cameras itself; this is for the ones
+    flashed before that existed. Sequential on purpose: a re-detect makes the
+    recording server talk to the device, and 50 at once is not a load anyone
+    asked for.
+    """
+    import asyncio as _asyncio
+
+    from netmon.collectors.milestone_client import MilestoneClient, MilestoneError
+
+    rows = milestone_stale_cameras(engine)
+    if not rows:
+        print("no cameras with a verified flash and a Milestone hardware id")
+        return 0
+    print(f"{len(rows)} camera(s) with a verified flash:")
+    for r in rows[:60]:
+        print(f"  {r['name']:<40} registry {r['firmware']}")
+    if len(rows) > 60:
+        print(f"  ... and {len(rows) - 60} more")
+    if not apply:
+        print("\nre-run with --apply to ask Milestone to re-detect these")
+        return 0
+
+    s = (cfg.sources.get("milestone").settings if cfg.sources.get("milestone") else {})
+    try:
+        client = MilestoneClient(
+            host=(s.get("host") or "").strip(), user=(s.get("user") or "").strip(),
+            password=s.get("pass") or "", scheme=(s.get("scheme") or "https").strip(),
+            client_id=(s.get("client_id") or "GrantValidatorClient").strip(),
+            verify_ssl=str(s.get("verify_ssl", "true")).strip().lower()
+            in ("1", "true", "yes", "on"))
+    except MilestoneError as exc:
+        print(f"error: {exc}")
+        return 1
+
+    async def go() -> tuple[int, int]:
+        ok = bad = 0
+        for r in rows:
+            try:
+                code, body = await client.update_hardware(str(r["hardware_id"]))
+            except Exception as exc:                      # noqa: BLE001
+                print(f"  FAIL {r['name']}: {exc!r}")
+                bad += 1
+                continue
+            if code >= 400:
+                print(f"  HTTP {code} {r['name']}: {body[:120]}")
+                bad += 1
+            else:
+                print(f"  ok   {r['name']} (HTTP {code})")
+                ok += 1
+        return ok, bad
+
+    ok, bad = _asyncio.run(go())
+    print(f"\nasked Milestone to re-detect {ok} camera(s); {bad} failed")
+    return 0 if bad == 0 else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     """``python -m netmon.cameras.runner --reconcile-firmware [--apply]``.
 
@@ -610,16 +745,29 @@ def main(argv: list[str] | None = None) -> int:
     from netmon.config import load_config
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--reconcile-firmware", action="store_true", required=True,
+    parser.add_argument("--reconcile-firmware", action="store_true",
                         help="report cameras whose registry firmware lags a verified flash")
+    parser.add_argument("--refresh-milestone", action="store_true",
+                        help="ask Milestone to re-detect cameras whose VMS-cached "
+                             "firmware disagrees with the registry")
     parser.add_argument("--apply", action="store_true",
-                        help="write the corrections (default: report only)")
+                        help="actually do it (default: report only)")
     parser.add_argument("--config", default=None)
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
+    if not (args.reconcile_firmware or args.refresh_milestone):
+        parser.error("choose --reconcile-firmware and/or --refresh-milestone")
     cfg = load_config(args.config)
     engine = _db.make_engine(cfg.db.url)
+    from netmon import settings as _settings
+    cfg = _settings.overlay_config(cfg, engine)   # effective config, as the app sees it
+
+    if args.refresh_milestone:
+        rc = _cli_refresh_milestone(engine, cfg, apply=args.apply)
+        if not args.reconcile_firmware:
+            return rc
+
     drift = reconcile_observed_firmware(engine, apply=args.apply)
     if not drift:
         print("no drift: every verified flash is reflected in the registry")

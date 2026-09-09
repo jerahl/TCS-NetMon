@@ -49,7 +49,7 @@ class ActionRefused(ActionError):
 @dataclass(frozen=True)
 class ActionSpec:
     key: str
-    source: str          # xiq | packetfence | rconfig
+    source: str          # xiq | packetfence | rconfig | camera | milestone
     label: str
     # What it does to the device, in one line, for the audit trail and the UI's
     # confirmation prompt. Written plainly on purpose: an operator about to
@@ -86,6 +86,22 @@ ACTIONS: dict[str, ActionSpec] = {
         effect="Uploads a vetted firmware image straight to the camera; it reboots and "
                "stops recording for the duration, and a wrong image needs a site visit.",
         disruptive=True,
+    ),
+    # NetMon's first write to Milestone (owner sign-off 2026-09-09, endpoint
+    # supplied by the owner). Not a device action at all: it asks the VMS to
+    # re-read a camera it already manages, because
+    # `hardwareDriverSettings.firmwareVersion` is a *cache* that does not move
+    # after a flash — 50 cameras sat on 7.10.0074 in Milestone while the devices
+    # themselves reported 7.93.0024. Read-only in effect on the camera, but a
+    # POST to the VMS, so it belongs in this registry like everything else that
+    # leaves the building.
+    "milestone_update_hardware": ActionSpec(
+        key="milestone_update_hardware", source="milestone",
+        label="Refresh hardware in Milestone",
+        effect="Milestone re-detects this camera and re-reads its driver settings, "
+               "including firmware. The camera is not restarted, but Milestone may "
+               "briefly drop and re-establish the device connection.",
+        disruptive=False,
     ),
     "ap_reboot": ActionSpec(
         key="ap_reboot", source="xiq", label="Reboot AP",

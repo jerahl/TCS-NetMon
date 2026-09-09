@@ -895,3 +895,179 @@ def test_reconcile_takes_the_newest_verified_flash(tmp_path):
     drift = reconcile_observed_firmware(engine, apply=True)
     assert len(drift) == 1
     assert _fw(engine, 1) == "7.93.0024"
+
+
+# ── the Milestone hardware refresh (owner sign-off 2026-09-09) ─────────────
+#
+# NetMon's only write to Milestone. Fixture-tested only — it has never been
+# executed against a live VMS, which is why the config flag defaults off.
+
+class FakeMilestone:
+    """Records UpdateHardware calls; can fail on demand."""
+
+    def __init__(self, *, status=200, raise_with=None):
+        self.status = status
+        self.raise_with = raise_with
+        self.calls: list[str] = []
+
+    async def update_hardware(self, hardware_id):
+        self.calls.append(hardware_id)
+        if self.raise_with:
+            raise self.raise_with
+        return self.status, "{}"
+
+
+def _seed_hw(engine, device_id=1, hardware_id="d6b460a4-2f7e-46f1-a3e8-e29110c679cd"):
+    db.execute(engine, "UPDATE cameras SET hardware_id = :h WHERE device_id = :d",
+               {"h": hardware_id, "d": device_id})
+
+
+def _run_ms(engine, cfg, batch_id, fleet, ms):
+    _set_upload_field("net.bin")
+
+    async def no_sleep(_s):
+        return None
+
+    runner = BatchRunner(engine, cfg, batch_id, actor="sappleby", role="admin",
+                         client_factory=fleet.client, sleep=no_sleep,
+                         milestone_firmware=lambda d: None,
+                         milestone_client=lambda: ms)
+    return asyncio.run(runner.run()), runner
+
+
+def _audit(engine, key="milestone_update_hardware"):
+    return db.fetch_all(engine, "SELECT * FROM action_audit WHERE action = :k",
+                        {"k": key})
+
+
+def test_a_verified_flash_asks_milestone_to_re_detect(tmp_path):
+    engine = _seed(f"sqlite:///{tmp_path/'r.db'}")
+    _seed_hw(engine)
+    cfg = _cfg(tmp_path, milestone_refresh="true")
+    batch_id = _batch(engine, device_ids=[1])
+    ms = FakeMilestone()
+    _run_ms(engine, cfg, batch_id, FakeCameraFleet(vendor_reads={"10.1.1.1": "7.90.0123"}), ms)
+
+    assert ms.calls == ["d6b460a4-2f7e-46f1-a3e8-e29110c679cd"]
+    rows = _audit(engine)
+    assert len(rows) == 1 and rows[0]["outcome"] == "ok"
+
+
+def test_the_refresh_is_off_by_default(tmp_path):
+    """§4.2: it is a brand-new write to a VMS and has never run live."""
+    engine = _seed(f"sqlite:///{tmp_path/'r.db'}")
+    _seed_hw(engine)
+    cfg = _cfg(tmp_path)                       # no milestone_refresh
+    assert cfg.camera_ops.milestone_refresh is False
+    batch_id = _batch(engine, device_ids=[1])
+    ms = FakeMilestone()
+    _run_ms(engine, cfg, batch_id, FakeCameraFleet(vendor_reads={"10.1.1.1": "7.90.0123"}), ms)
+    assert ms.calls == []
+    assert _audit(engine) == []
+
+
+def test_a_dry_run_never_touches_milestone(tmp_path):
+    engine = _seed(f"sqlite:///{tmp_path/'r.db'}")
+    _seed_hw(engine)
+    cfg = _cfg(tmp_path, milestone_refresh="true")
+    batch_id = _batch(engine, device_ids=[1], dry=True)
+    ms = FakeMilestone()
+    _run_ms(engine, cfg, batch_id, FakeCameraFleet(vendor_reads={"10.1.1.1": "7.90.0123"}), ms)
+    assert ms.calls == []
+
+
+def test_an_unverified_flash_does_not_refresh(tmp_path):
+    """Nothing to tell Milestone about if the camera never confirmed."""
+    engine = _seed(f"sqlite:///{tmp_path/'r.db'}")
+    _seed_hw(engine)
+    cfg = _cfg(tmp_path, milestone_refresh="true")
+    batch_id = _batch(engine, device_ids=[1])
+    ms = FakeMilestone()
+    _run_ms(engine, cfg, batch_id, FakeCameraFleet(), ms)      # answers nothing
+    assert _items(engine, batch_id)[1]["status"] == ops.FAILED
+    assert ms.calls == []
+
+
+def test_a_failed_refresh_does_not_fail_the_flash(tmp_path):
+    """The camera is demonstrably running the new firmware.
+
+    A VMS that will not re-detect must produce a loud audit row, not a batch
+    that reports failure for a camera which verified.
+    """
+    engine = _seed(f"sqlite:///{tmp_path/'r.db'}")
+    _seed_hw(engine)
+    cfg = _cfg(tmp_path, milestone_refresh="true")
+    batch_id = _batch(engine, device_ids=[1])
+    ms = FakeMilestone(raise_with=RuntimeError("VMS said no"))
+    result, _ = _run_ms(engine, cfg, batch_id,
+                        FakeCameraFleet(vendor_reads={"10.1.1.1": "7.90.0123"}), ms)
+
+    assert _items(engine, batch_id)[1]["status"] == ops.VERIFIED
+    assert result["aborted"] is False
+    rows = _audit(engine)
+    assert len(rows) == 1 and rows[0]["outcome"] == "failed"
+    assert "VMS said no" in (rows[0]["message"] or "")
+
+
+def test_an_http_error_from_the_refresh_is_audited_as_failed(tmp_path):
+    engine = _seed(f"sqlite:///{tmp_path/'r.db'}")
+    _seed_hw(engine)
+    cfg = _cfg(tmp_path, milestone_refresh="true")
+    batch_id = _batch(engine, device_ids=[1])
+    ms = FakeMilestone(status=500)
+    _run_ms(engine, cfg, batch_id, FakeCameraFleet(vendor_reads={"10.1.1.1": "7.90.0123"}), ms)
+
+    assert _items(engine, batch_id)[1]["status"] == ops.VERIFIED
+    rows = _audit(engine)
+    assert rows[0]["outcome"] == "failed" and "500" in (rows[0]["message"] or "")
+
+
+def test_a_camera_with_no_hardware_id_is_skipped_not_fatal(tmp_path):
+    engine = _seed(f"sqlite:///{tmp_path/'r.db'}")   # hardware_id left NULL
+    cfg = _cfg(tmp_path, milestone_refresh="true")
+    batch_id = _batch(engine, device_ids=[1])
+    ms = FakeMilestone()
+    _run_ms(engine, cfg, batch_id, FakeCameraFleet(vendor_reads={"10.1.1.1": "7.90.0123"}), ms)
+    assert ms.calls == []
+    assert _items(engine, batch_id)[1]["status"] == ops.VERIFIED
+
+
+def test_refresh_enabled_but_no_client_is_not_fatal(tmp_path):
+    """The flag can be on while Milestone is unconfigured."""
+    engine = _seed(f"sqlite:///{tmp_path/'r.db'}")
+    _seed_hw(engine)
+    cfg = _cfg(tmp_path, milestone_refresh="true")
+    batch_id = _batch(engine, device_ids=[1])
+    _set_upload_field("net.bin")
+
+    async def no_sleep(_s):
+        return None
+
+    fleet = FakeCameraFleet(vendor_reads={"10.1.1.1": "7.90.0123"})
+    runner = BatchRunner(engine, cfg, batch_id, actor="sappleby", role="admin",
+                         client_factory=fleet.client, sleep=no_sleep,
+                         milestone_firmware=lambda d: None,
+                         milestone_client=None)
+    asyncio.run(runner.run())
+    assert _items(engine, batch_id)[1]["status"] == ops.VERIFIED
+    assert _audit(engine) == []
+
+
+def test_milestone_stale_cameras_is_scoped_to_verified_flashes(tmp_path):
+    """A bulk refresh must not become 2,651 re-detects."""
+    from netmon.cameras.runner import milestone_stale_cameras
+    engine = _seed(f"sqlite:///{tmp_path/'r.db'}")
+    _seed_hw(engine, 1)
+    _seed_hw(engine, 2, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+    _verified_item(engine, 1, "7.93.0024", finished=NOW)
+    _verified_item(engine, 2, None, finished=NOW, status=ops.WOULD_RUN)
+
+    rows = milestone_stale_cameras(engine)
+    assert [r["device_id"] for r in rows] == [1]
+
+
+def test_milestone_stale_cameras_skips_cameras_with_no_hardware_id(tmp_path):
+    from netmon.cameras.runner import milestone_stale_cameras
+    engine = _seed(f"sqlite:///{tmp_path/'r.db'}")
+    _verified_item(engine, 1, "7.93.0024", finished=NOW)   # hardware_id NULL
+    assert milestone_stale_cameras(engine) == []

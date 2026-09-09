@@ -384,6 +384,17 @@ dry_run = true
 # deferred, so config_change has nothing to run yet.
 config_change = false
 firmware_update = false
+# Ask Milestone to re-detect a camera after a verified flash, so the VMS stops
+# reporting the pre-flash version. This is NetMon's ONLY write to Milestone
+# (POST .../recordingServers/{rs}/hardware/{hw}/tasks/UpdateHardware) and the
+# reason it is needed is that `hardwareDriverSettings.firmwareVersion` is a
+# cache which does not move when a camera is flashed.
+#
+# Off by default (§4.2) and, more to the point, **never yet executed against a
+# live VMS** — it is fixture-tested only, so the first real call should be a
+# single camera someone is watching. Best-effort in the runner: a failed
+# refresh is audited and logged, never turned into a failed flash.
+milestone_refresh = false
 #
 # A PRIVILEGED camera account — by default NOT the read-only one in
 # [camera_snapshot], which is documented as unable to change camera

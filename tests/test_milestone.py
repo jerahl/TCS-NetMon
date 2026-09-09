@@ -1240,3 +1240,113 @@ def test_a_replaced_device_still_learns_its_firmware(tmp_path):
     fake.settings_data = {"HW1": {"firmwareVersion": "8.00.0001"}}
     asyncio.run(MilestoneCollector(e, fake).run_once())
     assert db.fetch_one(e, "SELECT firmware FROM cameras")["firmware"] == "8.00.0001"
+
+
+# ── the one write: UpdateHardware (owner sign-off 2026-09-09) ──────────────
+
+HW_GUID = "d6b460a4-2f7e-46f1-a3e8-e29110c679cd"
+RS_GUID = "224a7d09-f9c0-44c8-9153-9b56d1eb9262"
+
+
+def _mock_client(handler):
+    """A MilestoneClient whose transport is a fake, with auth pre-satisfied."""
+    import httpx
+
+    from netmon.collectors.milestone_client import MilestoneClient
+
+    class Mocked(MilestoneClient):
+        async def _mkclient(self):
+            return httpx.AsyncClient(base_url="https://ms.example.org",
+                                     transport=httpx.MockTransport(handler))
+
+        async def bearer_token(self):
+            return "tok"
+
+    c = Mocked("ms.example.org", "u", "p")
+    c._token = "tok"
+    return c
+
+
+def test_update_hardware_posts_the_task_under_the_owning_recording_server():
+    """Path shape verified live: /api/rest/v1 prefix, `hardware` singular,
+    nested under the parent recordingServer, task named UpdateHardware."""
+    import httpx
+
+    seen = []
+
+    def handler(request):
+        seen.append((request.method, request.url.path))
+        if request.method == "GET":
+            return httpx.Response(200, json={"data": {
+                "id": HW_GUID,
+                "relations": {"parent": {"type": "recordingServers", "id": RS_GUID}}}})
+        return httpx.Response(200, json={})
+
+    client = _mock_client(handler)
+    code, _ = asyncio.run(client.update_hardware(HW_GUID))
+    assert code == 200
+    assert seen == [
+        ("GET", f"/api/rest/v1/hardware/{HW_GUID}"),
+        ("POST", f"/api/rest/v1/recordingServers/{RS_GUID}/hardware/{HW_GUID}"
+                 "/tasks/UpdateHardware"),
+    ]
+
+
+def test_update_hardware_refuses_anything_that_is_not_a_guid():
+    """The id goes into a URL path on the *write* side."""
+    from netmon.collectors.milestone_client import MilestoneError
+
+    client = _mock_client(lambda r: None)
+    for bad in ("", "not-a-guid", "../../cameras", f"{HW_GUID}/../x"):
+        with pytest.raises(MilestoneError, match="hardware GUID"):
+            asyncio.run(client.update_hardware(bad))
+
+
+def test_update_hardware_refuses_when_the_parent_is_missing():
+    """Without a recordingServer there is nowhere to post the task."""
+    import httpx
+
+    from netmon.collectors.milestone_client import MilestoneError
+
+    def handler(request):
+        return httpx.Response(200, json={"data": {"id": HW_GUID, "relations": {}}})
+
+    with pytest.raises(MilestoneError, match="no recordingServers parent"):
+        asyncio.run(_mock_client(handler).update_hardware(HW_GUID))
+
+
+def test_update_hardware_returns_the_status_rather_than_raising():
+    """The caller audits the outcome; a 500 is data, not an exception."""
+    import httpx
+
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"data": {
+                "id": HW_GUID,
+                "relations": {"parent": {"type": "recordingServers", "id": RS_GUID}}}})
+        return httpx.Response(500, text="boom")
+
+    code, body = asyncio.run(_mock_client(handler).update_hardware(HW_GUID))
+    assert code == 500 and "boom" in body
+
+
+def test_update_hardware_is_the_only_non_get_in_the_client():
+    """Read-only-first stays structural (CLAUDE.md §4.1).
+
+    The token POST and this one write are the whole list. A new verb appearing
+    here means a write to the VMS that nobody signed off.
+    """
+    import ast
+    import inspect
+
+    from netmon.collectors import milestone_client as mc
+
+    tree = ast.parse(inspect.getsource(mc))
+    posts = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            for inner in ast.walk(node):
+                if (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Attribute)
+                        and inner.func.attr in ("post", "put", "patch", "delete")):
+                    posts.append((node.name, inner.func.attr))
+    assert sorted(posts) == [("_get_token", "post"), ("update_hardware", "post")], posts

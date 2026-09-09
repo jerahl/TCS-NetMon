@@ -9,6 +9,7 @@ WebSocket is a separate resilient task (collectors/ws.py).
 from __future__ import annotations
 
 import logging
+import re
 
 import httpx
 
@@ -40,6 +41,12 @@ class MilestoneError(Exception):
 
 class MilestoneAuthError(MilestoneError):
     pass
+
+
+#: Milestone ids are GUIDs. Used to validate anything that reaches a URL path
+#: on the write side, where a malformed id must not become a different request.
+_GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+                   r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 
 def _items(resp: dict) -> list[dict]:
@@ -297,6 +304,62 @@ class MilestoneClient:
                 if page > 40:  # 20k groups — a runaway, not a real estate
                     log.warning("cameraGroups pagination exceeded 40 pages; stopping")
                     return out
+
+    async def update_hardware(self, hardware_id: str) -> tuple[int, str]:
+        """``POST .../recordingServers/{rs}/hardware/{hw}/tasks/UpdateHardware``.
+
+        **The only non-GET in this client**, and the only write NetMon makes to
+        Milestone (owner sign-off 2026-09-09; the endpoint shape came from the
+        owner). Everything else here reads.
+
+        Why it exists: `hardwareDriverSettings.firmwareVersion` is a *cache*.
+        It does not move when a camera is flashed — 50 cameras reported
+        7.93.0024 from their own APIs while Milestone still said 7.10.0074
+        hours later. Only a hardware re-detect refreshes it, which is what the
+        Management Client's "Update hardware" does.
+
+        The task is nested under the owning recording server, and the parent is
+        resolved here rather than stored: `relations.parent` on the hardware
+        record is always current, and hardware does get moved between
+        recording servers. One extra GET before the POST.
+
+        Note the resource is ``hardware`` singular — ``hardwares`` answers 404
+        "Unknown resource" — and the prefix is ``/api/rest/v1``, not
+        ``/api/config/v1``, which does not exist on this gateway (both verified
+        live 2026-09-09).
+
+        Returns ``(http_status, body_text)``. **Never retried**: a task that
+        timed out may still be running, and asking twice would queue a second
+        re-detect against the same device.
+        """
+        hardware_id = (hardware_id or "").strip()
+        if not _GUID.fullmatch(hardware_id):
+            # Straight into a URL path, and this is a write — so the id is
+            # required to look like the GUID Milestone issues, not merely to be
+            # non-empty.
+            raise MilestoneError(
+                f"update_hardware needs a Milestone hardware GUID, got {hardware_id!r}")
+        async with await self._mkclient() as client:
+            item = await self._get(client, f"/api/rest/v1/hardware/{hardware_id}")
+            data = item.get("data") if isinstance(item.get("data"), dict) else item
+            parent = ((data or {}).get("relations") or {}).get("parent") or {}
+            rs_id = str(parent.get("id") or "")
+            if not _GUID.fullmatch(rs_id):
+                raise MilestoneError(
+                    f"hardware {hardware_id} has no recordingServers parent to "
+                    f"post the task to (got {rs_id!r})")
+            path = (f"/api/rest/v1/recordingServers/{rs_id}"
+                    f"/hardware/{hardware_id}/tasks/UpdateHardware")
+            try:
+                resp = await client.post(
+                    path, json={},
+                    headers={"Authorization": f"Bearer {await self.bearer_token()}",
+                             "Accept": "application/json",
+                             "Content-Type": "application/json"})
+            except httpx.HTTPError as exc:
+                raise MilestoneError(
+                    f"milestone transport error on UpdateHardware: {exc}") from exc
+        return resp.status_code, (resp.text or "")[:2000]
 
     async def hardware(self) -> list[dict]:
         """Hardware (a camera's physical host) → model and network address.
