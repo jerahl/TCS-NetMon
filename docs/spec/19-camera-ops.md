@@ -870,3 +870,62 @@ Recording is still shown, as a `.rec-pill` — information, not a fault.
 status rendering is checked at build time rather than only in a browser. Three
 API tests cover the filter union, both verdicts reaching the row, and blind
 being counted apart from down.
+
+## Milestone hardware refresh — investigated 2026-09-09, NOT built
+
+The owner signed off on writing to Milestone so it would learn a camera's new
+firmware ("it will need to run an update hardware on the camera in milestone or
+milestone will never see the firmware update" — correct: `hardwareDriverSettings
+.firmwareVersion` is a cache, and it still reported `7.10.0074` for cameras
+flashed to `7.93.0024` hours earlier).
+
+**No such operation was found, so nothing was built.** Recorded here so the
+next attempt starts from evidence rather than repeating the search.
+
+What the live API gateway offers (read-only probes, 2026-09-09):
+
+- Only `/api/rest/v1/` exists — no `/api`, `/api/rest`, `/api/rest/v2`, no
+  `ServerCommandService.svc` through the gateway.
+- `GET /api/rest/v1/hardware/{id}` returns `address, description, displayName,
+  enabled, hardwareDriverPath, id, lastModified, model, name,
+  passwordLastModified, relations, userName`. **No methods, tasks or links.**
+  `?includeMethods=true` is silently ignored.
+- `/hardware/{id}/methods` → 404 "Unknown resource: methods".
+  `/hardware/{id}/tasks` → 400 "No generic business object registered on server
+  with entity name: TaskFolder".
+- `GET /api/rest/v1/tasks` → `{"array": []}`, so a task collection does exist.
+- No OpenAPI/Swagger is published by the gateway.
+
+What the vendor's own sample proves exists — in the **.NET Configuration API**,
+not confirmed in REST (`mipsdk-samples-component/ConfigAPIFirmwareUpdate`):
+
+- `InvokeMethod(systemConfigurationItem, "UploadFileChunk")` with
+  `TransferId`/`ChunkData`/`Offset`/`Size`/`Checksum`, returning `StorageId`.
+- `InvokeMethod(hardwareConfigurationItem, "UpdateFirmwareHardware")` with
+  `StorageId`, returning a task `Path` polled for
+  `State`/`ErrorCode`/`ErrorText`/`NewFirmwareVersion`/`Progress`.
+
+Note what that second call actually is: **Milestone pushing firmware to the
+camera itself**, not a re-read of what Milestone believes. It happens to leave
+Milestone's record correct (hence `NewFirmwareVersion`), but it is a different
+operation from the one wanted, and it is only proven over the .NET API. Whether
+the REST gateway maps `InvokeMethod` at all is unknown, and the only way to
+find out by experiment is POSTing guessed paths at a production VMS — where a
+wrong guess could disable hardware or start an unintended flash. Not done.
+
+Two ways forward, both owner decisions:
+
+1. **Confirm the REST mapping** (Milestone support, or watch what Management
+   Client sends). Given a confirmed path, this is a small, gated, audited
+   action in the D4 mould.
+2. **Let Milestone own the flash** (`UploadFileChunk` +
+   `UpdateFirmwareHardware`). This inverts spec 20 S8: NetMon would stop
+   talking to camera hardware and hand the image to the VMS, which then reports
+   the new version itself — no read-back, no platform guessing, and the
+   `[camera_ops]` direct-write risk largely disappears. A real redesign, not a
+   patch, and a much larger change than was asked for.
+
+Until either happens, NetMon does not depend on Milestone being right: the
+runner records the camera's own verified read and the collector no longer
+echoes a stale value over it (PR #28). The residual exposure is that a hardware
+record which ever gets re-asked would learn Milestone's stale value again.
