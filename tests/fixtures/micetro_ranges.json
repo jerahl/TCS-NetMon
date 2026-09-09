@@ -1,0 +1,97 @@
+{
+  "_comment": [
+    "Sanitized Micetro ranges + DHCP scopes, shaped from the published 26.1.0",
+    "OpenAPI schema (Range / DHCPScope). Note that utilizationPercentage is a",
+    "field of Range, NOT of DHCPScope — the collector joins them on rangeRef.",
+    "See docs/spec/21-micetro-ddi.md Q1."
+  ],
+  "ranges": [
+    {
+      "_case": "container, not a subnet: must be skipped by the address sweep",
+      "ref": "Ranges/1",
+      "name": "192.0.2.0/16",
+      "from": "192.0.0.0",
+      "to": "192.0.255.255",
+      "subnet": false,
+      "isContainer": true,
+      "utilizationPercentage": 4
+    },
+    {
+      "_case": "ordinary subnet, comfortable",
+      "ref": "Ranges/10",
+      "name": "192.0.2.0/24",
+      "from": "192.0.2.0",
+      "to": "192.0.2.255",
+      "subnet": true,
+      "utilizationPercentage": 42
+    },
+    {
+      "_case": "subnet at the warn threshold exactly (>= warn, so warn)",
+      "ref": "Ranges/11",
+      "name": "198.51.100.0/24",
+      "from": "198.51.100.0",
+      "to": "198.51.100.255",
+      "subnet": true,
+      "utilizationPercentage": 85
+    },
+    {
+      "_case": "subnet effectively exhausted",
+      "ref": "Ranges/12",
+      "name": "203.0.113.0/24",
+      "from": "203.0.113.0",
+      "to": "203.0.113.255",
+      "subnet": true,
+      "utilizationPercentage": 97
+    },
+    {
+      "_case": "subnet Micetro reports no utilization for — must stay 'unknown', never 'ok'",
+      "ref": "Ranges/13",
+      "name": "192.0.2.0/25",
+      "from": "192.0.2.0",
+      "to": "192.0.2.127",
+      "subnet": true
+    }
+  ],
+  "dhcpScopes": [
+    {
+      "ref": "DHCPScopes/100",
+      "name": "BHS-Data",
+      "range": "192.0.2.0/24",
+      "rangeRef": "Ranges/10",
+      "dhcpServerRef": "DHCPServers/1",
+      "available": 148,
+      "enabled": true
+    },
+    {
+      "ref": "DHCPScopes/101",
+      "name": "BHS-Wireless",
+      "range": "198.51.100.0/24",
+      "rangeRef": "Ranges/11",
+      "dhcpServerRef": "DHCPServers/1",
+      "superscope": "BHS",
+      "available": 38,
+      "enabled": true
+    },
+    {
+      "ref": "DHCPScopes/102",
+      "name": "CHS-Wireless",
+      "range": "203.0.113.0/24",
+      "rangeRef": "Ranges/12",
+      "dhcpServerRef": "DHCPServers/2",
+      "superscope": "CHS",
+      "available": 7,
+      "enabled": true
+    },
+    {
+      "_case": "scope whose range is absent from /ranges — severity must stay unknown",
+      "ref": "DHCPScopes/103",
+      "name": "Orphan-Scope",
+      "range": "192.168.99.0/24",
+      "rangeRef": "Ranges/999",
+      "dhcpServerRef": "DHCPServers/2",
+      "available": 0,
+      "enabled": false
+    }
+  ],
+  "totalResults": 4
+}
