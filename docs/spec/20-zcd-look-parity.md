@@ -1290,6 +1290,35 @@ Three details that are decisions:
     TMS 130 · Southview 122 · Bryant High 110 · TASPA 107 · University Place 103
     · Eastwood Middle 100 · Rock Quarry 99 · TCTA 76 · Northridge High 72 · …
 
+### S8 — the deploy step, 2026-09-09 (a gap the owner found by using it)
+
+The owner selected one camera at TMS, ran a dry-run, and asked how to deploy.
+The answer was that he could not: the page never sent `dry_run: false`, so
+`create_batch` computed `dry = cfg.dry_run or (body.dry_run is not False)` and
+every batch the UI made was a rehearsal. The design in this spec said
+preview → dry-run → **confirm** → run, and the confirm step was never built.
+
+Built now, as its own act rather than a toggle on the rehearsal:
+
+* A dry-run batch that finished with `would_run` items grows a **Deploy for
+  real** card naming the count, the version and the school.
+* It asks for a typed `DEPLOY`, having first said what happens: the first camera
+  goes alone and the batch stops until it reports back; each camera reboots and
+  stops recording while it flashes.
+* It then creates a **new** live batch over exactly those cameras and starts it.
+  A dry run is never converted: the row records what it was, and re-running it
+  live would make that record a lie.
+* Config still has the final say — with `[camera_ops] dry_run = true` the new
+  batch is a rehearsal too, and the card says so before it is clicked.
+
+**Two stale-data bugs the same attempt exposed.** The owner's 12:36 batches
+refused every camera with *"camera is CPP7.3; this image is built for
+CPP6/7/7.3"*. Both halves were mine: the running service still had the
+pre-`platforms.py` exact-match comparison, and image #2 was still labelled with
+the coarse probe band `CPP6/7/7.3` from registration — I had corrected 2,351
+camera rows from the vendor table and left the images alone. Both images now
+state a point (`CPP7.3`, `CPP14`), which is what `compatible()` is for.
+
 ### S8 — the proving ground lifted, 2026-09-09
 
 `proving_device_id = 0` at the owner's direction, after alb-cam-44 went

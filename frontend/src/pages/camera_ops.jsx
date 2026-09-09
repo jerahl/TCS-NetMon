@@ -405,6 +405,37 @@ export function CameraOpsTab({ deviceIds = null, deviceNames = {}, pick = false 
     setOpen(detail);
   });
 
+  // A dry run cannot be "switched to live": the batch row records what it was,
+  // and re-running it would make the record a lie. Deploying creates a NEW
+  // batch over the same cameras and the same image, with dry_run explicitly
+  // false — which the API still refuses unless config allows live.
+  const deployFromDryRun = (batch) => {
+    const ids = (batch.items || [])
+      .filter((i) => i.status === "would_run")
+      .map((i) => i.device_id);
+    if (ids.length === 0) return undefined;
+    const where = [...new Set((batch.items || []).map((i) => i.site).filter(Boolean))];
+    const typed = window.prompt(
+      `Deploy ${batch.firmware_version} to ${ids.length} camera(s)`
+      + (where.length === 1 ? ` at ${where[0]}` : "")
+      + `.\n\nThe first camera goes alone and the batch stops until it reports the `
+      + `new version back. Each camera reboots and stops recording while it flashes.`
+      + `\n\nType DEPLOY to continue.`);
+    if (typed !== "DEPLOY") return undefined;
+    return act(async () => {
+      const r = await postJSON("/api/surveillance/batches", {
+        op: "firmware_update", device_ids: ids,
+        firmware_id: batch.firmware_id, dry_run: false,
+      });
+      const detail = await getJSON(`/api/surveillance/batches/${r.batch_id}`);
+      setOpen(detail);
+      if (!detail.dry_run) {
+        await postJSON(`/api/surveillance/batches/${r.batch_id}/start`, {});
+        setOpen(await getJSON(`/api/surveillance/batches/${r.batch_id}`));
+      }
+    });
+  };
+
   const startBatch = (id) => act(async () => {
     await postJSON(`/api/surveillance/batches/${id}/start`, {});
     setOpen(await getJSON(`/api/surveillance/batches/${id}`));
@@ -552,6 +583,33 @@ export function CameraOpsTab({ deviceIds = null, deviceNames = {}, pick = false 
                     : "the canary goes first and the batch stops until it verifies"}
                 </span>
               </div>
+            </Card>
+          )}
+          {/* The step between a rehearsal and a roll. A dry run that came back
+              clean is the only thing that should lead here, and it leads to a
+              *new* batch rather than re-running this one — the row records what
+              it was, and re-running would make that record a lie. */}
+          {open.dry_run && open.status === "done"
+            && (open.items || []).some((i) => i.status === "would_run") && (
+            <Card title="Deploy for real" source="netmon"
+                  kicker="the dry run passed; this is the same set, sent">
+              <div className="msg" style={{ fontSize: 11, marginBottom: 10 }}>
+                {(open.items || []).filter((i) => i.status === "would_run").length}
+                {" "}camera(s) would receive {open.firmware_version}. Deploying
+                creates a new live batch over exactly those, starts it, and stops
+                at the first camera until it reports the new version back. Each
+                camera reboots and stops recording while it flashes.
+                {status.dry_run && (
+                  <> <b>Config says dry-run</b>, so this will still send nothing
+                    until <span className="mono">[camera_ops] dry_run = false</span>.</>
+                )}
+              </div>
+              <button type="button" className="btn btn-danger" disabled={busy}
+                      onClick={() => deployFromDryRun(open)}
+                      title="asks for a typed confirmation, then creates and starts a live batch">
+                Deploy {open.firmware_version} to{" "}
+                {(open.items || []).filter((i) => i.status === "would_run").length} camera(s)
+              </button>
             </Card>
           )}
         </React.Fragment>

@@ -317,3 +317,45 @@ def test_amending_is_admin_only(tmp_path):
     with client:
         assert client.patch("/api/surveillance/firmware/1",
                             json={"models": ["x"]}).status_code == 403
+
+
+def test_a_live_batch_can_be_created_when_config_allows_it(tmp_path):
+    """The step the UI was missing: deploying for real.
+
+    A dry run is a rehearsal and its row records that, so deploying creates a
+    *new* batch over the same cameras with dry_run explicitly false. The API
+    still refuses that unless config allows live — two locks, not one.
+    """
+    client, _ = _client(tmp_path, dry_run="false", enabled="true",
+                        firmware_update="true")
+    with client:
+        image_id = _register(client).json()["id"]
+        rehearsal = client.post("/api/surveillance/batches",
+                                json={"device_ids": [1, 2], "firmware_id": image_id}
+                                ).json()
+        assert rehearsal["dry_run"] is True          # no dry_run in the body
+
+        live = client.post("/api/surveillance/batches",
+                           json={"device_ids": [1, 2], "firmware_id": image_id,
+                                 "dry_run": False}).json()
+        assert live["dry_run"] is False
+        assert live["batch_id"] != rehearsal["batch_id"]
+        detail = client.get(f"/api/surveillance/batches/{live['batch_id']}").json()
+        assert detail["dry_run"] == 0
+        assert {i["status"] for i in detail["items"]} == {"pending"}
+        # The school is on the item, so a confirmation prompt can name it.
+        assert detail["items"][0]["site"] == "BHS"
+
+
+def test_a_dry_run_batch_is_not_convertible(tmp_path):
+    """Starting a dry-run batch runs the dry run, whatever config says. The row
+    records what it was; re-running it live would make that record a lie."""
+    client, _ = _client(tmp_path, dry_run="false", enabled="true",
+                        firmware_update="true")
+    with client:
+        image_id = _register(client).json()["id"]
+        batch_id = client.post("/api/surveillance/batches",
+                               json={"device_ids": [1], "firmware_id": image_id}
+                               ).json()["batch_id"]
+        r = client.post(f"/api/surveillance/batches/{batch_id}/start")
+        assert r.status_code == 200 and r.json()["dry_run"] is True

@@ -274,7 +274,7 @@ def batch_detail(batch_id: int, engine: Engine = Depends(get_engine),
     if batch is None:
         raise HTTPException(status_code=404, detail="no such batch")
     items = db.fetch_all(engine, """
-        SELECT i.*, d.name, c.ip, c.model, c.platform
+        SELECT i.*, d.name, d.site, c.ip, c.model, c.platform
         FROM camera_batch_items i
         JOIN devices d ON d.id = i.device_id
         LEFT JOIN cameras c ON c.device_id = i.device_id
