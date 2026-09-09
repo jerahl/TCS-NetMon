@@ -694,3 +694,36 @@ def test_the_upload_is_authenticated_before_the_image_is_sent(tmp_path):
     assert methods[1] == "POST"
     assert fleet.calls[0][1].endswith("direction=READ")
     assert fleet.uploads == ["https://10.1.1.1/upload.htm"]
+
+
+def test_an_unreadable_image_says_what_to_fix(tmp_path, monkeypatch):
+    """A 500 tells an operator nothing.
+
+    Found live 2026-09-09: the images were placed as root 0640 while
+    netmon.service runs as `netmon`, so the deploy button answered HTTP 500 with
+    a stack trace in the journal and nothing on the page. An unreadable store is
+    a configuration problem with a one-line fix and must be reported as one.
+
+    The permission is simulated rather than set: this suite runs as root, and
+    root reads a 0000 file quite happily.
+    """
+    import pathlib as _pathlib
+
+    engine = _seed(f"sqlite:///{tmp_path/'r27.db'}")
+    cfg = _cfg(tmp_path)
+    real_open = _pathlib.Path.open
+
+    def refuse(self, *a, **kw):
+        if self.name.endswith(".fw"):
+            raise PermissionError(13, "Permission denied")
+        return real_open(self, *a, **kw)
+
+    monkeypatch.setattr(_pathlib.Path, "open", refuse)
+    with pytest.raises(BatchRefused) as err:
+        load_image(engine, cfg, 1)
+
+    assert "cannot read b790.fw" in str(err.value)
+    assert "Permission denied" in str(err.value)
+    # And it names the fix, because the operator is the one who can apply it.
+    assert "readable by the user the service runs as" in str(err.value)
+    assert "chown" in str(err.value)

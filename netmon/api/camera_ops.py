@@ -342,6 +342,11 @@ async def start_batch(batch_id: int, request: Request,
             load_image(engine, cfg, int(batch["firmware_id"]))
     except BatchRefused as exc:
         raise _refused(str(exc)) from exc
+    except OSError as exc:
+        # Belt and braces: load_image translates these, and anything that still
+        # reaches here is a store problem the operator can act on rather than a
+        # stack trace they cannot.
+        raise _refused(f"the firmware store is not usable: {exc.strerror or exc}") from exc
 
     task = asyncio.create_task(runner.run(), name=f"camera-batch-{batch_id}")
     running[batch_id] = {"task": task, "runner": runner}

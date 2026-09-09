@@ -413,6 +413,13 @@ proving_device_id = 0
 # Vetted firmware images, one directory per vendor, outside the repo for the
 # same reason credentials are. Each image is registered in `firmware_images`
 # with a SHA-256 and a model allow-list; a push refuses any camera not on it.
+#
+# The store must be READABLE BY THE SERVICE USER. An image uploaded through the
+# page is written by that user and is fine by construction; one dropped on disk
+# by hand is not, and a root-owned 0640 file is what made the deploy button
+# answer HTTP 500 on 2026-09-09. For a root-owned store:
+#     chown -R root:netmon /var/lib/netmon/firmware
+#     chmod -R g+rX       /var/lib/netmon/firmware
 firmware_dir = /var/lib/netmon/firmware
 #
 # The ring discipline. Copied onto each batch at creation, so editing this file

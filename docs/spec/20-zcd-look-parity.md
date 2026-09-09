@@ -1319,6 +1319,28 @@ the coarse probe band `CPP6/7/7.3` from registration — I had corrected 2,351
 camera rows from the vendor table and left the images alone. Both images now
 state a point (`CPP7.3`, `CPP14`), which is what `compatible()` is for.
 
+### S8 — the deploy button answered HTTP 500, 2026-09-09
+
+`PermissionError: /var/lib/netmon/firmware/bosch/CPP7.3_FW_7.93.0024.fw`. Both
+images had been placed by hand as `root:root 0640`, and `netmon.service` runs as
+`netmon`. Every test of this path — including the canary that flashed
+alb-cam-44 — had run **as root**, so the code was right and the deployment was
+not. Now `root:netmon 0640` with the directories `0750`, verified by calling
+`load_image` as the service user rather than by reasoning about modes.
+
+Worth recording as a rule: an image uploaded *through* the page is written by
+the service user and is readable by construction. Only files dropped on disk by
+hand can land with the wrong owner, which is exactly how these did.
+
+**The second fault was the worse one.** `load_image` translated a missing file
+and a hash mismatch into refusals an operator could act on, and let `OSError`
+through — so an unreadable store surfaced as a bare 500 with the traceback in
+the journal and nothing on the page. It now names the fix in the refusal
+itself, and `start_batch` catches `OSError` as a last resort for the same
+reason. Tested by simulating the permission, because the suite runs as root and
+root reads a 0000 file quite happily — the obvious test would have proved
+nothing.
+
 ### S8 — the proving ground lifted, 2026-09-09
 
 `proving_device_id = 0` at the owner's direction, after alb-cam-44 went

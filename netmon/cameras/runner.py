@@ -96,9 +96,20 @@ def load_image(engine: Engine, cfg: Any, image_id: int) -> tuple[dict, Path]:
     if not path.is_file():
         raise BatchRefused(f"firmware image {row['filename']} is missing from the store")
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(8 << 20), b""):
-            digest.update(chunk)
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(8 << 20), b""):
+                digest.update(chunk)
+    except OSError as exc:
+        # A store the service cannot read is a configuration problem with a
+        # one-line fix, and it must say so. Left unhandled this surfaced as a
+        # bare HTTP 500 to the operator (found live 2026-09-09: the images were
+        # placed as root 0640, and netmon.service runs as `netmon`).
+        raise BatchRefused(
+            f"cannot read {row['filename']} from the firmware store: {exc.strerror or exc}. "
+            f"The store must be readable by the user the service runs as — "
+            f"`chown -R root:netmon {cfg.camera_ops.firmware_dir} && "
+            f"chmod -R g+rX {cfg.camera_ops.firmware_dir}`") from exc
     if digest.hexdigest() != str(row["sha256"]).lower():
         raise BatchRefused(
             f"firmware image {row['filename']} does not match the SHA-256 recorded at "
