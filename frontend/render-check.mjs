@@ -683,6 +683,59 @@ const cases = [
      if (!text.includes("1</b> eligible now")) throw new Error("eligible count wrong");
    }],
 
+  ["CameraPicker · one school at a time", OPS.CameraPicker, {
+    image: { id: 1, version: "7.93.0024", platform: "CPP7.3",
+             models: ["FLEXIDOME IP 5000i IR"] },
+    cameras: [
+      { device_id: 1, name: "tms-cam-1", ip: "10.1.1.1", site: "TMS",
+        model: "FLEXIDOME IP 5000i IR", firmware: "7.83.0027",
+        platform: "CPP7.3", reachability: "up" },
+      { device_id: 2, name: "tms-cam-2", ip: "10.1.1.2", site: "TMS",
+        model: "FLEXIDOME IP 5000i IR", firmware: "7.83.0027",
+        platform: "CPP7.3", reachability: "up" },
+      { device_id: 3, name: "bhs-cam-1", ip: "10.2.1.1", site: "Bryant High",
+        model: "FLEXIDOME IP 5000i IR", firmware: "7.83.0027",
+        platform: "CPP7.3", reachability: "up" },
+      // A school with nothing left to do still appears — "this one is done" is
+      // worth reading when planning the next evening.
+      { device_id: 4, name: "sky-cam-1", ip: "10.3.1.1", site: "Skyland",
+        model: "FLEXIDOME IP 5000i IR", firmware: "7.93.0024",
+        platform: "CPP7.3", reachability: "up" },
+    ],
+    selected: [], onToggle: () => {}, onBulk: () => {}, maxBatch: 50,
+    site: "TMS", onSite: () => {} },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     // Filtered to the chosen school...
+     if (text.includes("bhs-cam-1")) throw new Error("another school's cameras were listed");
+     if (!text.includes("tms-cam-2")) throw new Error("the chosen school's cameras are missing");
+     // ...but the chips still count the whole estate, or picking a school would
+     // hide the work waiting at the others.
+     if (!text.includes("Bryant High")) throw new Error("other schools vanished from the map");
+     if (!text.includes("Skyland")) throw new Error("a finished school was hidden");
+     if (!text.includes("sp-chip done")) throw new Error("a school with nothing eligible not dimmed");
+     if (!text.includes("2</b> eligible now")) throw new Error("per-school eligible count wrong");
+     if (!text.includes("at TMS")) throw new Error("the bulk button does not name the school");
+   }],
+
+  ["CameraPicker · a school needing more than one batch says so", OPS.CameraPicker, {
+    image: { id: 1, version: "7.93.0024", platform: "CPP7.3",
+             models: ["FLEXIDOME IP 5000i IR"] },
+    cameras: Array.from({ length: 130 }, (_, i) => ({
+      device_id: i + 1, name: `tms-cam-${i}`, ip: `10.1.1.${i}`, site: "TMS",
+      model: "FLEXIDOME IP 5000i IR", firmware: "7.83.0027",
+      platform: "CPP7.3", reachability: "up" })),
+    selected: [], onToggle: () => {}, onBulk: () => {}, maxBatch: 50,
+    site: "TMS", onSite: () => {} },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     // 130 eligible, 50 to a batch: the page says how many evenings this is
+     // rather than leaving the cap to look like an obstacle.
+     if (!text.includes("3 batches to finish TMS")) {
+       throw new Error("the number of batches for this school is not stated");
+     }
+   }],
+
   ["CameraPicker · no image chosen yet", OPS.CameraPicker, {
     image: null, cameras: [], selected: [], onToggle: () => {}, onBulk: () => {},
     maxBatch: 50 },

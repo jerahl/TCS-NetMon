@@ -174,7 +174,49 @@ export function BatchCard({ batch, onAbort, busy }) {
 // The server pre-flights again and is the authority; this is so an admin can see
 // the shape of the batch before creating one, and cannot casually select 400
 // cameras the roll would refuse anyway.
-export function CameraPicker({ image, cameras, selected, onToggle, onBulk, maxBatch }) {
+// A school at a time, because that is how a firmware roll actually happens: one
+// site, one evening, one person who can walk to a camera that does not come
+// back. 1,170 cameras are eligible for the CPP7.3 image across 23 schools, and
+// max_batch is 50 — so the choice is never "all of them", it is "which school,
+// and how much of it tonight".
+export function SchoolPicker({ schools, site, onSite }) {
+  if (schools.length === 0) return null;
+  const total = schools.reduce((n, s) => n + s.eligible, 0);
+  return (
+    <div className="school-picker">
+      <label className="sp-label" htmlFor="fw-school">School</label>
+      <select id="fw-school" className="cfb-select" value={site}
+              onChange={(e) => onSite(e.target.value)}
+              title="a roll goes school by school; this is the one being worked on">
+        <option value="">All schools — {total.toLocaleString()} eligible</option>
+        {schools.map((s) => (
+          <option key={s.site || "__none"} value={s.site || "__none"}>
+            {s.site || "no site"} — {s.eligible} of {s.total} eligible
+          </option>
+        ))}
+      </select>
+      {/* The whole estate at a glance, so an admin can see where the work is
+          before choosing. Schools with nothing eligible are still listed: "this
+          school is done" is worth reading. */}
+      <div className="sp-chips">
+        {schools.map((s) => (
+          <button type="button" key={s.site || "__none"}
+                  className={"sp-chip" + (site === (s.site || "__none") ? " active" : "")
+                             + (s.eligible === 0 ? " done" : "")}
+                  onClick={() => onSite(s.site || "__none")}
+                  title={s.eligible === 0
+                    ? `${s.site || "no site"}: nothing left to update`
+                    : `${s.eligible} of ${s.total} cameras eligible at ${s.site || "no site"}`}>
+            {s.site || "no site"}<b>{s.eligible}</b>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function CameraPicker({ image, cameras, selected, onToggle, onBulk, maxBatch,
+                               site = "", onSite = () => {} }) {
   if (!image) {
     return (
       <div className="msg">
@@ -197,23 +239,49 @@ export function CameraPicker({ image, cameras, selected, onToggle, onBulk, maxBa
     if (c.source_status === "blind") return "Milestone has no verdict";
     return null;
   };
-  const eligible = rows.filter((c) => !why(c));
-  const blocked = rows.filter((c) => why(c));
+  // Per-school counts come from the whole matching set, not the filtered view:
+  // choosing a school must not change what the other schools say they need.
+  const schools = [];
+  const byName = new Map();
+  for (const c of rows) {
+    const key = c.site || "";
+    if (!byName.has(key)) {
+      byName.set(key, { site: c.site, total: 0, eligible: 0 });
+      schools.push(byName.get(key));
+    }
+    const entry = byName.get(key);
+    entry.total += 1;
+    if (!why(c)) entry.eligible += 1;
+  }
+  schools.sort((a, b) => b.eligible - a.eligible
+    || String(a.site || "").localeCompare(String(b.site || "")));
+
+  const inSite = site
+    ? rows.filter((c) => (c.site || "__none") === site)
+    : rows;
+  const eligible = inSite.filter((c) => !why(c));
+  const blocked = inSite.filter((c) => why(c));
+  const label = site === "__none" ? "cameras with no site"
+    : site || "the whole estate";
 
   return (
     <div>
-      <div className="msg" style={{ fontSize: 11, marginBottom: 8 }}>
-        {rows.length.toLocaleString()} camera(s) match this image's models
+      <SchoolPicker schools={schools} site={site} onSite={onSite} />
+      <div className="msg" style={{ fontSize: 11, margin: "10px 0 8px" }}>
+        {inSite.length.toLocaleString()} camera(s) at {label} match this image's models
         {" · "}<b>{eligible.length.toLocaleString()}</b> eligible now
         {blocked.length > 0 && <> · {blocked.length.toLocaleString()} ruled out</>}
         {" · "}batches are capped at {maxBatch}
+        {eligible.length > maxBatch && (
+          <> — {Math.ceil(eligible.length / maxBatch)} batches to finish {label}</>
+        )}
       </div>
       {eligible.length > 0 && (
         <div style={{ marginBottom: 8 }}>
           <button type="button" className="btn sm"
                   onClick={() => onBulk(eligible.slice(0, maxBatch).map((c) => c.device_id))}
-                  title={`select the first ${maxBatch}, in name order`}>
-            Select first {Math.min(maxBatch, eligible.length)}
+                  title={`select the first ${maxBatch} at ${label}, in name order`}>
+            Select first {Math.min(maxBatch, eligible.length)} at {label}
           </button>{" "}
           <button type="button" className="btn sm" onClick={() => onBulk([])}>
             Clear
@@ -226,7 +294,7 @@ export function CameraPicker({ image, cameras, selected, onToggle, onBulk, maxBa
               <th>Firmware</th><th>Platform</th><th>Why not</th></tr>
         </thead>
         <tbody>
-          {rows.slice(0, 200).map((c) => {
+          {inSite.slice(0, 200).map((c) => {
             const reason = why(c);
             const on = selected.includes(c.device_id);
             return (
@@ -246,10 +314,11 @@ export function CameraPicker({ image, cameras, selected, onToggle, onBulk, maxBa
           })}
         </tbody>
       </table>
-      {rows.length > 200 && (
+      {inSite.length > 200 && (
         <div className="msg" style={{ fontSize: 11, padding: "8px 0 0" }}>
-          Showing the first 200 of {rows.length.toLocaleString()}. A roll is many
-          batches by design, so there is nothing to gain from listing them all.
+          Showing the first 200 of {inSite.length.toLocaleString()}. Pick a school
+          to narrow this — a roll is many batches by design, so there is nothing
+          to gain from listing the estate.
         </div>
       )}
     </div>
@@ -287,6 +356,7 @@ export function CameraOpsTab({ deviceIds = null, deviceNames = {}, pick = false 
   const [batches, setBatches] = React.useState(null);
   const [open, setOpen] = React.useState(null);      // batch detail
   const [imageId, setImageId] = React.useState(null);
+  const [site, setSite] = React.useState("");
   const [error, setError] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
   const [preview, setPreview] = React.useState(null);
@@ -397,6 +467,15 @@ export function CameraOpsTab({ deviceIds = null, deviceNames = {}, pick = false 
             {!cameras ? <Loading what="cameras" /> : (
               <CameraPicker image={image} cameras={cameras} selected={picked}
                             maxBatch={status.max_batch}
+                            site={site}
+                            onSite={(next) => {
+                              // Changing school clears the selection. Carrying
+                              // cameras across from the last school is how a
+                              // batch ends up spanning two sites nobody meant
+                              // to touch together.
+                              setSite(next === site ? "" : next);
+                              setPicked([]);
+                            }}
                             onBulk={setPicked}
                             onToggle={(id) => setPicked((prev) =>
                               prev.includes(id) ? prev.filter((x) => x !== id)

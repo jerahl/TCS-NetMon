@@ -1264,6 +1264,32 @@ Selection is capped at `max_batch` with a "select first N" rather than a select
 all, and the list stops at 200 rows — a roll is many batches by design, so there
 is nothing to gain from rendering 2,000.
 
+**Pick a school (owner-directed 2026-09-09).** That is how a roll actually
+happens: one site, one evening, one person who can walk to a camera that does
+not come back. 1,170 cameras are eligible for the CPP7.3 image across 23
+schools and `max_batch` is 50, so the question is never "all of them" — it is
+"which school, and how much of it tonight".
+
+The picker takes a school and filters to it, and says what that school costs:
+*"130 camera(s) at TMS match this image's models · 130 eligible now · batches
+are capped at 50 — 3 batches to finish TMS"*. The bulk button names the school
+it is selecting from.
+
+Three details that are decisions:
+
+* **The chips count the whole estate, not the filtered view.** Choosing TMS must
+  not change what Bryant High says it still needs, or the page stops being a map
+  of where the work is.
+* **A school with nothing eligible stays on the list, dimmed.** "This one is
+  done" is worth reading when planning the next evening; hiding it just makes
+  someone check by hand.
+* **Changing school clears the selection.** Carrying cameras over from the last
+  school is how a batch ends up spanning two sites nobody meant to touch
+  together.
+
+    TMS 130 · Southview 122 · Bryant High 110 · TASPA 107 · University Place 103
+    · Eastwood Middle 100 · Rock Quarry 99 · TCTA 76 · Northridge High 72 · …
+
 **Fleet shape for the build:** 2,528 of 2,651 cameras are Bosch (2,019
 `Bosch1ch` + 509 `Bosch`) — 95%, confirming Bosch as the pilot vendor; 32 Axis;
 91 ONVIF, which have no snapshot path either. 84 distinct model×firmware pairs

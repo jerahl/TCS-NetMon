@@ -4886,6 +4886,28 @@ kbd.k { font-family: var(--mono); font-size: 10px; background: var(--bg-2); bord
 .link-tbl tr.sel td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
 .warn-text { color: var(--warn); }
 
+/* The school selector on the firmware picker. A roll goes site by site, so the
+   chips double as a map of where the work is: the number is what is still
+   eligible, and a school with none is dimmed rather than hidden — "this one is
+   done" is worth reading. */
+.school-picker { display: flex; flex-direction: column; gap: 8px; }
+.school-picker .sp-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted);
+}
+.school-picker .cfb-select { max-width: 380px; }
+.sp-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.sp-chip {
+  font: inherit; font-size: 10.5px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--bg-2); color: var(--fg-2);
+}
+.sp-chip:hover { border-color: var(--line-2); background: var(--bg-3); }
+.sp-chip.active { border-color: var(--accent); color: var(--fg); }
+.sp-chip.done { opacity: 0.45; }
+.sp-chip b { font-family: var(--mono); color: var(--fg); }
+.sp-chip.done b { color: var(--muted); }
+
 /* ───────── S6: sites / storage / alarm actions ───────── */
 
 /* Configured-capacity cell. The bar compares recorders (or schools) to each
