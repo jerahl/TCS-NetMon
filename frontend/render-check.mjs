@@ -669,7 +669,10 @@ const cases = [
         model: "FLEXIDOME indoor 5100i IR", firmware: "9.00.0210",
         platform: "CPP14/15/16", reachability: "up" },
     ],
-    selected: [1], onToggle: () => {}, onBulk: () => {}, maxBatch: 50 },
+    selected: [1], onToggle: () => {}, onBulk: () => {}, maxBatch: 50,
+    // Ruled-out rows are hidden by default now, so this case asks for them:
+    // it is the reasons themselves that are under test here.
+    showRuledOut: true },
    (html) => {
      const text = html.replace(/<!-- -->/g, "");
      if (text.includes("cam-5100i")) throw new Error("a camera outside the allow-list was listed");
@@ -681,6 +684,53 @@ const cases = [
      }
      if (!text.includes("reachability is down_confirmed")) throw new Error("down camera not ruled out");
      if (!text.includes("1</b> eligible now")) throw new Error("eligible count wrong");
+   }],
+
+  // The complaint that started this: after a roll, 50 already-updated cameras
+  // still filled the firmware tab. "already on 7.93.0024" in the last column is
+  // not the same as being off the list, and blocked rows also eat the 200-row
+  // cap so the cameras that DO need the image fall off the bottom.
+  ["CameraPicker · updated cameras drop off the list", OPS.CameraPicker, {
+    image: { id: 1, version: "7.93.0024", platform: "CPP7.3",
+             models: ["FLEXIDOME IP 4000i"] },
+    cameras: [
+      { device_id: 1, name: "tms-cam-140", ip: "10.92.18.100", site: "TMS",
+        model: "FLEXIDOME IP 4000i", firmware: "7.93.0024",
+        platform: "CPP7.3", reachability: "up" },
+      { device_id: 2, name: "tms-cam-141", ip: "10.92.18.106", site: "TMS",
+        model: "FLEXIDOME IP 4000i", firmware: "7.93.0024",
+        platform: "CPP7.3", reachability: "up" },
+      { device_id: 3, name: "tms-cam-999", ip: "10.92.18.200", site: "TMS",
+        model: "FLEXIDOME IP 4000i", firmware: "7.10.0074",
+        platform: "CPP7.3", reachability: "up" },
+    ],
+    selected: [], onToggle: () => {}, onBulk: () => {}, maxBatch: 50 },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (text.includes("tms-cam-140") || text.includes("tms-cam-141")) {
+       throw new Error("an already-updated camera is still listed");
+     }
+     if (!text.includes("tms-cam-999")) {
+       throw new Error("the camera that still needs the image was hidden too");
+     }
+     if (!text.includes("1</b> eligible now")) throw new Error("eligible count wrong");
+     if (!text.includes("2 ruled out")) throw new Error("the ruled-out toggle is missing");
+   }],
+
+  // Nothing left to do at this school: say so, rather than an empty table.
+  ["CameraPicker · a finished school says so", OPS.CameraPicker, {
+    image: { id: 1, version: "7.93.0024", platform: "CPP7.3",
+             models: ["FLEXIDOME IP 4000i"] },
+    cameras: [
+      { device_id: 1, name: "tms-cam-140", ip: "10.92.18.100", site: "TMS",
+        model: "FLEXIDOME IP 4000i", firmware: "7.93.0024",
+        platform: "CPP7.3", reachability: "up" },
+    ],
+    selected: [], onToggle: () => {}, onBulk: () => {}, maxBatch: 50 },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (!text.includes("Nothing at")) throw new Error("no 'nothing to do' message");
+     if (!text.includes("0</b> eligible now")) throw new Error("eligible count wrong");
    }],
 
   ["CameraPicker · one school at a time", OPS.CameraPicker, {
