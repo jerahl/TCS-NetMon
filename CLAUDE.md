@@ -19,6 +19,7 @@ The data strategy is unchanged from v1.0 where a source platform already has the
 | Config management | rConfig (API) | Backup freshness, backup metadata |
 | Voice | 3CX (v20 REST) | Trunk registration, extensions, system status |
 | Surveillance | Milestone XProtect (Config API + Events/State WebSocket) | Camera/recording state, RS health, storage, alarms |
+| DNS / DHCP / IPAM | Micetro (BlueCat / Men&Mice, REST `/mmws/api/v2`) | IP↔MAC↔DNS-name mirror, DHCP scope utilization *(D12, spec 21 — post-parity 11.x, default-off)* |
 
 Three things the sources can *not* provide are NetMon's own collection:
 
@@ -110,6 +111,8 @@ netmon/
 
 **Snapshot/inventory cache (spec 10 §3, planned):** `switch_ports`, `fdb_entries`, `lldp_neighbors`, `switch_vlans`, `stack_members`; `ap_details`, `ap_radios`, `wireless_clients`, `ssids`; `pf_nodes`; `cameras`, `recording_servers`, `trunks`, `extensions`; `config_backups`; generic `snapshot_cache` (key→JSON payload). Replace-on-refresh, `updated_at` on every row, no history. Counters store previous raw values in-row so rates are computed at write time — current rate is state, not history.
 
+**DDI mirror (spec 21, migration `031`):** `ddi_addresses` (IP PK; MAC, DNS name, lease/reservation, `mac_origin`) + `ddi_scopes` (DHCP scope utilization → stored severity). Replace-on-refresh, no history. `ddi_addresses.mac` is intentionally **non-unique** — one MAC holds several addresses — so joins to it must pick one row deliberately (see `netmon/api/switches.py::_DDI_ONE_IP`).
+
 **Bounded history (D3 approved; built Phase 10.6):** one `state_samples` ring-buffer table (migration `019`; `(series, ts) → value`), hard 24h retention, auto-pruned by the `netmon.history` sampler — nothing else stores series.
 
 **Design invariants:** `device_state` answers "what is true now"; `state_events` answers "what changed when"; inventory tables are descriptive facts; dashboards read only NetMon's DB — **zero source-platform calls at page render**. A source being unreachable is itself a state (`source_status = blind`), and blind must never render as healthy.
@@ -129,7 +132,7 @@ netmon/
 | **10.4 Surveillance + VoIP** | camera/RS/storage persistence + `milestone.overview`; ESS WebSocket wiring; camera JPEG proxy; trunks/extensions + SystemStatus | ✅ D5 |
 | **10.5 Global + Search** | `/api/summary`, `/api/sites` cards, `/api/search` + ⌘K palette; Global page; staleness badging pass | — |
 | **10.6 History buffer** | `state_samples` (24h ring, pruned) + sampler + `/api/history` + chart slots | ✅ D3 (built 2026-07-17) |
-| **11.x Post-parity** | FortiGate collector + page (D1); operator write actions with audit log (✅ D4); direct camera SNMP monitoring (✅ D10 — spec 13); EAPS/SFP-DOM extras | ✅ D4/D10 (2026-07-28) — post-cutover, default-off |
+| **11.x Post-parity** | FortiGate collector + page (D1); operator write actions with audit log (✅ D4); direct camera SNMP monitoring (✅ D10 — spec 13); Micetro DDI federation (D12 — spec 21); EAPS/SFP-DOM extras | ✅ D4/D10 (2026-07-28), D12 (2026-09-09) — post-cutover, default-off |
 | **8 — Parallel run & cutover** *(owner-gated)* | ≥4 weeks shadow comparison; owner flips `shadow=false`; Zabbix network/wireless/voice/camera hosts disabled (configs exported as rollback); Zabbix remains for servers | owner |
 
 **Cutover criterion:** an operator can do everything they did in ZabbixCustomDashboard *for the in-scope domains* without opening Zabbix — same pages, same drill-downs, honest staleness — and the shadow-alert diff has run clean for the agreed window.

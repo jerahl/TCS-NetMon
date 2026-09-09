@@ -1,0 +1,295 @@
+# Spec 21 — Micetro DDI federation (DNS / DHCP / IPAM)
+
+**Status:** proposed, built behind `[micetro] enabled = false`
+**Phase:** 11.x post-parity (a new federated source, not a v1 page-parity item)
+**Owner decisions on this page:** scope = identity enrichment **+** DHCP scope
+utilization (owner, 2026-09-09); sweep bound = all subnet ranges, non-empty
+records only (owner, 2026-09-09).
+**Source API:** Micetro REST API v2, `https://<micetro>/mmws/api/v2`
+(spec mirrored from `https://api.menandmice.com/26.1.0/swagger.json`, OpenAPI
+3.0.3, 264 paths; vendor docs at
+`https://docs.bluecatnetworks.com/r/Micetro-User-Guide/Micetro-REST-API/26.1.0`)
+
+---
+
+## 1. Why NetMon needs this
+
+NetMon can already say **where** a MAC is and, for NAC-managed endpoints,
+**who** it is:
+
+| Question | Answered by | Gap |
+|---|---|---|
+| Which switch port is this MAC on? | `fdb_entries` (SNMP sweep, spec 10 §4) | MAC only — no name, no IP |
+| Who owns this MAC, what role, what VLAN? | `pf_nodes` (PacketFence, spec 10 §5) | **only endpoints PacketFence has seen** |
+| What is this IP called? | *nothing* | — |
+
+The gap is the middle column's caveat. `fdb_entries` learns every MAC that
+forwards a frame — printers, cameras on non-NAC VLANs, UPSs, projectors, AV
+gear, statically addressed servers, the switch uplinks themselves. PacketFence
+only knows the ones that authenticated through it. So the FDB⋈PF port-detail
+pane (spec 10 §3's marquee feature) shows an identity card for the Chromebooks
+and a bare hex string for everything else — which is precisely the population
+an operator is looking at the port pane to identify.
+
+Micetro is the district's DDI system of record, and its IPAM records already
+carry the join NetMon is missing: **IP ↔ MAC ↔ DNS name**, for statically
+addressed devices as much as for DHCP clients. Federating it turns
+`aa:bb:cc:00:11:22` on port 1:14 into `bhs-lib-printer3.tcs.local`.
+
+This is the same federate-don't-re-poll strategy as every other source
+(CLAUDE.md §1): Micetro has the answer, NetMon reads it, NetMon never becomes a
+second DDI database. Nothing here re-derives DNS or DHCP by querying servers
+directly.
+
+## 2. Read-only posture — no new gate needed
+
+**This collector issues GET requests only.** That matters, because the obvious
+reading of the API docs suggests otherwise: the Swagger `security` block lists a
+single scheme, `Bearer token`, whose description says to obtain the token by
+`POST /micetro/sessions` with `{loginName, password}`. A login POST is still a
+POST, and the Milestone ESS precedent (spec 11 D5) shows those need their own
+sign-off even when they mutate nothing.
+
+NetMon does not use it. The Micetro Web Service also accepts **HTTP Basic
+authentication** on every request, and the vendor documentation is explicit
+that this replaces the session flow:
+
+> "By using authorization headers for authentication, the Login command becomes
+> unnecessary, and the session ID is not used."
+> — *API Authentication methods*, Micetro documentation
+
+So `micetro_client.py` sends `Authorization: Basic …` on each GET and never
+creates a session. The client has **no non-GET method at all** — not a disabled
+one, not a flagged one; `httpx` is only ever reached through `_get()`. Adding a
+write would mean adding a method, which is a reviewable diff and needs owner
+sign-off under §4.1.
+
+Consequences the deployment must honour:
+
+- **HTTPS is required** and enforced in the client constructor (same rule as
+  `RConfigClient`), because Basic auth puts the credential on every request.
+- The Micetro account should be a **read-only user**. NetMon cannot enforce
+  that, and unlike `[camera_snapshot]` there is no privileged action it could
+  reach even with an over-permissioned account — but least privilege is still
+  the correct posture, and it is documented in `netmon.conf.example`.
+
+## 3. What is collected
+
+Two cycles, both replace-on-refresh into row-shaped inventory tables
+(spec 10 §1). Neither writes `device_state`; see §6 for why.
+
+### 3.1 IPAM records — the identity join
+
+```
+GET /ranges?filter=…&offset=&limit=            → enumerate ranges
+GET /ranges/{rangeRef}/ipamRecords?offset=&limit=&includeRelatedDNSRecords=false
+```
+
+`IPAMRecord` fuses exactly what NetMon needs into one object:
+
+| Field | Use |
+|---|---|
+| `address` | PK of `ddi_addresses` |
+| `dhcpLeases[].mac` | MAC (DHCPv4 lease holder) — **first choice** |
+| `dhcpReservations[].clientIdentifier` | MAC (reservation) — second choice |
+| `lastKnownClientIdentifier` | MAC seen by IP discovery (ARP) — last choice |
+| `dnsHosts[].dnsRecord.name` | the DNS name; extras counted, not stored |
+| `state` | `Free` / `Assigned` / `Claimed` / `Pending` / `Held` |
+| `discoveryType` | `None` / `Ping` / `ARP` / `Lease` / `API` / `Custom` |
+| `lastSeenDate` | last IP-discovery sighting |
+| `device`, `interface` | Micetro's own device/interface labels |
+
+**MAC precedence is lease → reservation → discovery**, recorded in
+`mac_origin` so the UI can say how the identity was established. A lease is the
+strongest claim (the DHCP server handed that address to that MAC); ARP
+discovery is the weakest and can be stale by a scan interval. Storing the
+origin rather than silently collapsing the three keeps §4.5's "honest
+staleness" property at the field level, not just the row level.
+
+### 3.2 DHCP scopes — utilization
+
+```
+GET /dhcpScopes?offset=&limit=                 → scopes + utilizationPercentage
+```
+
+One row per scope in `ddi_scopes`, with `utilization_pct` classified to a
+`severity` at write time against `[micetro] scope_warn_pct` / `scope_crit_pct`
+(default 85 / 95). Classification at write time, not render time, is the same
+"current rate is state, not history" rule the port counters follow (CLAUDE.md
+§6) — and it means the Global page can count warning scopes with a
+`GROUP BY severity`, no arithmetic in the API layer.
+
+`superscope`, `range_cidr` and `server` are carried so a near-full scope can be
+traced to the VLAN and the DHCP server that owns it without a second call.
+
+### 3.3 What is deliberately *not* collected
+
+- **DNS zones / resource records wholesale** (`/dnsZones/{ref}/dnsRecords`).
+  The forward and reverse names NetMon needs already arrive attached to the
+  IPAM records that have an address, which is the only DNS data an operator
+  looking at a switch port can act on. Mirroring whole zones would make NetMon
+  a second copy of DNS — a maintenance burden and a stale-data hazard for no
+  page that needs it.
+- **DNS/DHCP server health** (`/dnsServers`, `/dhcpServers` reachability as a
+  `source_status` dimension). Offered and declined by the owner, 2026-09-09.
+  Zabbix keeps server monitoring (CLAUDE.md §2), and DDI servers are servers.
+- **`includeRelatedDNSRecords=true`.** It inflates every record with CNAMEs and
+  related RRs; NetMon shows one primary name plus a count of extras.
+- **Anything under `/ipamRecords/{addrRef}/ping`** — a POST, and NetMon has its
+  own ICMP ground truth in the poller (CLAUDE.md §1.1).
+
+## 4. Sweep bound and scale
+
+The concern is that Micetro's address space is not NetMon's device count.
+A single `/16` container holds 65,534 addresses; the district's registry holds
+~3,600 devices. A naive full mirror would be the largest table in the schema
+and almost entirely empty rows.
+
+The owner chose **all subnet ranges, keep only non-empty records** (2026-09-09):
+
+1. Enumerate `/ranges`, keep those with `subnet = true` — actual subnets, not
+   the container/aggregate rows that exist to hold them.
+2. Page `ipamRecords` per range (`limit` = `page_size`, default 500).
+3. **Keep a record only if it carries something.** A row survives the filter if
+   it has a MAC, a DNS name, a lease, a reservation, or a `state` other than
+   `Free`. An address that is merely unallocated is dropped before it reaches
+   the DB.
+
+This makes the row count scale with *assignments*, not with address space —
+the estate's real DDI footprint, expected to land in the low tens of thousands.
+
+Two guards, because "expected" is not "measured" and this has never run here:
+
+- **`max_records`** (default 60,000). On exceeding it the sweep **raises**,
+  which lands loud in `collector_health` and leaves the previous rows visibly
+  stale. It does not truncate: a half-mirror that looks complete is exactly the
+  fabrication §4.5 forbids.
+- **`max_ranges`** (default 2,000), same failure mode, to bound the per-range
+  request fan-out.
+
+Rate: one `/ranges` page-drain plus one `ipamRecords` drain per subnet, at
+`interval_s` (default 900s). With ~200 subnets and 500-row pages that is a few
+hundred GETs per quarter hour against an on-premises appliance — comparable to
+the SNMP inventory sweep and far below the XIQ budget that spec 11 tracks as a
+live question. **Unvalidated against the production Micetro**, see §8.
+
+## 5. Schema (migration `031_micetro_ddi.sql`)
+
+```
+ddi_addresses           PK (ip)
+  ip, mac, mac_origin, dns_name, dns_extra, state, discovery_type,
+  last_seen, lease_state, lease_expires, reservation, device_name,
+  interface_name, range_cidr, addr_ref, updated_at
+  KEY (mac)          -- the fdb_entries / pf_nodes join key
+  KEY (dns_name)     -- search
+  KEY (range_cidr)
+
+ddi_scopes              PK (scope_ref)
+  scope_ref, name, range_cidr, from_addr, to_addr, server, superscope,
+  enabled, utilization_pct, severity, updated_at
+  KEY (severity)
+```
+
+`ddi_addresses.ip` is the primary key rather than a surrogate id: an IP is
+unique in Micetro's address space, it is what the API returns, and it is what
+every join and lookup starts from. `mac` is nullable and **not** unique — one
+MAC legitimately holds several addresses (dual-stack, multi-homed, a device
+re-leased before the old lease expired), and the port pane wants all of them.
+
+Both tables are pure snapshot: replace-on-refresh, `updated_at` per row, no
+history, consistent with every other inventory table (CLAUDE.md §6). Rollback
+note in the migration is a plain `DROP TABLE` — every row is re-derivable from
+one sweep.
+
+Deliberately **no** `devices.micetro_ref` column. Micetro is keyed by IP and
+NetMon devices already carry `mgmt_ip`; the join is `ddi_addresses.ip =
+devices.mgmt_ip`, and adding a per-source key column would need backfilling
+3,600 rows to express something already expressible.
+
+## 6. Where it surfaces
+
+- **`GET /api/ddi/addresses`** — filter by `mac`, `ip`, `q` (name prefix),
+  `range`, paged. Carries `updated_at` per §4.5.
+- **`GET /api/ddi/scopes`** — scopes with utilization + severity, worst first.
+- **`GET /api/ddi/lookup/{mac}`** — every address a MAC holds. The endpoint the
+  port pane and NAC pages call.
+- **Switch port detail** (`/api/switches/{id}/ports/{ifindex}`) — the existing
+  `fdb_entries ⋈ pf_nodes` join gains a second `LEFT JOIN ddi_addresses ON mac`,
+  adding `ddi_ip` / `ddi_dns_name` / `ddi_mac_origin` / `ddi_updated_at` to each
+  MAC card. **This is the point of the whole spec.** `LEFT JOIN` throughout: a
+  MAC Micetro has never seen still renders, with nulls, exactly as today.
+- **`GET /api/switches/{id}/fdb`** — same enrichment on the bulk FDB tab.
+- **NAC** — `pf_nodes` rows gain the DNS name Micetro knows and PacketFence
+  does not.
+
+### Why no `device_state` dimension
+
+`device_state.dimension` is a MariaDB `ENUM` and `device_state.device_id` is a
+foreign key into `devices`. A DHCP scope is not a device and has no row there,
+so scope utilization cannot be written as state without either (a) inventing
+synthetic `devices` rows for scopes, which pollutes the registry every page and
+export reads, or (b) widening the enum and relaxing the invariant that
+`device_state` describes registered devices.
+
+Both are design changes that outlive this collector, so **neither is in this
+PR.** Scope severity is computed and stored on the `ddi_scopes` row, so the UI
+badges an exhausted pool honestly and `/api/ddi/scopes` sorts worst-first — but
+no email fires for it. Alerting on non-device entities is **open question Q3**
+below; it needs an owner decision on the data model, not a workaround.
+
+## 7. Configuration
+
+```ini
+[micetro]
+enabled = false          ; §4.3 — independently reversible, off on merge
+url = https://micetro.example.org
+username = netmon-ro     ; read-only Micetro account
+password =
+verify_ssl = true
+interval_s = 900
+page_size = 500
+max_records = 60000      ; sweep raises past this, never truncates
+max_ranges = 2000
+sweep_addresses = true
+sweep_scopes = true
+scope_warn_pct = 85
+scope_crit_pct = 95
+```
+
+Registered in `config.py`'s source tuple, so `cfg.source_enabled("micetro")`
+gates the supervised task and the settings overlay reaches it like any other
+source. Standalone entry point: `python -m netmon.collectors.micetro --once`.
+
+## 8. Open questions
+
+- **Q1 — live payload shape.** Built entirely against the published OpenAPI
+  schema and fixtures derived from it; **no production Micetro was reachable
+  from the build host** (there is no `[micetro]` section in
+  `/etc/netmon/netmon.conf` yet). Field names are taken from the 26.1.0 spec,
+  but the same "validate against live" caveat that spec 11 carries for 10.2 /
+  10.3 / 10.4 applies here and should be discharged with
+  `--once` against the real appliance before `enabled = true`.
+- **Q2 — real record count.** §4's ~tens-of-thousands estimate is arithmetic,
+  not measurement. The first `--once` run prints the kept/dropped counts; if it
+  trips `max_records`, that is the guard working, and the number to raise it to
+  is the number the run reports.
+- **Q3 — alerting on scope exhaustion** (see §6). Needs an owner decision:
+  widen `device_state` to non-device entities, or give the engine a second
+  evaluation path for inventory-table severities? Until then utilization is
+  visible but silent.
+- **Q4 — PII.** `ddi_addresses` stores DNS hostnames and MACs district-wide.
+  Materially less sensitive than `wireless_clients` (spec 10 Q8: usernames), and
+  hostnames are already visible in `pf_nodes.computername`, but the row count is
+  larger than any existing table and worth an explicit acceptance alongside Q8.
+- **Q5 — IPv6.** `DHCPLease` carries `duid`/`iaid` for DHCPv6 rather than a
+  MAC, so v6-only addresses will land with `mac = NULL` and identify by DNS
+  name alone. Correct but partial; revisit if the district deploys v6.
+
+## 9. Next session
+
+- [ ] Get a read-only Micetro account + URL into `/etc/netmon/netmon.conf`,
+      run `python -m netmon.collectors.micetro --once`, and record the actual
+      range/record counts against Q1/Q2.
+- [ ] Answer Q3 before promising anyone an exhaustion alert.
+- [ ] Frontend: the port-detail MAC card currently renders the PF fields; add
+      the DNS name line (API already returns it).
