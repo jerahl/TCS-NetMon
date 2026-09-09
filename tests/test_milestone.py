@@ -1267,67 +1267,81 @@ def _mock_client(handler):
     return c
 
 
-def test_update_hardware_posts_the_task_under_the_owning_recording_server():
-    """Path shape verified live: /api/rest/v1 prefix, `hardware` singular,
-    nested under the parent recordingServer, task named UpdateHardware."""
+def _tasks_handler(task_ids, post_status=200, post_body="{}"):
+    """Serves `GET /hardware/{id}?tasks`, then the task POST."""
     import httpx
 
     seen = []
 
     def handler(request):
-        seen.append((request.method, request.url.path))
+        q = request.url.query
+        q = q.decode() if isinstance(q, bytes) else str(q)
+        seen.append((request.method, str(request.url.path), q))
         if request.method == "GET":
-            return httpx.Response(200, json={"data": {
-                "id": HW_GUID,
-                "relations": {"parent": {"type": "recordingServers", "id": RS_GUID}}}})
-        return httpx.Response(200, json={})
+            return httpx.Response(200, json={
+                "data": {"id": HW_GUID},
+                "tasks": [{"id": t, "displayName": t} for t in task_ids]})
+        return httpx.Response(post_status, text=post_body)
 
-    client = _mock_client(handler)
-    code, _ = asyncio.run(client.update_hardware(HW_GUID))
+    return handler, seen
+
+
+def test_update_hardware_invokes_the_task_as_a_query_parameter():
+    """Vendor reference: `POST /hardware/{id}?task=<TaskId>`.
+
+    NOT a path segment. The path form
+    /recordingServers/{rs}/hardware/{hw}/tasks/UpdateHardware makes the gateway
+    die with 0x800703e9 (ERROR_STACK_OVERFLOW) — an IIS 500 per request against
+    the customer's Management Server. It was tried live on 2026-09-09; this
+    test exists so it is never shipped again.
+    """
+    handler, seen = _tasks_handler(["UpdateHardware", "MoveHardware"])
+    code, _ = asyncio.run(_mock_client(handler).update_hardware(HW_GUID))
     assert code == 200
-    assert seen == [
+    assert [(m, path) for m, path, _ in seen] == [
         ("GET", f"/api/rest/v1/hardware/{HW_GUID}"),
-        ("POST", f"/api/rest/v1/recordingServers/{RS_GUID}/hardware/{HW_GUID}"
-                 "/tasks/UpdateHardware"),
+        ("POST", f"/api/rest/v1/hardware/{HW_GUID}"),
     ]
+    assert seen[0][2] == "tasks"
+    assert seen[1][2] == "task=UpdateHardware"
+    assert all("recordingServers" not in path for _, path, _ in seen)
+    assert all("/tasks/" not in path for _, path, _ in seen)
 
 
-def test_update_hardware_refuses_anything_that_is_not_a_guid():
-    """The id goes into a URL path on the *write* side."""
-    from netmon.collectors.milestone_client import MilestoneError
+def test_update_hardware_refuses_when_the_vms_does_not_offer_the_task():
+    """This estate's reality: 23 hardware records across 7 driver strings
+    advertise only ReadPassword/ChangePassword/Move/Replace. Refusing without
+    sending is the honest answer, and it protects the gateway."""
+    from netmon.collectors.milestone_client import MilestoneTaskUnavailable
 
-    client = _mock_client(lambda r: None)
-    for bad in ("", "not-a-guid", "../../cameras", f"{HW_GUID}/../x"):
-        with pytest.raises(MilestoneError, match="hardware GUID"):
-            asyncio.run(client.update_hardware(bad))
+    handler, seen = _tasks_handler(
+        ["ReadPasswordHardware", "ChangePasswordHardware", "MoveHardware",
+         "ReplaceHardware"])
+    with pytest.raises(MilestoneTaskUnavailable, match="does not offer UpdateHardware"):
+        asyncio.run(_mock_client(handler).update_hardware(HW_GUID))
+    assert [m for m, _, _ in seen] == ["GET"]        # discovery only
 
 
-def test_update_hardware_refuses_when_the_parent_is_missing():
-    """Without a recordingServer there is nowhere to post the task."""
-    import httpx
+def test_update_hardware_names_what_the_device_does_offer():
+    """So an operator can see it is a capability gap, not a bug."""
+    from netmon.collectors.milestone_client import MilestoneTaskUnavailable
 
-    from netmon.collectors.milestone_client import MilestoneError
-
-    def handler(request):
-        return httpx.Response(200, json={"data": {"id": HW_GUID, "relations": {}}})
-
-    with pytest.raises(MilestoneError, match="no recordingServers parent"):
+    handler, _ = _tasks_handler(["MoveHardware", "ReplaceHardware"])
+    with pytest.raises(MilestoneTaskUnavailable, match="MoveHardware"):
         asyncio.run(_mock_client(handler).update_hardware(HW_GUID))
 
 
 def test_update_hardware_returns_the_status_rather_than_raising():
     """The caller audits the outcome; a 500 is data, not an exception."""
-    import httpx
-
-    def handler(request):
-        if request.method == "GET":
-            return httpx.Response(200, json={"data": {
-                "id": HW_GUID,
-                "relations": {"parent": {"type": "recordingServers", "id": RS_GUID}}}})
-        return httpx.Response(500, text="boom")
-
+    handler, _ = _tasks_handler(["UpdateHardware"], post_status=500, post_body="boom")
     code, body = asyncio.run(_mock_client(handler).update_hardware(HW_GUID))
     assert code == 500 and "boom" in body
+
+
+def test_hardware_tasks_lists_what_the_device_advertises():
+    handler, _ = _tasks_handler(["MoveHardware", "ReplaceHardware"])
+    assert asyncio.run(_mock_client(handler).hardware_tasks(HW_GUID)) == [
+        "MoveHardware", "ReplaceHardware"]
 
 
 def test_update_hardware_is_the_only_non_get_in_the_client():
@@ -1350,3 +1364,20 @@ def test_update_hardware_is_the_only_non_get_in_the_client():
                         and inner.func.attr in ("post", "put", "patch", "delete")):
                     posts.append((node.name, inner.func.attr))
     assert sorted(posts) == [("_get_token", "post"), ("update_hardware", "post")], posts
+
+
+def test_no_task_is_ever_built_as_a_path_segment():
+    """The URL form that crashed the gateway must not reappear.
+
+    Checked against the compiled constants rather than the source text: the
+    docstring deliberately names the bad form so nobody rediscovers it, and a
+    grep over source could not tell the warning from the mistake.
+    """
+    from netmon.collectors.milestone_client import MilestoneClient
+
+    doc = MilestoneClient.update_hardware.__doc__
+    consts = [c for c in MilestoneClient.update_hardware.__code__.co_consts
+              if isinstance(c, str) and c != doc]
+    joined = " ".join(consts)
+    assert "/tasks/" not in joined
+    assert "recordingServers" not in joined

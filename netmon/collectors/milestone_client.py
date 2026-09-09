@@ -39,6 +39,15 @@ class MilestoneError(Exception):
     pass
 
 
+class MilestoneTaskUnavailable(MilestoneError):
+    """The VMS does not offer this task on this hardware.
+
+    Distinct from a failure: nothing was sent. Task availability is per
+    hardware and driver-dependent, so this is a normal answer for some estates
+    — including this one, where no hardware advertises ``UpdateHardware``.
+    """
+
+
 class MilestoneAuthError(MilestoneError):
     pass
 
@@ -47,6 +56,9 @@ class MilestoneAuthError(MilestoneError):
 #: on the write side, where a malformed id must not become a different request.
 _GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
                    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+#: The task that makes Milestone re-read a camera's driver settings.
+TASK_UPDATE_HARDWARE = "UpdateHardware"
 
 
 def _items(resp: dict) -> list[dict]:
@@ -305,51 +317,61 @@ class MilestoneClient:
                     log.warning("cameraGroups pagination exceeded 40 pages; stopping")
                     return out
 
+    async def hardware_tasks(self, hardware_id: str) -> list[str]:
+        """Task ids this hardware advertises — ``GET /hardware/{id}?tasks``.
+
+        The capability check that has to happen before any invocation. Task
+        availability is per hardware and depends on the driver, so "the docs
+        list it" is not evidence this device offers it.
+        """
+        hardware_id = self._guid_or_raise(hardware_id, "hardware_tasks")
+        async with await self._mkclient() as client:
+            body = await self._get(client, f"/api/rest/v1/hardware/{hardware_id}?tasks")
+        return [str(t.get("id")) for t in (body.get("tasks") or [])
+                if isinstance(t, dict) and t.get("id")]
+
     async def update_hardware(self, hardware_id: str) -> tuple[int, str]:
-        """``POST .../recordingServers/{rs}/hardware/{hw}/tasks/UpdateHardware``.
+        """Ask Milestone to re-detect a camera — the ``UpdateHardware`` task.
 
-        **The only non-GET in this client**, and the only write NetMon makes to
-        Milestone (owner sign-off 2026-09-09; the endpoint shape came from the
-        owner). Everything else here reads.
+        **The only non-GET in this client** besides the OAuth token, and the
+        only write NetMon makes to Milestone (owner sign-off 2026-09-09).
 
-        Why it exists: `hardwareDriverSettings.firmwareVersion` is a *cache*.
-        It does not move when a camera is flashed — 50 cameras reported
-        7.93.0024 from their own APIs while Milestone still said 7.10.0074
-        hours later. Only a hardware re-detect refreshes it, which is what the
-        Management Client's "Update hardware" does.
+        Why it exists: `hardwareDriverSettings.firmwareVersion` is a *cache*. It
+        does not move when a camera is flashed — 50 cameras reported 7.93.0024
+        from their own APIs while Milestone still said 7.10.0074 hours later.
 
-        The task is nested under the owning recording server, and the parent is
-        resolved here rather than stored: `relations.parent` on the hardware
-        record is always current, and hardware does get moved between
-        recording servers. One extra GET before the POST.
+        The invocation form is from the vendor reference: a task is a **query
+        parameter**, not a path segment —
 
-        Note the resource is ``hardware`` singular — ``hardwares`` answers 404
-        "Unknown resource" — and the prefix is ``/api/rest/v1``, not
-        ``/api/config/v1``, which does not exist on this gateway (both verified
-        live 2026-09-09).
+            POST /api/rest/v1/hardware/{id}?task=UpdateHardware
+
+        Getting that wrong is not a harmless 404. The path form
+        ``/recordingServers/{rs}/hardware/{hw}/tasks/UpdateHardware`` makes the
+        gateway's managed handler die with ``0x800703e9``
+        (ERROR_STACK_OVERFLOW) — an IIS 500 per request, i.e. we crash a worker
+        request on the customer's Management Server. It was tried live on
+        2026-09-09 and must not be tried again.
+
+        Which is why this **discovers before it acts**. `UpdateHardware` is not
+        universally available: on this estate (XProtect 25.2) no hardware
+        advertises it — 23 records across 7 driver strings offer only
+        ReadPasswordHardware, ChangePasswordHardware, MoveHardware and
+        ReplaceHardware. So the honest outcome here is a refusal naming what the
+        device actually offers, not a request the server cannot route.
 
         Returns ``(http_status, body_text)``. **Never retried**: a task that
-        timed out may still be running, and asking twice would queue a second
-        re-detect against the same device.
+        timed out may still be running.
         """
-        hardware_id = (hardware_id or "").strip()
-        if not _GUID.fullmatch(hardware_id):
-            # Straight into a URL path, and this is a write — so the id is
-            # required to look like the GUID Milestone issues, not merely to be
-            # non-empty.
-            raise MilestoneError(
-                f"update_hardware needs a Milestone hardware GUID, got {hardware_id!r}")
+        hardware_id = self._guid_or_raise(hardware_id, "update_hardware")
+        available = await self.hardware_tasks(hardware_id)
+        if TASK_UPDATE_HARDWARE not in available:
+            raise MilestoneTaskUnavailable(
+                f"Milestone does not offer {TASK_UPDATE_HARDWARE} on hardware "
+                f"{hardware_id}; it advertises {available or ['nothing']}. "
+                "Not sending the request — the wrong URL form crashes the "
+                "gateway rather than 404ing.")
+        path = f"/api/rest/v1/hardware/{hardware_id}?task={TASK_UPDATE_HARDWARE}"
         async with await self._mkclient() as client:
-            item = await self._get(client, f"/api/rest/v1/hardware/{hardware_id}")
-            data = item.get("data") if isinstance(item.get("data"), dict) else item
-            parent = ((data or {}).get("relations") or {}).get("parent") or {}
-            rs_id = str(parent.get("id") or "")
-            if not _GUID.fullmatch(rs_id):
-                raise MilestoneError(
-                    f"hardware {hardware_id} has no recordingServers parent to "
-                    f"post the task to (got {rs_id!r})")
-            path = (f"/api/rest/v1/recordingServers/{rs_id}"
-                    f"/hardware/{hardware_id}/tasks/UpdateHardware")
             try:
                 resp = await client.post(
                     path, json={},
@@ -358,8 +380,17 @@ class MilestoneClient:
                              "Content-Type": "application/json"})
             except httpx.HTTPError as exc:
                 raise MilestoneError(
-                    f"milestone transport error on UpdateHardware: {exc}") from exc
+                    f"Milestone {type(exc).__name__} on {TASK_UPDATE_HARDWARE}: "
+                    f"{str(exc) or 'no detail'}") from exc
         return resp.status_code, (resp.text or "")[:2000]
+
+    @staticmethod
+    def _guid_or_raise(value: str, who: str) -> str:
+        """Milestone ids are GUIDs; anything reaching a URL path must look like one."""
+        value = (value or "").strip()
+        if not _GUID.fullmatch(value):
+            raise MilestoneError(f"{who} needs a Milestone hardware GUID, got {value!r}")
+        return value
 
     async def hardware(self) -> list[dict]:
         """Hardware (a camera's physical host) → model and network address.

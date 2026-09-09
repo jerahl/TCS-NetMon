@@ -913,7 +913,58 @@ the REST gateway maps `InvokeMethod` at all is unknown, and the only way to
 find out by experiment is POSTing guessed paths at a production VMS — where a
 wrong guess could disable hardware or start an unintended flash. Not done.
 
-### Resolved 2026-09-09: the owner supplied the endpoint, and it is BUILT
+### Resolved 2026-09-09 — the mechanism is known, and `UpdateHardware` does not exist here
+
+Two rounds of being wrong, both worth keeping.
+
+**Round 1 — my path form crashed the gateway.** From the owner's shape I built
+``POST /api/rest/v1/recordingServers/{rs}/hardware/{hw}/tasks/UpdateHardware``,
+reasoning that a `GET` returning IIS 500 (where an unknown path returns a JSON
+404) meant "route matched, wrong verb". It did not. The 500 carries
+``Error Code 0x800703e9`` = **ERROR_STACK_OVERFLOW**: the managed handler
+recurses to death on that URL. Every attempt crashes an IIS worker request on
+the customer's Management Server. Fifty were sent before the error page was
+read properly. Read the error body *first*.
+
+**Round 2 — the real mechanism, from the vendor reference.** A task is a
+**query parameter**, never a path segment:
+
+```
+GET  /api/rest/v1/hardware/{id}?tasks          → the tasks this hardware offers
+POST /api/rest/v1/hardware/{id}?task=<TaskId>  → invoke one
+```
+
+Parameters go in the body; a missing one comes back as a 400 naming what is
+required. The prefix is `/api/rest/v1` — `/api/config/v1` does not exist on
+this gateway.
+
+**And the task is not available here.** `GET ?tasks` across 23 hardware records
+spanning 7 driver strings returns the same four every time:
+`ReadPasswordHardware`, `ChangePasswordHardware`, `MoveHardware`,
+`ReplaceHardware`. Neither `UpdateHardware` nor `UpdateFirmwareHardware` is
+advertised anywhere on this estate (XProtect 25.2). The vendor reference lists
+them as examples; this deployment's drivers do not offer them.
+
+So **the feature cannot work here**, and the code says so instead of trying:
+
+- `hardware_tasks()` reads the advertised list; `update_hardware()` refuses
+  with `MilestoneTaskUnavailable` — naming what the device *does* offer —
+  before sending anything. A capability gap is not a fault.
+- The runner checks capability **before** opening an audit row, so a
+  supported-nowhere feature does not write a "failed" row per camera and make a
+  clean roll look half-broken. The warning is logged once per batch.
+- `--refresh-milestone --apply` asks one camera, then stops: "this VMS does not
+  offer UpdateHardware ... Nothing sent." Verified live 2026-09-09.
+- Two tests pin the URL form so the stack-overflow path can never ship again —
+  one against the compiled constants, because the docstring deliberately names
+  the bad form.
+
+What would actually make Milestone's value correct, if it matters: an "Update
+hardware" from the Management Client by hand, or `UpdateFirmwareHardware` if a
+future version/licence exposes it (which would mean letting Milestone own the
+flash — see the redesign note below). NetMon does not depend on either.
+
+### Superseded: the endpoint as first built
 
 The owner gave the path shape:
 ``/api/config/v1/recordingServers/<rs>/hardwares/<hw>/tasks/UpdateHardware``.

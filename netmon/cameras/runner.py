@@ -44,6 +44,7 @@ from netmon.actions import ActionRefused, AuditedAction, action_or_refuse
 from netmon.cameras import firmware as fw
 from netmon.cameras import ops
 from netmon.cameras.platforms import compatible, platform_for, probe_agrees
+from netmon.collectors.milestone_client import TASK_UPDATE_HARDWARE
 from netmon.cameras.vendors import profile_for
 from netmon.cameras.vendors.bosch import (
     VendorReadUnavailable, VendorWriteUnavailable,
@@ -139,6 +140,8 @@ class BatchRunner:
         #: Callable returning a MilestoneClient, or None. Injected so the
         #: runner never builds one itself and tests never reach a network.
         self._milestone_client = milestone_client
+        #: Log "this VMS cannot do it" once per batch, not once per camera.
+        self._refresh_unsupported_logged = False
         self.aborted = False
 
     # ── guards ────────────────────────────────────────────────────────────
@@ -460,6 +463,25 @@ class BatchRunner:
             log.warning("milestone refresh enabled but no Milestone client is "
                         "configured — skipping for %s", item.get("name"))
             return
+        # A VMS that does not offer the task is a capability gap, not a fault:
+        # on this estate no hardware advertises UpdateHardware at all. Detect it
+        # *before* opening an audit row, so a supported-nowhere feature does not
+        # write a "failed" row per camera and make a clean roll look broken. It
+        # is logged once per batch rather than per camera for the same reason.
+        try:
+            available = await client.hardware_tasks(hardware_id)
+        except Exception as exc:                          # noqa: BLE001 — never fatal
+            log.warning("could not read Milestone tasks for %s: %r", item.get("name"), exc)
+            return
+        if TASK_UPDATE_HARDWARE not in available:
+            if not self._refresh_unsupported_logged:
+                self._refresh_unsupported_logged = True
+                log.warning(
+                    "milestone_refresh is on but this VMS does not offer %s "
+                    "(hardware advertises %s) — skipping it for this batch",
+                    TASK_UPDATE_HARDWARE, available or "nothing")
+            return
+
         with AuditedAction(self.engine, spec, actor=self.actor, role=self.role,
                            device_id=device_id, target=target,
                            params={"hardware_id": hardware_id,
@@ -712,10 +734,30 @@ def _cli_refresh_milestone(engine: Engine, cfg: Any, *, apply: bool) -> int:
         return 1
 
     async def go() -> tuple[int, int]:
+        from netmon.collectors.milestone_client import MilestoneTaskUnavailable
+
+        # Ask the first camera first. If this VMS does not offer the task, say
+        # so once and stop — printing the same capability gap 50 times is not a
+        # report, and 50 pointless round trips are not free.
+        try:
+            available = await client.hardware_tasks(str(rows[0]["hardware_id"]))
+        except Exception as exc:                          # noqa: BLE001
+            print(f"error: could not read Milestone tasks: {exc!r}")
+            return 0, len(rows)
+        if TASK_UPDATE_HARDWARE not in available:
+            print(f"\nthis VMS does not offer {TASK_UPDATE_HARDWARE}. Hardware "
+                  f"advertises: {', '.join(available) or 'nothing'}.")
+            print("Nothing sent. Milestone's firmware value stays stale; NetMon's "
+                  "own registry is already correct.")
+            return 0, 0
+
         ok = bad = 0
         for r in rows:
             try:
                 code, body = await client.update_hardware(str(r["hardware_id"]))
+            except MilestoneTaskUnavailable as exc:
+                print(f"  skip {r['name']}: {exc}")
+                continue
             except Exception as exc:                      # noqa: BLE001
                 print(f"  FAIL {r['name']}: {exc!r}")
                 bad += 1

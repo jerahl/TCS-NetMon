@@ -903,12 +903,16 @@ def test_reconcile_takes_the_newest_verified_flash(tmp_path):
 # executed against a live VMS, which is why the config flag defaults off.
 
 class FakeMilestone:
-    """Records UpdateHardware calls; can fail on demand."""
+    """Records UpdateHardware calls; can fail or withhold the task on demand."""
 
-    def __init__(self, *, status=200, raise_with=None):
+    def __init__(self, *, status=200, raise_with=None, tasks=("UpdateHardware",)):
         self.status = status
         self.raise_with = raise_with
+        self.tasks = list(tasks)
         self.calls: list[str] = []
+
+    async def hardware_tasks(self, hardware_id):
+        return list(self.tasks)
 
     async def update_hardware(self, hardware_id):
         self.calls.append(hardware_id)
@@ -1071,3 +1075,58 @@ def test_milestone_stale_cameras_skips_cameras_with_no_hardware_id(tmp_path):
     engine = _seed(f"sqlite:///{tmp_path/'r.db'}")
     _verified_item(engine, 1, "7.93.0024", finished=NOW)   # hardware_id NULL
     assert milestone_stale_cameras(engine) == []
+
+
+def test_a_vms_without_the_task_is_skipped_without_a_failed_audit_row(tmp_path):
+    """This estate: no hardware advertises UpdateHardware.
+
+    A capability gap must not write a "failed" audit row per camera — that
+    would make every clean roll look half-broken.
+    """
+    engine = _seed(f"sqlite:///{tmp_path/'r.db'}")
+    _seed_hw(engine)
+    cfg = _cfg(tmp_path, milestone_refresh="true")
+    batch_id = _batch(engine, device_ids=[1])
+    ms = FakeMilestone(tasks=["ReadPasswordHardware", "MoveHardware", "ReplaceHardware"])
+    _run_ms(engine, cfg, batch_id, FakeCameraFleet(vendor_reads={"10.1.1.1": "7.90.0123"}), ms)
+
+    assert ms.calls == []                  # nothing sent
+    assert _audit(engine) == []            # and nothing recorded as a failure
+    assert _items(engine, batch_id)[1]["status"] == ops.VERIFIED
+
+
+def test_the_unsupported_warning_is_logged_once_per_batch(tmp_path, caplog):
+    """Three cameras must not produce three identical warnings."""
+    import logging
+
+    engine = _seed(f"sqlite:///{tmp_path/'r.db'}")
+    for device_id, guid in ((1, "11111111-1111-1111-1111-111111111111"),
+                            (2, "22222222-2222-2222-2222-222222222222"),
+                            (3, "33333333-3333-3333-3333-333333333333")):
+        _seed_hw(engine, device_id, guid)
+    cfg = _cfg(tmp_path, milestone_refresh="true")
+    batch_id = _batch(engine, device_ids=[1, 2, 3])
+    ms = FakeMilestone(tasks=["MoveHardware"])
+    with caplog.at_level(logging.WARNING, logger="netmon.cameras.runner"):
+        _run_ms(engine, cfg, batch_id,
+                FakeCameraFleet(vendor_reads={"10.1.1.1": "7.90.0123",
+                                              "10.1.1.2": "7.90.0123",
+                                              "10.1.1.3": "7.90.0123"}), ms)
+    hits = [r for r in caplog.records if "does not offer" in r.getMessage()]
+    assert len(hits) == 1
+
+
+def test_a_task_discovery_failure_is_not_fatal(tmp_path):
+    engine = _seed(f"sqlite:///{tmp_path/'r.db'}")
+    _seed_hw(engine)
+    cfg = _cfg(tmp_path, milestone_refresh="true")
+    batch_id = _batch(engine, device_ids=[1])
+
+    class Broken(FakeMilestone):
+        async def hardware_tasks(self, hardware_id):
+            raise RuntimeError("gateway down")
+
+    _run_ms(engine, cfg, batch_id,
+            FakeCameraFleet(vendor_reads={"10.1.1.1": "7.90.0123"}), Broken())
+    assert _items(engine, batch_id)[1]["status"] == ops.VERIFIED
+    assert _audit(engine) == []
