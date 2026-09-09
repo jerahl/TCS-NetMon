@@ -252,11 +252,37 @@ def build_scope_rows(scopes: list[dict], ranges_by_ref: dict[str, dict],
     return rows
 
 
+def _refuse_empty_replace(engine: Engine, table: str, rows: list[dict], what: str) -> None:
+    """Refuse to replace a populated table with nothing.
+
+    ``db.replace_rows`` prunes whatever it did not see, so an empty ``rows``
+    empties the table — and a sweep that fetched nothing would then report
+    success over a wiped mirror. That is not hypothetical here: this Micetro
+    answers a malformed ``filter`` with HTTP 200 and ``totalResults = 0``
+    (probed 2026-09-09), so "every range returned no records" is a shape the
+    source can genuinely produce without erroring.
+
+    An estate running DDI does not legitimately drop to zero addresses or zero
+    DHCP scopes, so treat it as a fault: raise, keep the previous rows visibly
+    stale, and record loud in ``collector_health`` (§4.5). A genuinely empty
+    Micetro needs the table truncated by hand — a deliberate act, which is the
+    correct cost for something otherwise indistinguishable from a broken sweep.
+    """
+    if rows:
+        return
+    existing = (db.fetch_one(engine, f"SELECT COUNT(*) AS n FROM {table}") or {}).get("n") or 0
+    if existing:
+        raise MicetroError(
+            f"micetro returned no {what} but {table} holds {existing} rows — "
+            f"refusing to wipe the mirror on an empty sweep; prior rows kept "
+            f"(stale). Check the Micetro account's permissions and range access.")
+
+
 class MicetroCollector(Collector):
     name = "micetro"
 
     def __init__(self, engine: Engine, client: MicetroClient,
-                 interval_s: float = 900.0,
+                 interval_s: float = 3600.0,
                  sweep_addresses: bool = True, sweep_scopes: bool = True,
                  max_records: int = 60000, max_ranges: int = 2000,
                  scope_warn_pct: int = 85, scope_crit_pct: int = 95) -> None:
@@ -284,7 +310,7 @@ class MicetroCollector(Collector):
         )
         return cls(
             engine, client,
-            interval_s=int(s.get("interval_s") or 900),
+            interval_s=int(s.get("interval_s") or 3600),
             sweep_addresses=_truthy(s.get("sweep_addresses", "true")),
             sweep_scopes=_truthy(s.get("sweep_scopes", "true")),
             max_records=int(s.get("max_records") or 60000),
@@ -339,6 +365,7 @@ class MicetroCollector(Collector):
 
         with_mac = sum(1 for r in deduped if r["mac"])
         with_dns = sum(1 for r in deduped if r["dns_name"])
+        _refuse_empty_replace(self.engine, "ddi_addresses", deduped, "addresses")
         db.replace_rows(self.engine, "ddi_addresses", ["ip"], deduped)
         log.info("micetro addresses: %d subnets (%d non-subnet ranges skipped) → "
                  "%d rows (%d with MAC, %d with DNS name)",
@@ -354,6 +381,7 @@ class MicetroCollector(Collector):
         by_ref = {str(r.get("ref")): r for r in ranges
                   if isinstance(r, dict) and r.get("ref")}
         rows = build_scope_rows(scopes, by_ref, self.scope_warn_pct, self.scope_crit_pct)
+        _refuse_empty_replace(self.engine, "ddi_scopes", rows, "DHCP scopes")
         db.replace_rows(self.engine, "ddi_scopes", ["scope_ref"], rows)
         counts: dict[str, int] = {}
         for row in rows:

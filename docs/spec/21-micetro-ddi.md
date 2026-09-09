@@ -33,8 +33,14 @@ an operator is looking at the port pane to identify.
 
 Micetro is the district's DDI system of record, and its IPAM records already
 carry the join NetMon is missing: **IP ↔ MAC ↔ DNS name**, for statically
-addressed devices as much as for DHCP clients. Federating it turns
-`aa:bb:cc:00:11:22` on port 1:14 into `bhs-lib-printer3.tcs.local`.
+addressed devices as much as for DHCP clients.
+
+> ⚠️ **Read §7a before believing this section.** The first live run measured
+> the gap and it is much narrower than written above: PacketFence already names
+> 95.5% of FDB MACs, and Micetro adds a hostname for only **16** it cannot.
+> The real payoff turned out to be *address* resolution (an IP for 5,446
+> otherwise-unnamed MACs) and DHCP capacity, not hostname enrichment. The
+> framing here is the hypothesis; §7a is the evidence.
 
 This is the same federate-don't-re-poll strategy as every other source
 (CLAUDE.md §1): Micetro has the answer, NetMon reads it, NetMon never becomes a
@@ -246,7 +252,7 @@ url = https://micetro.example.org
 username = netmon-ro     ; read-only Micetro account
 password =
 verify_ssl = true
-interval_s = 900
+interval_s = 3600          ; measured, not guessed — see §7a
 page_size = 500
 max_records = 60000      ; sweep raises past this, never truncates
 max_ranges = 2000
@@ -260,19 +266,75 @@ Registered in `config.py`'s source tuple, so `cfg.source_enabled("micetro")`
 gates the supervised task and the settings overlay reaches it like any other
 source. Standalone entry point: `python -m netmon.collectors.micetro --once`.
 
+## 7a. First live run — measured 2026-09-09 (discharges Q1/Q2)
+
+Ran `--once` against the production appliance. It works, and the numbers
+**contradict §1's premise in one important respect**, recorded here rather
+than quietly left as written.
+
+| Measure | Value |
+|---|---|
+| Ranges / subnets swept | 263 / 261 (2 non-subnet skipped) |
+| `ipamRecords` requests | 2,023 · ~4 min wall clock |
+| Addresses kept | 19,656 (of ~1M fetched) |
+| …with a MAC | 19,048 — **all from DHCP leases**; zero reservations, zero ARP discovery |
+| …with a DNS name | 4,038 (21%) |
+| DHCP scopes | 261 — 2 crit, 2 warn, 257 ok |
+
+**The identity gap is far smaller than assumed.** PacketFence already knows
+**95.5%** of the 14,468 distinct MACs in `fdb_entries` (13,818); Micetro knows
+90.7% (13,124). MACs that Micetro can name and PacketFence cannot: **16.** The
+motivating picture in §1 — "a card for the Chromebooks and a bare hex string
+for everything else" — is not what this estate looks like. PF's coverage of the
+FDB is near-total.
+
+What the mirror *does* add, measured on FDB MACs:
+
+- 6,694 MACs carry no PacketFence `computername`. Micetro supplies a DNS name
+  for **73** of them, and an **IP** for **5,446**.
+- 2,357 MACs have no IP in `pf_nodes` at all. Micetro fills **1,055**.
+- **DHCP scope utilization is unique** — 261 scopes with fill levels, 4 of them
+  already warn-or-worse. Nothing else in NetMon can produce this, and it does
+  not depend on the identity story at all.
+
+So the honest value is *address resolution and DHCP capacity*, not hostname
+enrichment. §1's framing oversells the DNS-name benefit and should be read
+against this table. Two consequences:
+
+- **`interval_s` should be 3600, not 900.** A 4-minute, 2,000-request sweep
+  every 15 minutes is a 27% duty cycle on the appliance to refresh data that is
+  DHCP-lease- and capacity-shaped, not real-time. The value does not justify
+  the cadence.
+- **The fetch is ~98% waste** and cannot currently be fixed. See Q6.
+
 ## 8. Open questions
 
-- **Q1 — live payload shape.** Built entirely against the published OpenAPI
-  schema and fixtures derived from it; **no production Micetro was reachable
-  from the build host** (there is no `[micetro]` section in
-  `/etc/netmon/netmon.conf` yet). Field names are taken from the 26.1.0 spec,
-  but the same "validate against live" caveat that spec 11 carries for 10.2 /
-  10.3 / 10.4 applies here and should be discharged with
-  `--once` against the real appliance before `enabled = true`.
-- **Q2 — real record count.** §4's ~tens-of-thousands estimate is arithmetic,
-  not measurement. The first `--once` run prints the kept/dropped counts; if it
-  trips `max_records`, that is the guard working, and the number to raise it to
-  is the number the run reports.
+- **Q1 — live payload shape.** ✅ **Discharged 2026-09-09** (§7a). Every field
+  name from the 26.1.0 schema parsed correctly against the live appliance. Two
+  corrections the schema did not tell us, both now in code: `ObjRef` values
+  already carry their collection (`ranges/6`, not `6`), and `DHCPScope` has no
+  utilization figure — it lives on `Range`.
+- **Q2 — real record count.** ✅ **Discharged 2026-09-09**: 19,656 rows kept,
+  comfortably under `max_records = 60000`. The guards were not tripped.
+- **Q6 — the fetch is ~98% waste, and the obvious fix is unsafe.** The sweep
+  pulls every address in every subnet — roughly a million records — to keep
+  19,656. The `filter` parameter exists on `/ranges/{ref}/ipamRecords` and
+  would fix this, but on this build **every expression tried returned HTTP 200
+  with `totalResults = 0`** rather than an error: `state=Assigned`,
+  `state!=Free`, `state == Assigned`, `state:Assigned`, `state eq Assigned`,
+  `Assigned`, `state="Assigned"`, `claimed=true`, `dhcpLeases=*`. A filter that
+  silently matches nothing is the worst available failure — it looks like a
+  successful sweep of an estate that owns no addresses. Needs the real filter
+  grammar from BlueCat support, and any candidate must be proved to return the
+  *same* count as the unfiltered call on a known range before it ships.
+  Mitigation until then is cadence (`interval_s = 3600`), not cleverness.
+- **Q7 — an empty sweep used to wipe the mirror.** Found while probing Q6:
+  `db.replace_rows` prunes whatever it did not see, so a source that answers
+  "no records" with HTTP 200 would have emptied `ddi_addresses` and reported
+  success. Now guarded — refusing to replace a populated table with nothing,
+  raising instead so prior rows stay visibly stale (§4.5). A genuinely empty
+  Micetro requires truncating the table by hand, which is the right price for
+  a state otherwise indistinguishable from a broken sweep.
 - **Q3 — alerting on scope exhaustion** (see §6). Needs an owner decision:
   widen `device_state` to non-device entities, or give the engine a second
   evaluation path for inventory-table severities? Until then utilization is
@@ -287,9 +349,15 @@ source. Standalone entry point: `python -m netmon.collectors.micetro --once`.
 
 ## 9. Next session
 
-- [ ] Get a read-only Micetro account + URL into `/etc/netmon/netmon.conf`,
-      run `python -m netmon.collectors.micetro --once`, and record the actual
-      range/record counts against Q1/Q2.
+- [x] ~~Get a read-only Micetro account + URL into `/etc/netmon/netmon.conf`,
+      run `--once`, record the counts against Q1/Q2.~~ Done 2026-09-09 — §7a.
+- [ ] Ask BlueCat support for the `filter` grammar on
+      `/ranges/{ref}/ipamRecords` (Q6). Cutting the ~98% fetch waste is worth
+      more than anything else on this list, and cannot be guessed safely.
+- [ ] Decide whether the identity half earns its keep at all now that §7a puts
+      the hostname gain at 16 MACs. The DHCP-scope half clearly does; the
+      address-fill half probably does; `sweep_addresses = false` is a supported
+      configuration if the answer is no.
 - [ ] Answer Q3 before promising anyone an exhaustion alert.
 - [ ] Frontend: the port-detail MAC card currently renders the PF fields; add
       the DNS name line (API already returns it). Nothing in the committed

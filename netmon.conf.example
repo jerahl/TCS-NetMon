@@ -325,7 +325,10 @@ enabled = false
 # username = netmon-ro
 # password = REPLACE_WITH_MICETRO_PASSWORD
 verify_ssl = true
-interval_s = 900
+# 3600, not 900: the first live run swept 261 subnets in ~2,000 requests over
+# ~4 minutes (spec 21 §7a). At 900s that is a 27% duty cycle on the appliance
+# to refresh DHCP-lease and capacity data that is not real-time in nature.
+interval_s = 3600
 # Rows per API page (offset/limit paging).
 page_size = 500
 # Sweep guards. Micetro's address space is not NetMon's device count: one /16

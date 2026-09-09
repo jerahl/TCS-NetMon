@@ -141,12 +141,39 @@ class MicetroClient:
         ``includeRelatedDNSRecords`` is left false on purpose: it inflates every
         record with CNAMEs and related RRs, and NetMon shows one primary name
         plus a count of extras (spec 21 §3.3).
+
+        No ``filter`` is sent, deliberately. The parameter exists on this
+        endpoint and would cut ~98% of the fetch volume (the sweep pulls every
+        address, including Free ones, and discards most), but on this Micetro
+        build every filter expression tried returned **HTTP 200 with
+        totalResults=0** rather than an error — `state=Assigned`,
+        `state!=Free`, `state == Assigned`, `state:Assigned`, and five more
+        (probed live 2026-09-09). A filter that silently matches nothing is the
+        worst possible failure here: it would look like a successful sweep of an
+        estate that owns no addresses. Do not add one without proving it
+        returns the same count as the unfiltered call on a known range.
         """
         if not range_ref:
             raise MicetroError("ipam_records needs a range ref")
-        return await self._drain(f"/ranges/{range_ref}/ipamRecords", "ipamRecords",
+        return await self._drain(f"/{self._ref_path(range_ref)}/ipamRecords",
+                                 "ipamRecords",
                                  {"includeRelatedDNSRecords": "false"},
                                  limit_total=limit_total)
+
+    @staticmethod
+    def _ref_path(ref: str, collection: str = "ranges") -> str:
+        """Path segment for a Micetro ``ObjRef``.
+
+        Live refs already carry their collection: ``/ranges`` returns
+        ``ref: "ranges/6"``, not ``"6"``. Prepending the collection again
+        yields ``/ranges/ranges/6/ipamRecords``, which this appliance happily
+        normalises (verified identical `totalResults` both ways, 2026-09-09) —
+        but relying on a server to forgive a malformed path is not a plan.
+        Accepts a bare id too, since the published schema types ObjRef as an
+        opaque string and does not promise the prefix.
+        """
+        ref = (ref or "").strip().strip("/")
+        return ref if "/" in ref else f"{collection}/{ref}"
 
     async def dhcp_scopes(self, limit_total: int | None = None) -> list[dict]:
         """``GET /dhcpScopes`` — scopes with ``utilizationPercentage``."""

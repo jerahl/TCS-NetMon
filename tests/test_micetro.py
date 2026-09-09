@@ -500,6 +500,89 @@ def test_client_rejects_a_wrong_shaped_collection():
         asyncio.run(client.ranges())
 
 
+# --- live-discovered behaviours (2026-09-09) --------------------------------
+
+
+def test_objref_path_does_not_double_the_collection():
+    """Live /ranges returns ref="ranges/6", not "6"."""
+    assert MicetroClient._ref_path("ranges/6") == "ranges/6"
+    assert MicetroClient._ref_path("/ranges/6/") == "ranges/6"
+
+
+def test_objref_path_still_accepts_a_bare_id():
+    """The schema types ObjRef as an opaque string; the prefix isn't promised."""
+    assert MicetroClient._ref_path("6") == "ranges/6"
+
+
+def test_ipam_records_requests_the_undoubled_path():
+    seen = []
+
+    class Spy(MicetroClient):
+        async def _get(self, path, params=None):
+            seen.append(path)
+            return {"ipamRecords": [], "totalResults": 0}
+
+    client = Spy("https://micetro.example.org", "u", "p")
+    asyncio.run(client.ipam_records("ranges/6"))
+    assert seen == ["/ranges/6/ipamRecords"]
+    assert "/ranges/ranges/" not in seen[0]
+
+
+def test_ipam_records_sends_no_filter_param():
+    """A wrong filter returns HTTP 200 + totalResults=0 on this build, so an
+    empty mirror would look like a successful sweep. See ipam_records()."""
+    sent = {}
+
+    class Spy(MicetroClient):
+        async def _get(self, path, params=None):
+            sent.update(params or {})
+            return {"ipamRecords": [], "totalResults": 0}
+
+    client = Spy("https://micetro.example.org", "u", "p")
+    asyncio.run(client.ipam_records("ranges/6"))
+    assert "filter" not in sent
+
+
+def test_an_empty_sweep_refuses_to_wipe_a_populated_mirror(tmp_path):
+    """replace_rows prunes what it didn't see, so zero rows empties the table.
+
+    The source can produce this without erroring, so it must be a loud fault,
+    not a silent wipe reported as success.
+    """
+    engine = _engine(tmp_path)
+    fake = FakeMicetro()
+    collector = _collector(engine, fake)
+    asyncio.run(collector.run_once())
+    before = db.fetch_one(engine, "SELECT COUNT(*) AS n FROM ddi_addresses")["n"]
+    assert before == 6
+
+    # Every range now answers with nothing — HTTP 200, no records.
+    fake.records_by_ref = {}
+    with pytest.raises(MicetroError, match="refusing to wipe"):
+        asyncio.run(collector.run_once())
+    assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM ddi_addresses")["n"] == before
+
+
+def test_an_empty_scope_sweep_also_refuses(tmp_path):
+    engine = _engine(tmp_path)
+    fake = FakeMicetro()
+    collector = _collector(engine, fake, sweep_addresses=False)
+    asyncio.run(collector.run_once())
+    fake.scopes_data = []
+    with pytest.raises(MicetroError, match="refusing to wipe"):
+        asyncio.run(collector.run_once())
+    assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM ddi_scopes")["n"] == 4
+
+
+def test_an_empty_sweep_into_an_empty_table_is_allowed(tmp_path):
+    """First run against a genuinely empty source must not be an error."""
+    engine = _engine(tmp_path)
+    fake = FakeMicetro()
+    fake.records_by_ref = {}
+    fake.scopes_data = []
+    assert asyncio.run(_collector(engine, fake).run_once()) == 0
+
+
 def test_ipam_records_needs_a_range_ref():
     client = MicetroClient("https://micetro.example.org", "u", "p")
     with pytest.raises(MicetroError, match="range ref"):
