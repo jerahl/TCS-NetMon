@@ -700,7 +700,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
 
     # --- per-source toggles ---
     sources: dict[str, SourceToggle] = {}
-    for name in ("xiq", "packetfence", "milestone", "threecx", "rconfig"):
+    for name in ("xiq", "packetfence", "milestone", "threecx", "rconfig", "micetro"):
         if parser.has_section(name):
             settings = {k: v for k, v in parser.items(name)}
             sources[name] = SourceToggle(

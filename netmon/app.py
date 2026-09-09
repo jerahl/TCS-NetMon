@@ -28,7 +28,7 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 from netmon import __version__, db, migrate
 from netmon import settings as settings_engine
 from netmon.api import (
-    actions, alerts, auth_routes, camera_ops, devices, events, health,
+    actions, alerts, auth_routes, camera_ops, ddi, devices, events, health,
     history as history_api, nac, registry, search, settings, sites, status, summary,
     surveillance, switches, voip, wireless,
 )
@@ -37,6 +37,8 @@ from netmon.engine.engine import AlertEngine
 from netmon.history import HistorySampler
 from netmon.reachability import ReachabilityDeriver
 from netmon.collectors.ess_live import EssLive
+from netmon.collectors.micetro import MicetroCollector
+from netmon.collectors.micetro_client import MicetroError
 from netmon.collectors.milestone import MilestoneCollector, MilestoneError
 from netmon.collectors.packetfence import PfCollector
 from netmon.collectors.pf_client import PfError
@@ -187,6 +189,17 @@ def register_tasks(app: FastAPI, cfg: Config, engine) -> None:
             supervisor.register("rconfig", rc.run_guarded, interval_s=rc.interval_s, timeout_s=rc.timeout_s)
             log.info("rConfig collector enabled: %ss", rc.interval_s)
 
+    if cfg.source_enabled("micetro"):
+        try:
+            mc = MicetroCollector.from_config(engine, cfg)
+        except MicetroError as exc:
+            log.error("Micetro collector not started: %s", exc)
+        else:
+            supervisor.register("micetro", mc.run_guarded,
+                                interval_s=mc.interval_s, timeout_s=mc.timeout_s)
+            log.info("Micetro collector enabled: %ss (addresses=%s, scopes=%s)",
+                     mc.interval_s, mc.sweep_addresses, mc.sweep_scopes)
+
     if cfg.engine.enabled:
         alert_engine = AlertEngine(engine, cfg.engine)
         supervisor.register("engine", alert_engine.run_guarded,
@@ -302,6 +315,7 @@ def create_app(
     app.include_router(voip.router)
     app.include_router(registry.router)
     app.include_router(nac.router)
+    app.include_router(ddi.router)
     app.include_router(alerts.router)
     app.include_router(settings.router)
     app.include_router(actions.router)
