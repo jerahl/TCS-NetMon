@@ -22,6 +22,20 @@ from netmon.state import REACHABILITY_FLAGS_SQL, device_down, device_reachable
 
 router = APIRouter(prefix="/api/switches", tags=["switches"])
 
+# The one Micetro address to show for an FDB MAC (spec 21 §6). `ddi_addresses`
+# is keyed by IP and `mac` is intentionally non-unique — one MAC legitimately
+# holds several addresses (dual-stack, multi-homed, a re-lease before the old
+# lease expired) — so joining on `mac` directly would duplicate every MAC card
+# on a port. This correlated pick is portable across MariaDB and SQLite and
+# deterministic: strongest claim first (a lease means the DHCP server handed
+# that address to that MAC; a reservation is intent; ARP discovery is an
+# observation), then lowest IP. /api/ddi/lookup/{mac} returns the full set.
+_DDI_ONE_IP = (
+    "SELECT x.ip FROM ddi_addresses x WHERE x.mac = f.mac "
+    "ORDER BY CASE x.mac_origin WHEN 'lease' THEN 0 WHEN 'reservation' THEN 1 "
+    "ELSE 2 END, x.ip LIMIT 1"
+)
+
 
 def _switch_or_404(engine: Engine, sid: int) -> dict:
     row = db.fetch_one(
@@ -175,7 +189,13 @@ def port_detail(
 ) -> dict:
     """One port plus the MAC addresses learned on it, each enriched with
     PacketFence identity via ``fdb_entries ⋈ pf_nodes ON mac`` — the design's
-    marquee port-detail feature (spec 10 §3), pure SQL, zero source calls."""
+    marquee port-detail feature (spec 10 §3), pure SQL, zero source calls.
+
+    Micetro's DDI mirror is joined on the same key (spec 21 §6). PacketFence
+    only knows endpoints it authenticated, so the printers, cameras, AV gear
+    and static servers on this port used to render as bare hex; `ddi_addresses`
+    supplies their IP and DNS name. Both joins are LEFT — a MAC neither source
+    has seen still renders, with nulls, exactly as before."""
     _switch_or_404(engine, sid)
     port = db.fetch_one(
         engine,
@@ -191,8 +211,17 @@ def port_detail(
         engine,
         "SELECT f.mac, f.vlan_id, f.updated_at, "
         " p.computername, p.owner, p.role, p.reg_status, p.os, p.vendor, "
-        " p.ip AS pf_ip, p.dot1x_user, p.updated_at AS pf_updated_at "
+        " p.ip AS pf_ip, p.dot1x_user, p.updated_at AS pf_updated_at, "
+        " d.ip AS ddi_ip, d.dns_name AS ddi_dns_name, "
+        " d.mac_origin AS ddi_mac_origin, d.state AS ddi_state, "
+        " d.updated_at AS ddi_updated_at "
         "FROM fdb_entries f LEFT JOIN pf_nodes p ON p.mac = f.mac "
+        # One DDI row per MAC. `ddi_addresses.mac` is deliberately not unique —
+        # a MAC can hold several addresses — so a plain join on it would
+        # multiply this port's MAC cards. Pick the strongest claim (lease over
+        # reservation over ARP discovery), lowest IP to break ties; the full
+        # set is at /api/ddi/lookup/{mac}.
+        f"LEFT JOIN ddi_addresses d ON d.ip = ({_DDI_ONE_IP}) "
         "WHERE f.device_id = :d AND f.ifindex = :i ORDER BY f.mac",
         {"d": sid, "i": ifindex},
     )]
@@ -209,8 +238,10 @@ def switch_fdb(
     _switch_or_404(engine, sid)
     return [dict(r) for r in db.fetch_all(
         engine,
-        "SELECT mac, vlan_id, ifindex, first_seen, updated_at FROM fdb_entries "
-        "WHERE device_id = :d ORDER BY ifindex, mac",
+        "SELECT f.mac, f.vlan_id, f.ifindex, f.first_seen, f.updated_at, "
+        " d.ip AS ddi_ip, d.dns_name AS ddi_dns_name "
+        f"FROM fdb_entries f LEFT JOIN ddi_addresses d ON d.ip = ({_DDI_ONE_IP}) "
+        "WHERE f.device_id = :d ORDER BY f.ifindex, f.mac",
         {"d": sid},
     )]
 
