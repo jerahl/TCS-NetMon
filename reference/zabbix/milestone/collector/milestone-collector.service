@@ -1,0 +1,31 @@
+[Unit]
+Description=Milestone XProtect → Zabbix collector (WS state + REST inventory)
+Documentation=file:///opt/milestone-collector/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Credentials and Zabbix sender target live in this file (0600 root:root).
+# Mirrors tcs_dashboard/zabbix/milestone/test/.env.example.
+EnvironmentFile=/etc/milestone-collector/env
+ExecStart=/usr/local/bin/milestone_collector.py
+Restart=always
+RestartSec=10
+# Treat any unexpected exit as failure-worthy but rate-limit restarts so a
+# persistent config error doesn't pin a CPU.
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+# Hardening — the collector only needs outbound 443 (Gateway) and 10051
+# (Zabbix proxy). Adjust if /etc/milestone-collector is elsewhere.
+User=milestone-collector
+Group=milestone-collector
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ReadOnlyPaths=/etc/milestone-collector
+
+[Install]
+WantedBy=multi-user.target

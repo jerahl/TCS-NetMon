@@ -76,6 +76,7 @@ CREATE TABLE alert_rules (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
     dimension TEXT NOT NULL,
+    device_types TEXT,
     `condition` TEXT NOT NULL,
     severity TEXT NOT NULL DEFAULT 'warn',
     min_duration_s INTEGER NOT NULL DEFAULT 0,
@@ -416,6 +417,11 @@ CREATE TABLE recording_servers (
     hostname TEXT,
     role TEXT,
     version TEXT,
+    comm_state TEXT,
+    cpu_state TEXT,
+    retention_state TEXT,
+    service_state TEXT,
+    states_at TIMESTAMP,
     chans_total INTEGER,
     chans_recording INTEGER,
     storage_used_gb REAL,
@@ -428,7 +434,14 @@ CREATE TABLE recording_servers (
 CAMERAS_DDL_SQLITE = """
 CREATE TABLE cameras (
     device_id INTEGER PRIMARY KEY,
+    hardware_id TEXT,
+    channel INTEGER,
     model TEXT,
+    firmware TEXT,
+    platform TEXT,
+    serial TEXT,
+    vendor TEXT,
+    identity_at TIMESTAMP,
     resolution TEXT,
     fps_target INTEGER,
     codec TEXT,
@@ -436,12 +449,38 @@ CREATE TABLE cameras (
     recording_mode TEXT,
     state_msg TEXT,
     ip TEXT,
+    http_port INTEGER,
+    https_enabled INTEGER,
+    https_port INTEGER,
     mac TEXT,
     recording_server_device_id INTEGER,
     enabled INTEGER,
     updated_at TIMESTAMP
 )
 """
+
+# Milestone camera groups + membership (migration 026).
+CAMERA_GROUPS_DDL_SQLITE = """
+CREATE TABLE camera_groups (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    parent_id TEXT,
+    path TEXT,
+    camera_count INTEGER NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP
+)
+"""
+
+CAMERA_GROUP_MEMBERS_DDL_SQLITE = """
+CREATE TABLE camera_group_members (
+    group_id TEXT NOT NULL,
+    device_id INTEGER NOT NULL,
+    updated_at TIMESTAMP,
+    PRIMARY KEY (group_id, device_id)
+)
+"""
+
 
 TRUNKS_DDL_SQLITE = """
 CREATE TABLE trunks (
@@ -488,6 +527,65 @@ CREATE TABLE action_audit (
 """
 
 
+CAMERA_OPS_DDL_SQLITE = (
+    """
+CREATE TABLE firmware_images (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vendor TEXT NOT NULL,
+    version TEXT NOT NULL,
+    platform TEXT,
+    filename TEXT NOT NULL,
+    rel_path TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    sha256 TEXT NOT NULL UNIQUE,
+    models TEXT NOT NULL,
+    notes TEXT,
+    uploaded_by TEXT NOT NULL,
+    uploaded_at TIMESTAMP NOT NULL
+)
+""",
+    """
+CREATE TABLE camera_batches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    op TEXT NOT NULL,
+    firmware_id INTEGER,
+    setting_key TEXT,
+    setting_value TEXT,
+    status TEXT NOT NULL DEFAULT 'draft',
+    dry_run INTEGER NOT NULL DEFAULT 1,
+    canary_count INTEGER NOT NULL DEFAULT 1,
+    ring_size INTEGER NOT NULL DEFAULT 10,
+    max_concurrent INTEGER NOT NULL DEFAULT 3,
+    abort_pct INTEGER NOT NULL DEFAULT 10,
+    reboot_timeout_s INTEGER NOT NULL DEFAULT 300,
+    not_before TIMESTAMP,
+    created_by TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    started_at TIMESTAMP,
+    finished_at TIMESTAMP,
+    message TEXT
+)
+""",
+    """
+CREATE TABLE camera_batch_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL,
+    device_id INTEGER NOT NULL,
+    ring INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending',
+    before_value TEXT,
+    after_value TEXT,
+    verified_by TEXT,
+    audit_id INTEGER,
+    message TEXT,
+    started_at TIMESTAMP,
+    finished_at TIMESTAMP,
+    UNIQUE (batch_id, device_id)
+)
+""",
+)
+
+
 STATE_SAMPLES_DDL_SQLITE = """
 CREATE TABLE state_samples (
     series TEXT NOT NULL,
@@ -529,12 +627,15 @@ def create_core_tables(engine) -> None:
             PF_NODES_DDL_SQLITE,
             RECORDING_SERVERS_DDL_SQLITE,
             CAMERAS_DDL_SQLITE,
+            CAMERA_GROUPS_DDL_SQLITE,
+            CAMERA_GROUP_MEMBERS_DDL_SQLITE,
             TRUNKS_DDL_SQLITE,
             EXTENSIONS_DDL_SQLITE,
             APP_SETTINGS_DDL_SQLITE,
             SETTINGS_AUDIT_DDL_SQLITE,
             STATE_SAMPLES_DDL_SQLITE,
             ACTION_AUDIT_DDL_SQLITE,
+            *CAMERA_OPS_DDL_SQLITE,
         ):
             conn.execute(text(ddl))
 

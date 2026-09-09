@@ -51,7 +51,10 @@ except ImportError:  # pragma: no cover
 # VMS state or controls a device (PTZ, recording start/stop, config change).
 PERMITTED_COMMANDS = frozenset({"startSession", "addSubscription", "getState"})
 
-DEFAULT_WS_PATH = "/api/ws/events"
+# The path carries a version segment. Without it the gateway answers 404 at the
+# HTTP upgrade, before any ESS command is sent — confirmed live 2026-09-04.
+# reference/zabbix/milestone/milestone_ess_state.py:13 documents the real one.
+DEFAULT_WS_PATH = "/api/ws/events/v1"
 
 
 class EssProtocolError(MilestoneError):
@@ -115,11 +118,27 @@ async def send_command(conn: Any, message: dict, *, timeout: float = 20.0) -> di
 class MilestoneEss:
     """Builds the ``connect`` factory and ``on_connect`` handshake for ws.py."""
 
+    #: What the subscription covers. ``cameras`` is the reference's scope and
+    #: the only one proven on this VMS; widen deliberately, having checked the
+    #: type is accepted, rather than by assuming a name.
+    DEFAULT_RESOURCE_TYPES = ("cameras",)
+
     def __init__(self, client: MilestoneClient, *, ws_path: str = DEFAULT_WS_PATH,
-                 command_timeout: float = 20.0) -> None:
+                 resource_types: tuple[str, ...] = DEFAULT_RESOURCE_TYPES,
+                 command_timeout: float = 20.0,
+                 max_frame_bytes: int = 32 * 1024 * 1024) -> None:
         self.client = client
         self.ws_path = ws_path
+        self.resource_types = resource_types
+        self.initial_state: dict | None = None
         self.command_timeout = command_timeout
+        # websockets defaults to a 1 MiB frame limit and closes the connection
+        # with 1009 when a frame exceeds it. The getState snapshot for this
+        # estate is ~4 MB (2,659 cameras, measured 2026-09-04), so the default
+        # kills the socket on the first real reply — and the failure looks like
+        # a dropped connection rather than a size problem. Headroom is
+        # deliberate: the snapshot grows with the camera count.
+        self.max_frame_bytes = max_frame_bytes
         self.session_id: str | None = None
         # Event *type* counts only — never payload contents. This is what lets
         # the real schema be established from evidence instead of guessed.
@@ -133,7 +152,10 @@ class MilestoneEss:
         """Open an authenticated socket. A fresh token per connect, so a
         reconnect after a long outage never presents an expired one."""
         token = await self.client.bearer_token()
-        kwargs: dict[str, Any] = {_HEADERS_KW: {"Authorization": f"Bearer {token}"}}
+        kwargs: dict[str, Any] = {
+            _HEADERS_KW: {"Authorization": f"Bearer {token}"},
+            "max_size": self.max_frame_bytes,
+        }
         if not self.client.verify_ssl:
             import ssl
 
@@ -160,16 +182,29 @@ class MilestoneEss:
         if not _ok(started):
             raise EssProtocolError(f"startSession rejected: {_why(started)}")
 
+        # A subscription without filters is accepted and subscribes to
+        # *nothing*: the handshake reports success and no frame ever arrives.
+        # Confirmed live 2026-09-04 — 45 s of silence against an estate of 2,659
+        # cameras. The filter shape is the reference's
+        # (milestone_ess_state.py:215).
         subscribed = await send_command(conn, {
             "command": "addSubscription", "commandId": cid.next(),
             "sessionId": self.session_id,
+            "filters": [{
+                "modifier": "include",
+                "resourceTypes": list(self.resource_types),
+                "sourceIds": ["*"],
+                "eventTypes": ["*"],
+            }],
         }, timeout=self.command_timeout)
         if not _ok(subscribed):
             raise EssProtocolError(f"addSubscription rejected: {_why(subscribed)}")
 
         # Initial snapshot, so state is current at connect rather than only
-        # after the first change event arrives.
-        await send_command(conn, {
+        # after the first change event arrives. The reply IS the snapshot — the
+        # reference reads state from here rather than from the event stream —
+        # so it is kept rather than discarded.
+        self.initial_state = await send_command(conn, {
             "command": "getState", "commandId": cid.next(),
             "sessionId": self.session_id,
         }, timeout=self.command_timeout)

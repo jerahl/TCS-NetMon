@@ -62,8 +62,10 @@ class FakeClient:
 
 
 def test_ws_url_derivation():
-    assert ws_url("https://h") == "wss://h/api/ws/events"
-    assert ws_url("http://h") == "ws://h/api/ws/events"
+    # The path carries a version segment. Without it the gateway 404s at the
+    # HTTP upgrade, before any ESS command is sent (confirmed live 2026-09-04).
+    assert ws_url("https://h") == "wss://h/api/ws/events/v1"
+    assert ws_url("http://h") == "ws://h/api/ws/events/v1"
     assert ws_url("https://h", "/x") == "wss://h/x"
     with pytest.raises(MilestoneError):
         ws_url("ftp://h")
@@ -165,3 +167,42 @@ def test_a_fresh_token_is_fetched_per_connect():
         return client.token_calls
 
     assert asyncio.run(drive()) == 1
+
+
+def test_subscription_carries_filters_or_it_subscribes_to_nothing():
+    """An unfiltered addSubscription is *accepted* and yields no events.
+
+    Live on 2026-09-04 that produced a green handshake and 45 seconds of silence
+    against 2,659 cameras — a success signal that meant nothing. The filter is
+    what makes the stream a stream.
+    """
+    ess = MilestoneEss(FakeClient())
+    conn = FakeConn()
+    asyncio.run(ess.handshake(conn))
+
+    sub = next(m for m in conn.sent if m["command"] == "addSubscription")
+    assert sub["filters"], "addSubscription must carry filters"
+    f = sub["filters"][0]
+    assert f["modifier"] == "include"
+    assert f["resourceTypes"] == ["cameras"]
+    assert f["sourceIds"] == ["*"] and f["eventTypes"] == ["*"]
+
+
+def test_getstate_reply_is_kept_because_it_is_the_snapshot():
+    """The reply to getState *is* the state; it does not arrive as an event.
+
+    The client used to send the command and discard the response, then wait for
+    state that would never come.
+    """
+    ess = MilestoneEss(FakeClient())
+    conn = FakeConn()
+    asyncio.run(ess.handshake(conn))
+    assert ess.initial_state is not None
+    assert "commandId" in ess.initial_state
+
+
+def test_frame_limit_is_raised_above_the_websockets_default():
+    """This estate's snapshot is ~4 MB; the library default is 1 MiB and closes
+    the socket with 1009 above it, which presents as a dropped connection."""
+    ess = MilestoneEss(FakeClient())
+    assert ess.max_frame_bytes >= 4 * 1024 * 1024

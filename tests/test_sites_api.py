@@ -379,13 +379,17 @@ def test_events_feed(tmp_path):
     _seed(url)
     with TestClient(_app(write_config(tmp_path, db_url=url))) as client:
         events = client.get("/api/events?limit=10").json()
-        assert len(events) == 2
+        # Assert about the transitions this test seeded rather than the total:
+        # the app derives a `reachability` tier for every device at startup, so
+        # a count-of-everything breaks whenever a dimension is added.
+        seeded = [e for e in events if e["dimension"] != "reachability"]
+        assert len(seeded) == 2
         # Newest first (append-only ids are monotonic).
-        assert events[0]["device"] == "CHS-12-Room"
-        assert events[0]["new_value"] == "blind"
-        assert events[0]["site"] == "CHS"
-        assert events[1]["device"] == "BHS-Core-1"
-        assert events[1]["severity"] == "crit"
+        assert seeded[0]["device"] == "CHS-12-Room"
+        assert seeded[0]["new_value"] == "blind"
+        assert seeded[0]["site"] == "CHS"
+        assert seeded[1]["device"] == "BHS-Core-1"
+        assert seeded[1]["severity"] == "crit"
         one = client.get("/api/events?limit=1").json()
         assert len(one) == 1
 

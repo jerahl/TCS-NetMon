@@ -148,16 +148,102 @@ Ported from `reference/zabbix/milestone/*`.
   for devices matched by `milestone_hardware_id`, `source_status` for recording
   servers (running → up/down) and the `recording` dimension for cameras. Blind
   on unreachable. Interval `[milestone] interval_s` (default 120s).
-- **Live Events/State WebSocket** (`ws.py` `ResilientWebSocket`): reconnect +
-  exponential backoff + watchdog (forces reconnect on silence). Built and
-  tested (forced-disconnect / watchdog), and runnable standalone. **Wiring it
-  to a live Milestone socket needs the `websockets` dependency (owner approval
-  pending)** — until then the Config-API poll provides state.
+- **Events/State snapshot** (inside the cycle): `startSession → addSubscription
+  → getState` over the ESS WebSocket, ~16,500 states out of one ~4 MB reply.
+  Gives per-camera `source_status` (the Config API has no such field) and the
+  four recording-server state columns. Runs every `interval_s`.
+- **Live Events/State subscription** (`ess_live.py`, spec 20 S7) — **default
+  off**, `[milestone] ess_live = true` to enable. Holds the same subscription
+  open and applies camera `source_status` as events arrive, instead of once a
+  cycle.
+  - *Stream shape (measured live 2026-09-08):* frames are `{"events":[…]}` with
+    no top-level command; each event carries the same six keys a `getState`
+    state does, so one parser serves both. ~61 frames/s, ~200 events/s.
+  - *What is written:* only `Communication*` events, which move
+    `source_status`. Motion and recording churn — 9,354 MotionStart and 2,406
+    RecordingStarted in one 120 s sample — is counted and **dropped**: writing
+    it would bury `state_events` under an estate behaving normally.
+  - *Batching:* deltas are coalesced per camera and written once per
+    `ess_live_flush_s` (default 5 s), never per event. A failed flush keeps its
+    deltas for the next one, and a newer verdict always wins over a retried one.
+  - *Reconnect:* `ws.py`'s backoff, watchdog `ess_live_watchdog_s` (default
+    180 s — higher than ws.py's 60 s because overnight the motion traffic that
+    dominates the stream stops). Every reconnect re-applies the full `getState`
+    snapshot, so anything missed while down is repaired immediately.
+  - *Two writers, on purpose:* the 120 s snapshot keeps running. Both derive the
+    same dimension from the same interface, `write_states` logs a transition
+    only when a value actually moves, and the newer observation wins — so the
+    cycle acts as a repair for anything the stream missed. Recording-server
+    state columns stay the cycle's alone (it owns that row with a
+    replace-on-refresh upsert).
+  - *Observability:* `collector_health` row `milestone_ess_live` plus a live
+    panel on NetMon Status (socket state, reconnects, frames, events, applied,
+    busiest event types). Snapshot states are counted apart from stream events,
+    because a connect stages ~2,500 `CommunicationStarted` states and mixing
+    them makes the stream look like it carries camera changes it does not.
+- **Device identity backfill** (`/api/rest/v1/hardware/{id}/hardwareDriverSettings`):
+  MAC, serial, firmware and vendor per hardware record → `cameras.mac/serial/
+  firmware/vendor` (migration 025). **This is the only place Milestone exposes a
+  camera MAC** — neither `/cameras` nor `/hardware` carries one, which is why
+  `cameras.mac` was NULL estate-wide for months even though the Management
+  Client shows a MAC for every camera.
+  - *Rate limit shape:* no collection form. Asking for `/hardwareDriverSettings`
+    without a parent answers HTTP 400 telling you to prefix it, so this is one
+    request per hardware record at ~300 ms — ~12 min for 2,489 if swept whole.
+    Each cycle therefore fetches at most `identity_batch` of the records still
+    missing a MAC; at the defaults the estate fills in ~30 min and then costs
+    nothing, since the values are static.
+  - *Failure mode:* soft and per-record. A hardware that errors leaves its
+    cameras NULL and adds `identity` to the overview's `degraded` list, so a
+    stalled backfill is distinguishable from a finished one.
+  - *Gotcha:* an unrecognised query param on this API returns `{"array": []}`
+    rather than an error — `/hardware?fields=all` reports zero hardware. Treat
+    an unexpectedly empty array as a malformed request, not an empty fleet.
 - **Config:** `[milestone] enabled, host, user, pass, scheme, client_id,
-  verify_ssl, interval_s`.
+  verify_ssl, interval_s, identity_batch, identity_concurrency, ess_live,
+  ess_live_flush_s, ess_live_watchdog_s`.
 
 Both collectors are standalone-runnable
 (`python -m netmon.collectors.packetfence|milestone --once|--loop`).
+
+## Camera operations (`netmon/cameras/`) — the one write to hardware
+
+Not a collector: `[camera_ops]`, spec 20 S8 / gate D11, **default off with
+dry-run on**. Listed here because it shares the vendor-profile idiom and because
+its *read* half is a source read like any other.
+
+- **Reading a Bosch camera's firmware:** RCP+ over the same credentialed HTTPS
+  the snapshot proxy uses —
+  `GET /rcp.xml?command=0x0cd4&type=P_STRING&direction=READ`
+  (`CONF_SOFTWARE_VERSION_FORMATTED`, RCP+ reference 9.80 §2.612). Returns
+  `<major>.<minor>.<build>`.
+  - *Gotcha:* the value is **not** in `<payload>` — that echoes the request and
+    is always empty. It is in `<result><str>`.
+  - *Why the formatted command:* the compact form (`783`) that 888 cameras
+    report through Milestone can confirm a release but never a build, so it can
+    only ever verify as `indeterminate`. Asking the camera directly is what
+    makes a firmware roll provable.
+- **Verification order:** vendor read, then Milestone's stored value. Which one
+  answered is recorded per item in `camera_batch_items.verified_by`, because a
+  Milestone-sourced confirmation is at most one identity-backfill cycle old and
+  is weaker evidence.
+- **Writing** (firmware upload) is a multipart POST to `/upload.htm` with the
+  file in a part named **`net.bin`** — both read off the camera's own service
+  page, not inferred; `net.bin` appears in no documentation and is not an RCP+
+  command.
+  - *Authenticate first, always.* Digest costs a challenge round trip, and httpx
+    pays it by sending the request unauthenticated once. With a 91 MiB image
+    that means shipping the whole file to be told "authenticate first", and the
+    camera drops the connection — two live attempts died at 0.8s before this was
+    understood. A cheap GET primes the challenge on the same auth object.
+  - *Proven on hardware 2026-09-08:* alb-cam-44 went 7.83.0027 → 7.93.0024,
+    verified by its own RCP+ read, 1m55s end to end.
+  - Still gated: `[camera_ops]` flags plus `proving_device_id`, which restricts
+    pre-flight to one nominated camera.
+- **Config:** `[camera_ops] enabled, dry_run, config_change, firmware_update,
+  user/pass or use_snapshot_credentials, proving_device_id, firmware_dir,
+  canary_count, ring_size, max_concurrent, max_batch, abort_pct,
+  reboot_timeout_s, connect_timeout_s, timeout_s, verify_ssl`.
 
 ## 3CX (`threecx.py`, `threecx_client.py`) — voice
 

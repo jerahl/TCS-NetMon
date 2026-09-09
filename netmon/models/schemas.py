@@ -35,6 +35,11 @@ class Dimension(str, Enum):
     config_backup = "config_backup"
     recording = "recording"
     trunk = "trunk"
+    # Derived from source_status + ping — which probes agree, not just whether
+    # something is down. See netmon/reachability.py and migration 024. The enum
+    # lives in four places (this, device_state, alert_rules, state_events) and
+    # all four have to know a new dimension.
+    reachability = "reachability"
 
 
 class Severity(str, Enum):
@@ -304,6 +309,13 @@ class NetmonStatus(BaseModel):
     tasks: list[SupervisedTask] = Field(default_factory=list)
     collectors: list[CollectorHealth] = Field(default_factory=list)
     db: NetmonDbStats = Field(default_factory=NetmonDbStats)
+    #: The live Milestone subscription (spec 20 S7), when it is enabled. A
+    #: `collector_health` row alone cannot answer the question this task raises —
+    #: "is the socket up right now, and how often has it had to reconnect" —
+    #: because a stream that reconnects every minute and a stream that has been
+    #: up for a week both write the same successful flushes. Absent when the
+    #: task is off.
+    ess_live: dict | None = None
 
 
 class UiMeta(BaseModel):
@@ -315,6 +327,17 @@ class UiMeta(BaseModel):
     ssheasy_url: str = ""
     # PacketFence admin-UI base, for the endpoint deep-link. Empty → hidden.
     packetfence_url: str = ""
+    # CARTO Basemaps API key for the site map's raster tiles. Unavoidably
+    # browser-visible — it is a query parameter on a tile URL — but it stays out
+    # of the repo, because a committed key is in git history and indexed
+    # forever, and this one carries a monthly quota and a no-sharing term.
+    # Empty → the map renders watermarked rather than losing its basemap.
+    carto_api_key: str = ""
+    # The Milestone API Gateway host, shown in the Surveillance page header the
+    # way ZCD shows its management server (spec 20 S1). A hostname, not a
+    # credential; empty when [milestone] is unconfigured, and the header then
+    # omits the slot rather than inventing one.
+    milestone_host: str = ""
     # Whether web edits are enabled at all ([security] allow_web_edit). Lets the
     # UI show/hide edit affordances; the API still enforces it server-side.
     can_edit: bool = False

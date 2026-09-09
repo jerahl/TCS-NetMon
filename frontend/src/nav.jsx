@@ -18,6 +18,7 @@ const NAV = {
   wireless: "#/wireless",
   switches: "#/switches",
   surveillance: "#/surveillance",
+  cameras: "#/cameras",
   voip: "#/voip",
   nac: "#/nac",
   events: "#/events",
@@ -60,10 +61,11 @@ export function Nav({ active, collapsed = false, onToggle }) {
       getJSON("/api/status")
         .then((rows) => {
           if (!live) return;
-          const c = { total: rows.length, switches: 0, aps: 0 };
+          const c = { total: rows.length, switches: 0, aps: 0, cameras: 0 };
           for (const d of rows) {
             if (d.device_type === "switch") c.switches++;
             if (d.device_type === "ap") c.aps++;
+            if (d.device_type === "camera") c.cameras++;
           }
           setCounts(c);
         })
@@ -122,6 +124,7 @@ export function Nav({ active, collapsed = false, onToggle }) {
         {item("wireless", NAV.wireless, "wifi", "Wireless APs")}
         {item("switches", NAV.switches, "ethernet", "Switches", counts?.switches)}
         {item("surveillance", NAV.surveillance, "camera", "Surveillance")}
+        {item("cameras", NAV.cameras, "camera", "Cameras", counts?.cameras)}
         {item("voip", NAV.voip, "phone", "VoIP · 3CX")}
       </div>
 

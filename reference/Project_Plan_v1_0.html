@@ -1,0 +1,1193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TCS Dashboard Module — Project Plan v1.0</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+
+:root {
+  --bg:       #0d1117;
+  --bg2:      #161b22;
+  --bg3:      #1c2128;
+  --line:     #30363d;
+  --line2:    #21262d;
+  --fg:       #e6edf3;
+  --fg2:      #8b949e;
+  --fg3:      #484f58;
+  --acc:      #d92929;
+  --zbx:      #4d7cc7;
+  --zbx2:     #0d1f3c;
+  --zbx3:     #1a3a6e;
+  --ms:       #06b6d4;     /* Milestone teal */
+  --ms2:      #0d2a30;
+  --ms3:      #1a4a52;
+  --xiq:      #a855f7;     /* Extreme XIQ purple */
+  --xiq2:     #1f0d2a;
+  --xiq3:     #3a1a4a;
+  --sw:       #84cc16;     /* Switches lime */
+  --sw2:      #1a2a08;
+  --sw3:      #344e10;
+  --pf:       #f59e0b;     /* PacketFence amber */
+  --pf2:      #2a1f0d;
+  --pf3:      #4a3a1a;
+  --srv:      #60a5fa;     /* Servers blue */
+  --srv2:     #0d2030;
+  --srv3:     #1a3a52;
+  --bridge:   #f472b6;     /* Frontend bridge pink */
+  --bridge2:  #2a0d20;
+  --bridge3:  #4a1a3a;
+  --action:   #fb923c;     /* Backend action orange */
+  --action2:  #2a1208;
+  --action3:  #4a2516;
+  --zbx-blue: #5b8cff;
+  --m0:       #7c6ff7;
+  --m1:       #0ea5e9;
+  --m2:       #22c55e;
+  --m3:       #f59e0b;
+  --m4:       #ef4444;
+  --m5:       #a855f7;
+  --ok:       #22c55e;
+  --ok2:      #0d2a1a;
+  --ok3:      #1a4a2a;
+  --warn:     #f59e0b;
+  --warn2:    #2a1f0d;
+  --warn3:    #4a3a1a;
+  --err:      #ef4444;
+  --err2:     #2a0d0d;
+  --err3:     #4a1a1a;
+  --sans:     'IBM Plex Sans', sans-serif;
+  --mono:     'JetBrains Mono', monospace;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--sans); background: var(--bg); color: var(--fg); font-size: 14px; line-height: 1.6; min-height: 100vh; }
+
+/* ── Header ── */
+.header { border-bottom: 1px solid var(--line); padding: 28px 40px 22px; display: flex; align-items: flex-start; gap: 32px; }
+.header-left { flex: 1; }
+.brand { font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--acc); margin-bottom: 8px; }
+h1 { font-size: 22px; font-weight: 600; color: var(--fg); letter-spacing: -.3px; line-height: 1.2; }
+.subtitle { font-size: 13px; color: var(--fg2); margin-top: 5px; }
+.header-stats { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; padding-top: 4px; }
+.stat-row { font-family: var(--mono); font-size: 11px; color: var(--fg2); display: flex; gap: 10px; }
+.stat-val { color: var(--fg); font-weight: 600; }
+#progress-wrap { width: 200px; height: 4px; background: var(--line); border-radius: 2px; margin-top: 4px; }
+#progress-bar { height: 100%; border-radius: 2px; background: var(--ok); transition: width .5s ease; }
+
+/* ── Banners ── */
+.change-banner { margin: 20px 40px; border: 1px solid var(--warn3); background: var(--warn2); border-radius: 6px; padding: 14px 18px; font-size: 13px; color: var(--fg2); }
+.change-banner strong { color: var(--warn); }
+.change-banner ul { padding-left: 20px; margin-top: 8px; line-height: 2; }
+.change-banner li { font-size: 12.5px; }
+
+/* ── Timeline ── */
+.timeline-wrap { padding: 18px 40px; border-bottom: 1px solid var(--line2); }
+.tl-label { font-family: var(--mono); font-size: 9px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--fg3); margin-bottom: 8px; }
+.tl-bar { display: flex; height: 22px; border-radius: 4px; overflow: hidden; gap: 2px; }
+.tl-seg { display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 9px; font-weight: 600; color: rgba(255,255,255,.8); letter-spacing: .05em; }
+.tl-seg.done-seg { opacity: .5; position: relative; }
+.tl-seg.done-seg::after { content: '✓'; margin-left: 4px; }
+.tl-weeks { display: flex; margin-top: 4px; }
+.tl-wk { flex: 1; font-family: var(--mono); font-size: 9px; color: var(--fg3); text-align: center; }
+
+/* ── Legend ── */
+.legend { display: flex; flex-wrap: wrap; gap: 16px; padding: 14px 40px; border-bottom: 1px solid var(--line2); align-items: center; }
+.leg-item { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--fg2); }
+.leg-dot { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+.t-reuse  { background: #0d2a3c; border: 1px solid #1a4a6e; }
+.t-adapt  { background: #1f2a0d; border: 1px solid #3a4a1a; }
+.t-ms     { background: var(--ms2); border: 1px solid var(--ms3); }
+.t-xiq    { background: var(--xiq2); border: 1px solid var(--xiq3); }
+.t-sw     { background: var(--sw2); border: 1px solid var(--sw3); }
+.t-pf     { background: var(--pf2); border: 1px solid var(--pf3); }
+.t-srv    { background: var(--srv2); border: 1px solid var(--srv3); }
+.t-bridge { background: var(--bridge2); border: 1px solid var(--bridge3); }
+.t-action { background: var(--action2); border: 1px solid var(--action3); }
+.t-tmpl   { background: #1a2a08; border: 1px solid #344e10; }
+.t-readme { background: #1f0d2a; border: 1px solid #3a1a4a; }
+.t-new    { background: #2a1f0d; border: 1px solid #4a3a1a; }
+.t-done   { background: #0d2a1a; border: 1px solid var(--ok3); }
+
+/* ── Main content ── */
+.main { padding: 24px 40px 60px; display: flex; flex-direction: column; gap: 14px; }
+
+/* ── Milestone ── */
+.milestone { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.milestone.ms-complete { border-color: var(--ok3); }
+.milestone.ms-partial  { border-color: var(--warn3); }
+.ms-head { display: flex; align-items: center; gap: 0; padding: 13px 18px; cursor: pointer; user-select: none; background: var(--bg2); transition: background .1s; }
+.ms-head:hover { background: var(--bg3); }
+.ms-accent { width: 4px; height: 36px; border-radius: 2px; flex-shrink: 0; margin-right: 14px; }
+.ms-info { flex: 1; }
+.ms-title { font-size: 14px; font-weight: 600; color: var(--fg); line-height: 1.2; display: flex; align-items: center; gap: 10px; }
+.ms-badge { font-family: var(--mono); font-size: 9px; font-weight: 600; padding: 1px 7px; border-radius: 10px; }
+.ms-badge.done { background: var(--ok2); color: var(--ok); border: 1px solid var(--ok3); }
+.ms-badge.partial { background: var(--warn2); color: var(--warn); border: 1px solid var(--warn3); }
+.ms-badge.active { background: #0d1f3c; color: #7dd3fc; border: 1px solid #1a3a6e; }
+.ms-badge.blocked { background: var(--err2); color: var(--err); border: 1px solid var(--err3); }
+.ms-meta { font-size: 12px; color: var(--fg2); margin-top: 2px; }
+.ms-right { display: flex; align-items: center; gap: 10px; }
+.ms-pill { font-family: var(--mono); font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 10px; color: rgba(255,255,255,.85); }
+.ms-count { font-family: var(--mono); font-size: 11px; color: var(--fg3); }
+.ms-chevron { font-size: 10px; color: var(--fg3); transition: transform .2s; width: 12px; text-align: center; }
+.ms-chevron.open { transform: rotate(90deg); }
+.ms-progress { height: 3px; background: var(--line2); border-top: 1px solid var(--line); }
+.ms-progress-bar { height: 100%; border-radius: 0; transition: width .3s ease; }
+
+/* ── Tasks ── */
+.tasks { display: none; }
+.tasks.open { display: block; }
+
+.change-note { padding: 10px 18px; background: var(--warn2); border-bottom: 1px solid var(--warn3); font-size: 12px; color: var(--warn); font-family: var(--mono); }
+.finding-note { padding: 10px 18px; background: var(--ok2); border-bottom: 1px solid var(--ok3); font-size: 12px; color: var(--ok); font-family: var(--mono); }
+
+.task { display: grid; grid-template-columns: 18px 1fr auto auto; gap: 0 12px; align-items: start; padding: 11px 18px; border-bottom: 1px solid var(--line2); transition: background .1s; }
+.task:last-child { border-bottom: none; }
+.task:hover { background: rgba(255,255,255,.02); }
+
+.task-check { width: 15px; height: 15px; border-radius: 3px; border: 1.5px solid var(--fg3); margin-top: 2px; cursor: pointer; flex-shrink: 0; display: flex; align-items: center; justify-content: center; transition: all .15s; color: #fff; font-size: 9px; }
+.task-check:hover { border-color: var(--fg2); }
+.task-check.done { border-color: var(--ok); background: var(--ok); }
+.task-check.done::after { content: '✓'; }
+.task-check.partial { border-color: var(--warn); background: var(--warn2); }
+.task-check.partial::after { content: '~'; color: var(--warn); font-size: 11px; line-height: 1; }
+
+.task-body { min-width: 0; }
+.task-name { font-size: 13px; font-weight: 500; color: var(--fg); line-height: 1.35; }
+.task-name.done { text-decoration: line-through; color: var(--fg3); }
+.task-dep { font-size: 11.5px; color: var(--fg2); margin-top: 4px; line-height: 1.55; }
+
+.finding { display: inline-block; margin-top: 6px; padding: 6px 10px; background: var(--ok2); border: 1px solid var(--ok3); border-radius: 4px; font-size: 11px; color: #86efac; }
+.design-change { display: inline-block; margin-top: 6px; padding: 6px 10px; background: var(--warn2); border: 1px solid var(--warn3); border-radius: 4px; font-size: 11px; color: #fcd34d; }
+
+code { font-family: var(--mono); font-size: 10.5px; background: var(--bg3); color: var(--fg); padding: 0 5px; border-radius: 3px; border: 1px solid var(--line); }
+.ep { font-family: var(--mono); font-size: 10.5px; background: #0d2a1a; color: #4ade80; padding: 1px 7px; border-radius: 3px; border: 1px solid #1a4a2a; display: inline-block; margin: 1px 0; white-space: nowrap; }
+
+/* ── Tags ── */
+.tag { font-family: var(--mono); font-size: 9px; font-weight: 600; padding: 2px 7px; border-radius: 3px; white-space: nowrap; }
+.tag.t-reuse  { background: #0d2a3c; color: #7dd3fc; border: 1px solid #1a4a6e; }
+.tag.t-adapt  { background: #1f2a0d; color: #a3e635; border: 1px solid #3a4a1a; }
+.tag.t-ms     { background: var(--ms2); color: #67e8f9; border: 1px solid var(--ms3); }
+.tag.t-xiq    { background: var(--xiq2); color: #c084fc; border: 1px solid var(--xiq3); }
+.tag.t-sw     { background: var(--sw2); color: #bef264; border: 1px solid var(--sw3); }
+.tag.t-pf     { background: var(--pf2); color: #fcd34d; border: 1px solid var(--pf3); }
+.tag.t-srv    { background: var(--srv2); color: #93c5fd; border: 1px solid var(--srv3); }
+.tag.t-bridge { background: var(--bridge2); color: #f9a8d4; border: 1px solid var(--bridge3); }
+.tag.t-action { background: var(--action2); color: #fdba74; border: 1px solid var(--action3); }
+.tag.t-tmpl   { background: #1a2a08; color: #a3e635; border: 1px solid #344e10; }
+.tag.t-readme { background: #1f0d2a; color: #c084fc; border: 1px solid #3a1a4a; }
+.tag.t-new    { background: #2a1f0d; color: #fcd34d; border: 1px solid #4a3a1a; }
+.tag.t-done   { background: var(--ok2); color: #86efac; border: 1px solid var(--ok3); }
+
+.effort { font-family: var(--mono); font-size: 10px; color: var(--fg3); white-space: nowrap; align-self: start; margin-top: 2px; }
+
+/* ── Status section ── */
+.status-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin: 20px 40px 0; }
+.status-card { border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; background: var(--bg2); }
+.status-card.sc-done { border-color: var(--ok3); background: var(--ok2); }
+.status-card.sc-partial { border-color: var(--warn3); background: var(--warn2); }
+.status-card.sc-next { border-color: var(--zbx3); background: var(--zbx2); }
+.status-card-label { font-family: var(--mono); font-size: 9px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 6px; }
+.sc-done .status-card-label { color: var(--ok); }
+.sc-partial .status-card-label { color: var(--warn); }
+.sc-next .status-card-label { color: #7dd3fc; }
+.status-card-title { font-size: 13px; font-weight: 600; color: var(--fg); margin-bottom: 6px; }
+.status-card-body { font-size: 12px; color: var(--fg2); line-height: 1.6; }
+.status-card-body ul { padding-left: 14px; }
+.status-card-body li { margin-bottom: 2px; }
+
+/* ── Architecture diagram ── */
+.arch { margin: 0 40px; padding: 18px; border: 1px solid var(--line); background: var(--bg2); border-radius: 8px; font-family: var(--mono); font-size: 11px; color: var(--fg2); white-space: pre; overflow-x: auto; line-height: 1.55; }
+.arch .node-ms     { color: #67e8f9; }
+.arch .node-xiq    { color: #c084fc; }
+.arch .node-sw     { color: #bef264; }
+.arch .node-pf     { color: #fcd34d; }
+.arch .node-srv    { color: #93c5fd; }
+.arch .node-zbx    { color: #7dd3fc; }
+.arch .node-action { color: #fdba74; }
+.arch .node-bridge { color: #f9a8d4; }
+.arch .node-w      { color: var(--warn); }
+
+@media (max-width: 800px) {
+  .header { flex-direction: column; padding: 20px; }
+  .main { padding: 16px 20px; }
+  .status-grid { grid-template-columns: 1fr; margin: 16px 20px 0; }
+  .timeline-wrap, .legend { padding: 14px 20px; }
+}
+@media print {
+  .task-check { border-color: #aaa; }
+  .task-check.done { background: #4caf50; border-color: #4caf50; }
+}
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <div class="header-left">
+    <div class="brand">Zabbix · TCS — Custom Dashboard Module · Plan v1.0</div>
+    <h1>TCS Dashboard Module — Live-data Wiring Plan</h1>
+    <div class="subtitle">Zabbix 7.0+ · take the six custom-skinned dashboards already shipped in <code>tcs_dashboard</code> (Global · AP Detail · Switches · Servers · Surveillance · Camera/Server Detail) from mock-data to live data — by <strong>lifting the data layers</strong> from <code>jerahl/MilestoneZabbix</code> + <code>jerahl/ZabbixSwitchPortWidgets</code> + <code>jerahl/ZabbixExtremeIQ</code> and discarding their widget rendering shells. Companion to AP Plan v3.2 and Milestone Dashboard Plan v1.1.</div>
+  </div>
+  <div class="header-stats">
+    <div class="stat-row"><span>Tasks complete</span><span class="stat-val" id="done-count">— / —</span></div>
+    <div class="stat-row"><span>Timeline</span><span class="stat-val">~12 weeks</span></div>
+    <div class="stat-row"><span>Milestones</span><span class="stat-val">6 (M0–M5)</span></div>
+    <div class="stat-row"><span>Existing assets</span><span class="stat-val" style="color:#86efac">3 widget repos · ~6 templates · ~10 ext scripts</span></div>
+    <div class="stat-row"><span>Dashboards already shipped</span><span class="stat-val" style="color:#67e8f9">6 mockup-driven (mock data)</span></div>
+    <div class="stat-row"><span>Carry-forward</span><span class="stat-val" style="color:#fcd34d">AP G16–G29 · Milestone G1–G21</span></div>
+    <div id="progress-wrap"><div id="progress-bar"></div></div>
+  </div>
+</div>
+
+<!-- v1.0 changes banner -->
+<div class="change-banner" style="border-color:#a3e635;background:#0d2010">
+  <strong style="color:#a3e635">v1.0 — what this plan covers:</strong> The <code>tcs_dashboard</code> Zabbix module already contains six full-page custom dashboards (matching pixel-for-pixel the design bundle from claude.ai/design). The shell, sidebar, topbar, page header, AP navigator, host navigator, port grid, camera wall, RAID grid, and 24h sparkline strips are <em>built and committed</em> on branch <code>claude/update-project-designs-b831Y</code>. The only missing piece is real data — every dashboard reads from a <code>*-data.jsx</code> mock file. This plan covers the wiring work: lift the data-collection layer from three sibling widget repos, write per-dashboard PHP <code>Action*Data</code> JSON endpoints, write per-dashboard <code>*-bridge.jsx</code> adapters parallel to the existing <code>data-bridge.jsx</code>, and ship.
+  <ul>
+    <li><strong>Architecture decision (locked):</strong> lift data layers, discard widget shells. The widget repos stay installable; their templates + external scripts + PHP API clients become the canonical data sources for the unified module. The existing widget rendering (PHP <code>Widget.php</code>, <code>WidgetForm.php</code>, JS <code>widget.js</code>) does not move — the module's React dashboards replace them.</li>
+    <li><strong>Auth normalisation (locked):</strong> Milestone uses <code>{$MILESTONE.HOST}</code> / <code>{$MILESTONE.USER}</code> / <code>{$MILESTONE.PASSWORD}</code> / <code>{$MILESTONE.SCHEME}</code> — the existing macros from <code>jerahl/MilestoneZabbix</code>. M0 audits the XIQ + PacketFence + iDRAC macro names already in use in their respective repos and matches them — no new macro vocabulary invented.</li>
+    <li><strong>Surveillance is priority 1.</strong> M2 wires the Surveillance NOC + Camera Detail + Server Detail dashboards first. Switches / Servers / AP-extend run in M3 (parallel tracks possible after M1). Global Dashboard is M4 — it aggregates the others, so it lands last per-dependency, not per-importance.</li>
+    <li><strong>Existing AP Detail wiring stays.</strong> <code>ActionDashboard.php</code> + <code>ActionDashboardData.php</code> + <code>data-bridge.jsx</code> already pull live <code>host.get</code>/<code>item.get</code> data for one AP. M3 extends them: inject <code>AP_SITES</code> from a real <code>host.get</code> filtered by host group (currently stubbed), wire the XIQ-side fields by linking to the lifted <code>XIQClient.php</code>, and surface PacketFence client lists from the lifted PF client.</li>
+    <li><strong>Three companion repos get a "see ZabbixCustomDashboard" banner</strong> in their READMEs. The user moves them in manually — drafts are at <code>tcs_dashboard/notes/widget-repo-readme-banners.md</code>. The widget repos are not deprecated; they're the canonical home for the templates and API clients while the unified module is the canonical home for the operator UI.</li>
+    <li><strong>Source-of-truth tagging stays.</strong> The dashboards already render a <code>SourceBadge</code> primitive next to each metric (<code>ZBX</code> / <code>EXT</code> / <code>PF</code> / <code>IDRAC</code>). Each <code>*-bridge.jsx</code> propagates the badge from the data-controller's response so a cell that says "94°F" always knows whether iDRAC or the OS agent produced it. <em>Per AP Plan v3.2 §B and Milestone Plan §B G16 — operators need to know which probe path produced each value, especially when two paths disagree.</em></li>
+  </ul>
+</div>
+
+<!-- Project context banner -->
+<div class="change-banner" style="border-color:var(--ms3);background:var(--ms2)">
+  <strong style="color:#67e8f9">Project context — what exists today, what we're wiring to it:</strong> The <code>tcs_dashboard</code> module on branch <code>claude/update-project-designs-b831Y</code> ships six full-page React dashboards rendered via Babel-standalone, all behind one unified sidebar (<code>global-nav.jsx</code>). Five action controllers exist (<code>ActionGlobal</code>, <code>ActionDashboard</code>, <code>ActionSwitches</code>, <code>ActionServers</code>, <code>ActionSurveillance</code>) plus two detail views (<code>ActionCamera</code>, <code>ActionServer</code>). Only <code>ActionDashboard</code> + <code>ActionDashboardData</code> have a JSON refresh endpoint wired to real Zabbix data; the rest render static mock data via <code>nvr-data.jsx</code> / <code>switches-data.jsx</code> / <code>servers-data.jsx</code> / <code>global-data.jsx</code>.
+  <ul>
+    <li><strong>Three widget repos hold the data layers we'll lift.</strong> <code>jerahl/MilestoneZabbix</code> ships <code>Milestone by HTTP API.yaml</code> + 6 external scripts (camera state, ESS WebSocket dump, refresh) + a <code>milestone_camera_status</code> widget with the PHP/HTTP scaffolding for talking to XProtect's REST API. <code>jerahl/ZabbixSwitchPortWidgets</code> ships EXOS PoE template additions + a PHP-side switch port + MAC learning client + an optional PacketFence-15 client. <code>jerahl/ZabbixExtremeIQ</code> ships <code>XIQClient.php</code> + the XIQ AP template. <em>Each repo's PHP "client" classes are what we want — they encapsulate the auth + HTTP semantics for each external system. The widget rendering layer (<code>Widget.php</code>, <code>WidgetForm.php</code>, <code>widget.js</code>) is what we discard.</em></li>
+    <li><strong>Module load order matters.</strong> The unified sidebar (<code>global-nav.jsx</code>) is loaded first on every page, then per-dashboard data + tabs + app entry. M4 introduces six bridge files that load <em>before</em> their dashboard's <code>*-data.jsx</code> mock and shadow the same window globals. The mocks aren't deleted — they remain as the empty-state fallback when the bridge can't reach its endpoint, so an operator who breaks the network connection to Zabbix sees the demo data, not a white page.</li>
+    <li><strong>Dashboards already poll.</strong> <code>data-bridge.jsx</code> polls <code>tcs.dashboard.data</code> every 30 s and re-publishes the window globals. M4's new bridges all match this interval and shape (request → JSON → defensive merge → optional <code>tcs:data</code> CustomEvent). Slow upstreams (XProtect, PF) get coarser intervals at the controller, not the bridge; the bridge always asks every 30 s and the controller serves a cached value if fresh.</li>
+    <li><strong>Cross-repo coordination.</strong> The Milestone Dashboard Plan v1.1 (companion plan) is currently in M0/M1 — splitting the Milestone single-host template into a three-host topology (Site / Camera / Recording Server). Our M1 (template imports) consumes <em>whatever shape</em> the Milestone plan ships. If Milestone M1 lands first, our M2 reads camera + RS hosts as first-class Zabbix hosts. If Milestone M1 lags, our M2 falls back to the existing single-Site-host model and reads dependent items by GUID. <em>Both paths produce the same JSON shape on the dashboard side</em> — the bridge doesn't care.</li>
+    <li><strong>Carry-forward gotchas from AP Plan v3.2 §B and Milestone Plan v1.1 §B.</strong> AP G16–G29 (Zabbix 7.4 widget-framework requirements) <em>do not apply</em> here — this is a custom module, not a widget. AP G21 (PHP 8.0 not 8.1+) <em>does</em> apply: every <code>Action*Data.php</code> we write conforms to PHP 8.0 idioms. Milestone G1–G15 (camera/RS topology, vendor SNMP, ICMP scale, OAuth2 token shape) flow downstream to us as data-shape constraints, not code constraints. <em>Read both plans before starting M2.</em></li>
+  </ul>
+</div>
+
+<!-- Status cards -->
+<div class="status-grid">
+  <div class="status-card sc-next">
+    <div class="status-card-label">M0 — Now</div>
+    <div class="status-card-title">Inventory &amp; foundation</div>
+    <div class="status-card-body">
+      <strong style="color:#7dd3fc">Pending start:</strong>
+      <ul>
+        <li>Per-repo data-layer audit (Milestone / Switches / XIQ)</li>
+        <li>Macro-name harmonisation across the four sources</li>
+        <li>Pilot site selection (Bryant HS likely — has all 4 sources)</li>
+        <li>Cache + polling-interval matrix (per source × per dashboard)</li>
+        <li>SourceBadge mapping spec (ZBX / EXT / PF / IDRAC per cell)</li>
+      </ul>
+    </div>
+  </div>
+  <div class="status-card">
+    <div class="status-card-label">M1 — Templates &amp; ext scripts</div>
+    <div class="status-card-title">Lift the collection layer</div>
+    <div class="status-card-body">
+      Import <code>Milestone by HTTP API.yaml</code>, <code>EXOS PoE addon</code>, <code>XIQ AP by API</code> templates into <code>tcs_dashboard/templates/</code>. Copy 6 Milestone Python helpers + the PF-15 client into <code>tcs_dashboard/externalscripts/</code>. Document install order. Pilot host gets all four templates linked.
+    </div>
+  </div>
+  <div class="status-card">
+    <div class="status-card-label">M2–M5 — Bridges &amp; ship</div>
+    <div class="status-card-title">Six Action*Data + six *-bridge.jsx + polish</div>
+    <div class="status-card-body">
+      M2: surveillance bridge (priority — Milestone). M3: switches + servers + AP-extend bridges (parallel). M4: global aggregator + frontend bridge orchestration + SSE optional. M5: caching, permissions, air-gap, multi-site validation, sign-off.
+    </div>
+  </div>
+</div>
+
+<!-- Architecture diagram -->
+<div class="tl-label" style="padding:18px 40px 6px;color:var(--fg3)">Architecture · target data flow</div>
+<div class="arch">
+<span class="node-zbx">[Sources]</span>
+  │
+  ├── <span class="node-ms">XProtect API Gateway</span>     ──► Milestone Site host           ──┐
+  ├── <span class="node-ms">XProtect ESS WebSocket</span>   ──► milestone_ess_state.py (cron)  ──┤
+  ├── <span class="node-ms">Camera REST + hardware</span>   ──► milestone_cameras_state.py    ──┤
+  ├── <span class="node-xiq">Extreme Cloud IQ API</span>    ──► XIQClient.php (lifted)         ──┤
+  ├── <span class="node-sw">Extreme switches</span>        ──► EXOS template + PoE addon      ──┤
+  ├── <span class="node-pf">PacketFence 15 API</span>      ──► PFClient.php (lifted)          ──┤   <span class="node-zbx">Zabbix Server / Proxy</span>
+  ├── <span class="node-srv">Linux/Windows Agents</span>    ──► OS Linux/Win by Agent          ──┼──► host.get / item.get
+  └── <span class="node-srv">Dell iDRAC SNMP</span>         ──► Dell iDRAC by SNMP             ──┘     event.get / problem.get
+                                                                                            │
+  <span class="node-action">[tcs_dashboard backend — Action*Data PHP controllers]</span>                                          │
+  ├── ActionGlobalData       ──► <span class="node-zbx">problem.get</span> + <span class="node-zbx">host.get</span> aggregate, no external sources       ◄──┘
+  ├── ActionDashboardData    ──► <span class="node-zbx">item.get</span>(AP) + <span class="node-xiq">XIQClient::getApDetail()</span> + <span class="node-pf">PFClient::clients()</span>
+  ├── ActionSwitchesData     ──► <span class="node-zbx">item.get</span>(switch) + <span class="node-sw">EXOS PoE items</span> + <span class="node-pf">PFClient::devicesByMac()</span>
+  ├── ActionServersData      ──► <span class="node-zbx">item.get</span>(servers) + <span class="node-srv">Dell iDRAC items</span>
+  ├── ActionSurveillanceData ──► <span class="node-zbx">item.get</span>(MS site) + <span class="node-ms">MilestoneClient::sites/cams/rs()</span>
+  ├── ActionCameraData       ──► <span class="node-zbx">item.get</span>(camera host) + <span class="node-ms">MilestoneClient::camera(id)</span>
+  └── ActionServerData       ──► <span class="node-zbx">item.get</span>(RS host) + <span class="node-ms">MilestoneClient::rs(id)</span> + <span class="node-srv">iDRAC items</span>
+                                                                                            │
+  <span class="node-bridge">[tcs_dashboard frontend — *-bridge.jsx adapters]</span>                                                  │
+  ├── global-bridge.jsx      ──► fetch(tcs.global.data)      ──► window.GLOBAL_KPIS / GLOBAL_SITES / …
+  ├── data-bridge.jsx        ──► fetch(tcs.dashboard.data)   ──► window.ZBX_HOST / ZBX_ITEMS / AP_SITES / …
+  ├── switches-bridge.jsx    ──► fetch(tcs.switches.data)    ──► window.SWITCH_SITES / ARC_MDF_STACK / …
+  ├── servers-bridge.jsx     ──► fetch(tcs.servers.data)     ──► window.SRV_SITES / SRV_HOST / SRV_ITEMS
+  ├── surveillance-bridge.jsx──► fetch(tcs.surveillance.data)──► window.MILESTONE / SITES / CAMERAS / VMS_ALARMS
+  ├── camera-bridge.jsx      ──► fetch(tcs.camera.data)      ──► window.CAMERA
+  └── server-bridge.jsx      ──► fetch(tcs.server.data)      ──► window.RECORDING_SERVER / RAID / CHANNELS
+                                                                                            │
+  <span class="node-bridge">[Six React dashboards already shipped — consume window globals unchanged]</span>
+  Global · AP Detail · Switches · Servers · Surveillance · Camera Detail · Server Detail
+</div>
+
+<!-- Legend -->
+<div class="legend">
+  <div class="leg-item"><div class="leg-dot t-reuse"></div>Lift wholesale from existing repo</div>
+  <div class="leg-item"><div class="leg-dot t-adapt"></div>Modify existing tcs_dashboard file</div>
+  <div class="leg-item"><div class="leg-dot t-ms"></div>Milestone XProtect</div>
+  <div class="leg-item"><div class="leg-dot t-xiq"></div>Extreme Cloud IQ</div>
+  <div class="leg-item"><div class="leg-dot t-sw"></div>Switch / EXOS</div>
+  <div class="leg-item"><div class="leg-dot t-pf"></div>PacketFence</div>
+  <div class="leg-item"><div class="leg-dot t-srv"></div>Server / iDRAC</div>
+  <div class="leg-item"><div class="leg-dot t-bridge"></div>Frontend bridge</div>
+  <div class="leg-item"><div class="leg-dot t-action"></div>Backend Action*Data</div>
+  <div class="leg-item"><div class="leg-dot t-tmpl"></div>Template / ext script</div>
+  <div class="leg-item"><div class="leg-dot t-readme"></div>README banner / doc</div>
+  <div class="leg-item"><div class="leg-dot t-new"></div>Net-new</div>
+  <div class="leg-item"><div class="leg-dot t-done"></div>Done</div>
+  <div class="leg-item" style="margin-left:auto"><span style="color:var(--fg3);font-family:var(--mono);font-size:10px">Effort: S ≈ &lt;1d · M ≈ 2-4d · L ≈ 1+ wk</span></div>
+</div>
+
+<!-- Timeline -->
+<div class="timeline-wrap">
+  <div class="tl-label">Timeline · 12 weeks · two parallel tracks after M1 (surveillance / others)</div>
+  <div class="tl-bar">
+    <div class="tl-seg" style="background:var(--m0);flex:2">M0 INVENTORY</div>
+    <div class="tl-seg" style="background:var(--m1);flex:2">M1 TEMPLATES</div>
+    <div class="tl-seg" style="background:var(--m2);flex:2">M2 SURVEILLANCE</div>
+    <div class="tl-seg" style="background:var(--m3);flex:3">M3 SW + SRV + AP</div>
+    <div class="tl-seg" style="background:var(--m4);flex:2">M4 GLOBAL + BRIDGES</div>
+    <div class="tl-seg" style="background:var(--m5);flex:1">M5 SHIP</div>
+  </div>
+  <div class="tl-weeks">
+    <div class="tl-wk">W1</div><div class="tl-wk">W2</div><div class="tl-wk">W3</div><div class="tl-wk">W4</div><div class="tl-wk">W5</div><div class="tl-wk">W6</div><div class="tl-wk">W7</div><div class="tl-wk">W8</div><div class="tl-wk">W9</div><div class="tl-wk">W10</div><div class="tl-wk">W11</div><div class="tl-wk">W12</div>
+  </div>
+</div>
+
+<div class="main">
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     §A  Existing assets inventory — three widget repos + the module
+════════════════════════════════════════════════════════════════════ -->
+<div class="milestone" style="border-color:var(--ms3)">
+  <div class="ms-head" style="background:var(--ms2);cursor:default">
+    <div class="ms-accent" style="background:var(--ms)"></div>
+    <div class="ms-info">
+      <div class="ms-title" style="color:#67e8f9">§A — Existing-asset inventory
+        <span class="ms-badge active">Reference only — not a milestone</span>
+      </div>
+      <div class="ms-meta">What we're starting with. Read before M1 begins so the lift decisions don't accidentally reinvent something that already works in one of the source repos.</div>
+    </div>
+  </div>
+  <div class="tasks open" style="padding:16px 20px;background:#0a1f23">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;font-size:12.5px;color:var(--fg2);line-height:1.7">
+      <div><strong style="color:#67e8f9">A1 — <code>jerahl/MilestoneZabbix</code> · template + 6 ext scripts.</strong> <code>Milestone by HTTP API.yaml</code> polls XProtect API Gateway as a single host (sites, recording servers, cameras, license, ESS state). Six external scripts: <code>milestone_cameras_read.sh</code> / <code>_refresh.sh</code> / <code>_state.py</code> + ESS triplet. <em>Lift wholesale into <code>tcs_dashboard/templates/</code> + <code>externalscripts/</code>.</em> No template surgery — Milestone Plan v1.1 handles the three-host split as a separate concern; we consume whichever shape ships.</div>
+
+      <div><strong style="color:#67e8f9">A2 — <code>jerahl/MilestoneZabbix</code> · <code>milestone_camera_status/</code> widget.</strong> PHP widget with HTTP scaffolding for talking to XProtect REST. <em>Lift the HTTP/auth core</em> (token fetch via OAuth2 password grant against <code>/IDP/connect/token</code>, request signing, JSON parsing) into <code>tcs_dashboard/lib/MilestoneClient.php</code>. <em>Discard</em> the widget shell (<code>Widget.php</code>, <code>WidgetForm.php</code>, <code>widget.js</code>, <code>views/</code>) — the React dashboards replace the rendering.</div>
+
+      <div><strong style="color:#67e8f9">A3 — <code>jerahl/MilestoneZabbix</code> · <code>pf_device/</code> widget.</strong> PHP widget that calls PacketFence-15 to enrich a MAC address with vendor / OS / registration / role / VLAN. <em>Lift the HTTP client</em> into <code>tcs_dashboard/lib/PFClient.php</code> (token-based auth via <code>/api/v1/login</code> + bearer). Used by AP Detail (Connected Devices tab), Switches (Port Detail card), and Surveillance (Camera Detail's "Linked Switch Port" block) bridges.</div>
+
+      <div><strong style="color:#67e8f9">A4 — <code>jerahl/ZabbixSwitchPortWidgets</code> · template additions.</strong> EXOS template add-ons for PoE detection: <code>snmp.interfaces.poe.discovery</code> (OID <code>1.3.6.1.2.1.105.1.1.1.3</code>) + <code>snmp.interfaces.poe.dstatus[{#SNMPINDEX}]</code> (OID <code>1.3.6.1.2.1.105.1.1.1.6.{#SNMPINDEX}</code>). Stock Extreme template lacks these. <em>Lift the YAML add-on into <code>tcs_dashboard/templates/extreme_poe_addon.yaml</code></em> — operator imports it once and links to existing switch hosts.</div>
+
+      <div><strong style="color:#67e8f9">A5 — <code>jerahl/ZabbixSwitchPortWidgets</code> · MAC learning + port detail PHP.</strong> The <code>switchports/</code> + <code>portdetail/</code> widgets contain a PHP client that walks <code>dot1dTpFdbTable</code> via SNMP for MAC-to-port learning, plus item-key resolution for <code>net.if.status</code>, <code>net.if.adminstatus</code>, <code>net.if.in</code>/<code>out</code>. <em>Lift the client logic</em> into <code>tcs_dashboard/lib/SwitchClient.php</code>. Widget rendering shell discarded.</div>
+
+      <div><strong style="color:#67e8f9">A6 — <code>jerahl/ZabbixExtremeIQ</code> · <code>XIQClient.php</code>.</strong> Already a clean PHP client class for Extreme Cloud IQ — bearer-token auth, methods for <code>getApDetail()</code>, <code>getClients()</code>, <code>getInterfaces()</code>, <code>getSsids()</code>, device telemetry. <em>Lift verbatim</em> into <code>tcs_dashboard/lib/XIQClient.php</code>. The existing <code>data-bridge.jsx</code> already proves the pattern works for one AP — M3 just turns on the rest of the methods.</div>
+
+      <div><strong style="color:#67e8f9">A7 — <code>jerahl/ZabbixExtremeIQ</code> · XIQ AP template.</strong> The XIQ APs by API template polls XIQ Cloud per-AP and exposes client count / RSSI distribution / channel utilization / radio state as Zabbix items. <em>Lift verbatim</em> into <code>tcs_dashboard/templates/xiq_ap_by_api.yaml</code>. Once linked to the AP host, the existing <code>data-bridge.jsx</code> picks up the items by key without code change.</div>
+
+      <div><strong style="color:#67e8f9">A8 — <code>tcs_dashboard</code> · already shipped UI + 1 wired endpoint.</strong> Six dashboards live on branch <code>claude/update-project-designs-b831Y</code>, plus the unified sidebar, tweaks panel, primitives, and the AP Detail data path (<code>ActionDashboard</code> + <code>ActionDashboardData</code> + <code>data-bridge.jsx</code>). The bridge defensively stubs every key its consumers read — so a missing <code>{$XIQ.TOKEN}</code> macro renders dashes, not crashes. <em>Use this as the template for every other bridge.</em></div>
+
+      <div><strong style="color:#67e8f9">A9 — Auth macros already in use.</strong> Milestone (locked): <code>{$MILESTONE.HOST}</code>, <code>{$MILESTONE.USER}</code>, <code>{$MILESTONE.PASSWORD}</code> (secret), <code>{$MILESTONE.SCHEME}</code> per <code>jerahl/MilestoneZabbix</code>. XIQ (verify in M0): likely <code>{$XIQ.TOKEN}</code> per <code>jerahl/ZabbixExtremeIQ</code>. PacketFence (verify in M0): likely <code>{$PF.HOST}</code> + <code>{$PF.TOKEN}</code> per the <code>pf_device</code> widgets. iDRAC (verify M0): <code>{$DELL.IDRAC.SNMP.COMMUNITY}</code> per Milestone Plan v1.1 G18. <em>M0 confirms each — we don't invent new macro names.</em></div>
+
+      <div><strong style="color:#67e8f9">A10 — Module load order (already settled).</strong> Each view loads in this order: React + ReactDOM + Babel from CDN, then tweaks-panel → primitives → <code>global-nav.jsx</code> (unified sidebar) → per-page data → per-page tabs → per-page app entry. Bridges go between primitives and per-page data — they shadow the mock-data file. <em>Don't reorder this</em>; the dashboards rely on <code>window.GlobalSidebar</code> being defined before the page-app calls <code>&lt;Sidebar /&gt;</code>.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     §B  Predicted gotchas — module-specific (C1–C13)
+            + carry-forward (AP G16–G29 + Milestone G1–G21)
+════════════════════════════════════════════════════════════════════ -->
+<div class="milestone" style="border-color:var(--warn3);background:var(--warn2)">
+  <div class="ms-head" style="background:var(--warn2);cursor:default">
+    <div class="ms-accent" style="background:var(--warn)"></div>
+    <div class="ms-info">
+      <div class="ms-title" style="color:#fcd34d">§B — Predicted gotchas + carry-forward
+        <span class="ms-badge partial">C1–C13 module-specific · AP G16–G29 + Milestone G1–G21 inherited</span>
+      </div>
+      <div class="ms-meta">Pre-flight list. Validate C1–C13 in M0; carry-forwards are settled — accept and apply.</div>
+    </div>
+  </div>
+  <div class="tasks open" style="padding:16px 20px;background:#1a1308">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;font-size:12.5px;color:var(--fg2);line-height:1.7">
+      <div><strong style="color:#fcd34d">C1</strong> — <strong>Discard widget shells, lift only data layers.</strong> Each source repo is a Zabbix 7.4 widget — <code>Widget.php</code>, <code>WidgetForm.php</code>, <code>widget.js</code>, <code>views/widget.view.php</code>, plus its <code>manifest.json</code> with <code>"type":"widget"</code>. <em>None of that moves.</em> The module is a full-page <code>"type":"module"</code> manifest with action controllers; mixing the two would re-trigger AP G16–G29 (widget framework requirements) for no payoff. <strong>Resolution:</strong> only <code>lib/*Client.php</code>, <code>templates/*.yaml</code>, and <code>externalscripts/*.{sh,py}</code> move. The widget shells stay in their original repos as standalone widgets. Anyone wanting to render a single panel in a native Zabbix dashboard installs the widget repo separately; the unified module is for the full-page view.</div>
+
+      <div><strong style="color:#fcd34d">C2</strong> — <strong>Match each source's existing macro names — don't invent a new vocabulary.</strong> Confirmed for Milestone (<code>{$MILESTONE.HOST}</code> / <code>.USER</code> / <code>.PASSWORD</code> / <code>.SCHEME</code>). XIQ + PF + iDRAC need verification in M0 from each source repo's <code>manifest.json</code> + template YAML. <em>Don't ship "we use a new <code>{$TCS_*</code> namespace"</em> — operators already running the source widgets keep their existing macros, and the module reads from the same hosts. Cross-pollinating two macro patterns on one host means engineering for inconsistency forever.</div>
+
+      <div><strong style="color:#fcd34d">C3</strong> — <strong>OAuth2 token fetch: per-call, not cached.</strong> The Milestone widget pattern fetches a token inline per HTTP call — no token caching, no refresh dance. <code>MilestoneClient.php</code> in the lifted form keeps this pattern. <strong>Tempting</strong> to add a 5-minute token cache (Zabbix's <code>CCache</code> or APCu) since the dashboards poll every 30 s, but: (a) the existing template's JS Script items already fetch per-call and at scale that's 300+ calls/min steady-state with no observed problem; (b) introducing a cache layer means a stale-credential edge case where rotated PASSWORDs fail silently for the cache-TTL window. <em>Defer caching to M5 — measure first.</em></div>
+
+      <div><strong style="color:#fcd34d">C4</strong> — <strong>Babel-standalone first paint cost.</strong> The dashboards compile JSX in-browser via Babel-standalone — first-paint ~1.5–2 s on cold cache. Each new bridge adds ~50–200 ms (small files, but Babel still parses each one). At 6 bridges + 4 dashboard JSX files + tweaks/primitives/shell, total compile time on cold cache is ~2.5 s. <em>Acceptable for M2–M4</em>; M5 plans an esbuild build step that produces a single pre-compiled bundle, dropping Babel entirely. Air-gapped installs (already documented in the README) need this anyway because Babel-standalone is the largest CDN dependency.</div>
+
+      <div><strong style="color:#fcd34d">C5</strong> — <strong>Bridges must defensively stub every key consumers read — same pattern as <code>data-bridge.jsx</code>.</strong> The mock-data files (<code>nvr-data.jsx</code>, <code>switches-data.jsx</code>, <code>servers-data.jsx</code>, <code>global-data.jsx</code>) define rich shapes — e.g. <code>SWITCH_SITES[i].switches[j].ports[k].poe</code>. The dashboards read these without guarding for missing keys. <em>If a bridge publishes <code>SWITCH_SITES = []</code>, the dashboard renders empty cleanly. If it publishes <code>SWITCH_SITES = [{switches: undefined}]</code>, it crashes.</em> <strong>Resolution:</strong> every bridge has an <code>EXPECTED_KEYS</code> list and an <code>emptyShape()</code> helper that builds a zero-filled but fully-keyed object — same pattern <code>data-bridge.jsx</code> already follows for <code>ZBX_ITEMS</code>. Code-review checklist: every bridge merge needs a "publishes all keys, even on null upstream" sign-off.</div>
+
+      <div><strong style="color:#fcd34d">C6</strong> — <strong>host.get returns hosts visible to the logged-in user — Global Dashboard headlines are per-user.</strong> Zabbix's <code>host.get</code> + <code>problem.get</code> respect host-permission filters. An operator with read access to one school's host group sees "12 problems"; the network admin sees "47". This is correct behaviour but <em>different from a server-side dashboard rendered by Zabbix</em>, which most operators are used to and which can be impersonated. <strong>Resolution:</strong> document in the Global Dashboard help tooltip that counts are scoped to the viewer's permissions; surface a "Showing N of M total hosts" line in the page header when N&lt;M. Don't try to escalate via API token — that's a security regression.</div>
+
+      <div><strong style="color:#fcd34d">C7</strong> — <strong>Cross-host item lookups by tag (consume Milestone Plan G4's foundation).</strong> The Milestone Plan v1.1 ships per-camera and per-RS hosts (in M1), with each item tagged <code>cam_id={GUID}</code> or <code>rs_id={GUID}</code>. Our Camera Detail and Server Detail dashboards must query items by tag, not by host name — host names are derived from <code>{#CAM.HW.NAME}</code> via Milestone G3 and aren't predictable from the GUID. <strong>Resolution:</strong> <code>MilestoneClient::camera($id)</code> uses <code>API::Item()-&gt;get(['tags' =&gt; [['tag' =&gt; 'cam_id', 'value' =&gt; $id]]])</code>. Same shape <code>data-bridge.jsx</code>'s upstream <code>ActionDashboardData</code> uses for AP fleet items today. <em>Verify Milestone Plan M1's tag scheme lands as documented before our M2 starts.</em></div>
+
+      <div><strong style="color:#fcd34d">C8</strong> — <strong>Per-source polling-interval mismatch.</strong> The dashboards poll every 30 s; XProtect tolerates that for site-level data but not for license details (~3 s per call) or per-camera state (~15 s per call). PacketFence's <code>/api/v1/nodes</code> at 5000 nodes is ~8 s. <strong>Resolution:</strong> the bridge polls 30 s; the controller decides which upstream calls run on each tick. Cheap (Zabbix item.get) → every tick. Medium (XProtect /sites + /recordingServers) → cached 60 s. Expensive (XProtect /licenseDetails per RS, PF /nodes full) → cached 5 min, refreshed on operator action. <em>Per-call cache key includes hostid/cameraid so per-host views don't share with site-wide.</em></div>
+
+      <div><strong style="color:#fcd34d">C9</strong> — <strong><code>{$MILESTONE.SCHEME}</code> means construct URLs, don't assume HTTPS.</strong> The macro exists because some installs run XProtect Mgmt over HTTP on a closed VLAN. <code>MilestoneClient</code> reads <code>{$MILESTONE.SCHEME}</code> default <code>https</code> and constructs base URL as <code>{SCHEME}://{HOST}</code>. <em>Don't hardcode <code>https://</code></em> — the existing template gets this right, the lifted PHP must too. Add the same SCHEME pattern to <code>PFClient</code> and <code>XIQClient</code> for symmetry (XIQ Cloud is always HTTPS but PF on-prem isn't always).</div>
+
+      <div><strong style="color:#fcd34d">C10</strong> — <strong>XIQ token longevity + refresh.</strong> XIQ Cloud bearer tokens are long-lived but rotate on a quarter-ish cadence and on policy changes. Existing <code>XIQClient.php</code> expects a pre-generated token via <code>{$XIQ.TOKEN}</code> macro — no automatic refresh. <em>This is fine for v1.0</em> — operators rotate quarterly via documented runbook. M5 considers a self-refresh path: store the long-lived OAuth client-credentials grant in macros, mint short-lived tokens server-side. Defer until v2 unless rotation pain shows in M5 testing.</div>
+
+      <div><strong style="color:#fcd34d">C11</strong> — <strong>Polling thundering-herd: 6 bridges × 30 s on a busy dashboard tab = 12 requests/min/operator.</strong> An operator with two browser tabs open on different dashboards hits 24/min/operator. At 30 simultaneous operators (busiest TCS shift) that's 720/min into 6 controller actions. <em>Not catastrophic</em> on a tuned Zabbix server — but unnecessary. <strong>Resolution:</strong> bridges (a) only poll when the tab is visible (<code>visibilitychange</code> event already used by the Camera Wall pattern from Milestone G21); (b) jitter by ±2 s so 30 simultaneous loads don't lock-step; (c) consolidate on one umbrella endpoint (<code>tcs.global.data</code>) where dashboards share data. Pick (a)+(b) for v1.0; (c) is a v2 enhancement if numbers warrant.</div>
+
+      <div><strong style="color:#fcd34d">C12</strong> — <strong>Permissions: secret macros in JSON responses.</strong> Zabbix's <code>configuration.export</code> and <code>usermacro.get</code> APIs respect the <code>type=secret</code> flag — secret macros never leak in API responses. <em>But</em> a custom <code>Action*Data.php</code> that <code>echo</code>s the macro value into a JSON response (e.g. accidentally surfacing <code>{$MILESTONE.PASSWORD}</code> in a debug field) leaks it. <strong>Resolution:</strong> code-review checklist for every <code>Action*Data</code>: response body has zero macro values, only resolved-from-macro request results. Unit-test catches by snapshotting one response and grepping for known secret strings. Optional hardening: write a <code>SecretAuditor</code> trait that <code>json_encode</code>s through a recursive scrubber for any string matching a secret-macro pattern.</div>
+
+      <div><strong style="color:#fcd34d">C13</strong> — <strong>SourceBadge propagation across the wire.</strong> The dashboards already render <code>&lt;SourceBadge src="zbx|ext|pf|idrac" /&gt;</code> next to every metric. The mock-data files supply the badge inline (<code>{value: 47, src: "zbx"}</code>). Each bridge must propagate the same tag from its controller — controllers know which path produced each value. <strong>Resolution:</strong> every <code>Action*Data</code> response wraps each metric in <code>{value, src, prev?, history?, missing?}</code> — same shape <code>ActionDashboardData</code> uses for AP items today. The bridge's <code>buildItems()</code> stub-fills <code>src: "zbx"</code> as the default; only deviations (XIQ-only, MS-only, iDRAC-only) need explicit override. <em>Per Milestone Plan G16, conflicting badges on one cell are operationally hazardous — never render two source paths with one badge.</em></div>
+
+      <div style="grid-column:1/-1;margin:12px 0 4px;padding:6px 10px;background:#2a1f08;border:1px solid #5a3d0c;border-radius:4px;font-size:11px;color:#fcd34d;font-weight:600;letter-spacing:.06em;text-transform:uppercase">Carry-forward — settled · do not rediscover</div>
+
+      <div><strong style="color:#fcd34d">AP G21 (carry)</strong> — <strong>PHP 8.0, not 8.1+.</strong> Drop <code>readonly</code> properties, <code>array_is_list()</code>, enums, <code>never</code>, <code>new</code> in initializers, intersection types. Polyfills go in calling namespace because PHP function lookup is namespace-first. Applies to every <code>Action*Data.php</code>, every <code>lib/*Client.php</code>. <em>Source: AP Plan v3.2 §B.</em></div>
+
+      <div><strong style="color:#fcd34d">AP G16 (carry)</strong> — <strong>Module namespace prefix.</strong> The existing module's PHP namespace is <code>Modules\TcsDashboard\Actions</code>. New <code>lib/</code> classes go in <code>Modules\TcsDashboard\Lib</code> — not the source repo's namespaces. <em>Lifting <code>Modules\MilestoneZabbix\Lib\HttpClient</code> verbatim is wrong</em>; rename namespace + class as part of the lift. <em>Source: AP Plan v3.2 §B (G16 collision discovery).</em></div>
+
+      <div><strong style="color:#fcd34d">Milestone G1–G15 (carry)</strong> — <strong>Camera/RS topology + vendor SNMP + ICMP scale.</strong> Don't apply to our PHP/JS — they're template-side concerns. <em>But</em> they shape the data we read: cameras and RSes have GUID-keyed items, ICMP runs at <code>{$MILESTONE.CAM.PING.INTERVAL}</code>, vendor sub-templates exist conditionally per <code>sysObjectID</code>. Our bridges read whatever the templates produce; we don't override. <em>Source: Milestone Plan v1.1 §B G1–G15.</em></div>
+
+      <div><strong style="color:#fcd34d">Milestone G16 (carry)</strong> — <strong>SourceBadge correctness.</strong> Restated as our C13 above. Promoted to module-level constraint because every bridge must conform — not just the surveillance ones.</div>
+
+      <div><strong style="color:#fcd34d">Milestone G20 (carry)</strong> — <strong>No RTSP from Zabbix.</strong> Camera Detail dashboard's "stream health" cells (FPS, bitrate, last-frame-age) source from Milestone's view of the stream (per-camera incoming-stream stats from the API or perfcounter on the RS) — never from a Zabbix-initiated RTSP probe. <em>Source: Milestone Plan v1.1 §B G20.</em> Our bridge surfaces only what Milestone reports; if Milestone says "no incoming stream", we render the NO SIGNAL state.</div>
+
+      <div><strong style="color:#fcd34d">Milestone G21 (carry)</strong> — <strong>Camera Wall scale.</strong> Default OFF, opt-in tweak, 30 s thumbnail interval, pause on tab-hidden. The dashboard already implements this; M2's surveillance bridge respects the tweak — when disabled, the bridge simply doesn't fetch thumbnails (skip the call entirely, don't fetch-and-discard). <em>Source: Milestone Plan v1.1 §B G21.</em></div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     M0 — Inventory & foundation
+════════════════════════════════════════════════════════════════════ -->
+<div class="milestone" id="m0">
+  <div class="ms-head open" onclick="toggle(this,'m0c')">
+    <div class="ms-accent" style="background:var(--m0)"></div>
+    <div class="ms-info">
+      <div class="ms-title">M0 — Inventory &amp; foundation
+        <span class="ms-badge active">Pending start · ~2 weeks</span>
+      </div>
+      <div class="ms-meta">Weeks 1–2 · per-repo audit, macro harmonisation, pilot site selection, cache + polling matrix, SourceBadge mapping. Output: a frozen integration spec and a green pilot host going into M1.</div>
+    </div>
+    <div class="ms-right">
+      <span class="ms-count" id="m0-count"></span>
+      <span class="ms-pill" style="background:var(--m0)">2 wk</span>
+      <span class="ms-chevron open">▶</span>
+    </div>
+  </div>
+  <div class="ms-progress"><div class="ms-progress-bar" id="m0-bar" style="background:var(--m0)"></div></div>
+  <div class="tasks open" id="m0-tasks">
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m0c')"></div>
+      <div class="task-body">
+        <div class="task-name">Per-repo data-layer audit — three companion repos × what we lift / what we discard</div>
+        <div class="task-dep">For each of <code>jerahl/MilestoneZabbix</code>, <code>jerahl/ZabbixSwitchPortWidgets</code>, <code>jerahl/ZabbixExtremeIQ</code>, walk: (1) every <code>manifest.json</code>, (2) every <code>Widget.php</code> + <code>WidgetForm.php</code>, (3) every <code>views/*.php</code>, (4) every <code>assets/js/*.js</code>, (5) every <code>templates/*.yaml</code>, (6) every <code>externalscripts/*</code>. Classify each file: <strong>lift</strong> (template / external script / PHP API client) → goes into <code>tcs_dashboard/{templates,externalscripts,lib}/</code>; <strong>discard</strong> (widget shell). Output a per-repo manifest in <code>tcs_dashboard/notes/lift-manifest.md</code>. Per A1–A7 above this draft is largely written, but validate against each repo's actual file tree.</div>
+      </div>
+      <span class="tag t-readme">README / doc</span>
+      <span class="effort">M</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m0c')"></div>
+      <div class="task-body">
+        <div class="task-name">Macro-name harmonisation — confirm XIQ + PF + iDRAC names from source repos</div>
+        <div class="task-dep">Milestone is locked: <code>{$MILESTONE.HOST}</code> / <code>.USER</code> / <code>.PASSWORD</code> / <code>.SCHEME</code>. For each remaining source, read the source repo's template YAML <code>macros</code> block + widget <code>WidgetForm.php</code> field defaults: <strong>XIQ</strong> — likely <code>{$XIQ.TOKEN}</code> / <code>{$XIQ.HOST}</code> per <code>jerahl/ZabbixExtremeIQ</code>; <strong>PF</strong> — likely <code>{$PF.HOST}</code> / <code>{$PF.TOKEN}</code> per <code>jerahl/MilestoneZabbix/pf_device/</code> + <code>jerahl/ZabbixSwitchPortWidgets/pf_device/</code>; <strong>iDRAC</strong> — <code>{$DELL.IDRAC.SNMP.COMMUNITY}</code> per Milestone Plan v1.1 G18. Document the confirmed list in <code>tcs_dashboard/notes/macro-names.md</code>. <em>If two source repos use different names for the same secret (e.g. <code>{$PACKETFENCE.TOKEN}</code> vs <code>{$PF.TOKEN}</code>), pick one and note the alias — both <code>lib/PFClient.php</code> reads should accept either via fallback chain.</em></div>
+      </div>
+      <span class="tag t-readme">README / doc</span>
+      <span class="effort">S</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m0c')"></div>
+      <div class="task-body">
+        <div class="task-name">Pilot host selection — Bryant HS or equivalent with all four sources</div>
+        <div class="task-dep">Pick one site that has: at least 1 Extreme AP (XIQ), at least 1 Extreme switch with PoE (EXOS template), at least 1 Linux/Windows server (Zabbix Agent), at least 1 Milestone recording server with 5–20 attached cameras (XProtect API), and ideally a PacketFence presence on the wired/wireless VLAN. Bryant HS likely qualifies — confirm with site survey. <em>The pilot is the canonical "all six dashboards green at one site" smoke test for M2 + M3 + M4.</em> If no single site has all four, accept two pilot sites and document which dashboard pairs with which.</div>
+      </div>
+      <span class="tag t-new">Net-new</span>
+      <span class="effort">S</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m0c')"></div>
+      <div class="task-body">
+        <div class="task-name">Cache + polling-interval matrix — per-source × per-dashboard table</div>
+        <div class="task-dep">Per C8: build a 4-source × 6-dashboard matrix. Cell value = "tick interval at controller / cache TTL / dashboard poll". Examples: <em>Zabbix item.get for AP CPU on AP Detail = 30 s / 0 / 30 s</em> (no cache, every poll fresh). <em>XProtect /sites for Surveillance NOC = 30 s controller-tick but 60 s cache TTL</em> (one of every two polls hits the API). <em>PacketFence /nodes for Switches Port Detail = 30 s / 5 min / 30 s on operator click only</em> (lazy-loaded, not auto-polled). Output goes in <code>tcs_dashboard/notes/polling-matrix.md</code> and feeds the <code>Action*Data</code> implementations in M2/M3/M4.</div>
+      </div>
+      <span class="tag t-readme">README / doc</span>
+      <span class="effort">M</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m0c')"></div>
+      <div class="task-body">
+        <div class="task-name">SourceBadge mapping spec — every cell on every dashboard × source path</div>
+        <div class="task-dep">Per C13 + Milestone G16. Walk every dashboard mockup cell-by-cell, document the source: (a) Zabbix item key, (b) external API path, (c) computed/derived. Output is a per-dashboard table in <code>tcs_dashboard/notes/sourcebadge-map.md</code>. Example row: <em>Surveillance NOC · KPI strip · "Cameras online" · src=ZBX · key=<code>milestone.cam.alarm[*]</code> count where value=0 · cached 60s</em>. <strong>Tedious but necessary</strong> — operators will spot a wrong badge before they spot a wrong number, and once wrong it erodes dashboard trust permanently. Cross-reference with the Milestone Plan's mockup-walkthrough output to avoid re-deriving the same answer twice.</div>
+      </div>
+      <span class="tag t-readme">README / doc</span>
+      <span class="effort">L</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m0c')"></div>
+      <div class="task-body">
+        <div class="task-name">Permissions audit — operator role × dashboard × what's hidden</div>
+        <div class="task-dep">Define an <code>operator_dashboards</code> Zabbix role with: read access to host groups <code>Wireless/*</code>, <code>Switches/*</code>, <code>Servers/*</code>, <code>Surveillance/*</code>; no admin/configuration access; no access to secret macros. Walk every dashboard in this role: (1) confirm secret macros never appear in JSON responses (C12 audit); (2) confirm <code>host.get</code> + <code>problem.get</code> respect role permissions; (3) confirm "Showing N of M" footer renders when N&lt;M (C6); (4) confirm any "edit" / "configure" buttons on the dashboards are hidden or disabled. Output a per-dashboard checklist row in <code>tcs_dashboard/notes/permissions-checklist.md</code> — re-run in M5 against the production role.</div>
+      </div>
+      <span class="tag t-new">Net-new</span>
+      <span class="effort">M</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m0c')"></div>
+      <div class="task-body">
+        <div class="task-name">Cross-plan dependency check — Milestone Plan v1.1 progress + handoff shape</div>
+        <div class="task-dep">Read Milestone Plan v1.1's M0 + M1 sections. Confirm timing: their M1 (template fork + per-camera/per-RS hosts + tag-based item lookup) ideally lands before our M2 surveillance bridge starts. <em>If Milestone M1 is &gt;1 week behind ours</em>, our M2 fallback path is to read items directly from the Site host's GUID-keyed dependent items (existing single-host shape) and skip the per-camera-host integration. Document the fork-decision in <code>tcs_dashboard/notes/milestone-plan-dependency.md</code>; revisit at M2 kickoff. The bridge JSON shape is the same either way — only the <code>MilestoneClient</code> implementation differs.</div>
+      </div>
+      <span class="tag t-readme">README / doc</span>
+      <span class="effort">S</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m0c')"></div>
+      <div class="task-body">
+        <div class="task-name">M0 closeout — sign-off doc unblocking M1</div>
+        <div class="task-dep">Output as <code>tcs_dashboard/notes/M0_Closeout.md</code>. Captures: (a) lift manifest per repo, (b) confirmed macro names, (c) pilot host + four-source confirmation, (d) cache/polling matrix, (e) SourceBadge map, (f) permissions checklist, (g) cross-plan dependency status. Sign-off unblocks M1 (template imports). <em>Mirror the structure of Milestone Plan's <code>M0_Milestone_Closeout.html</code> for consistency — same operator reads both plans.</em></div>
+      </div>
+      <span class="tag t-readme">README / doc</span>
+      <span class="effort">S</span>
+    </div>
+
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     M1 — Templates & external scripts: lift the collection layer
+════════════════════════════════════════════════════════════════════ -->
+<div class="milestone" id="m1">
+  <div class="ms-head open" onclick="toggle(this,'m1c')">
+    <div class="ms-accent" style="background:var(--m1)"></div>
+    <div class="ms-info">
+      <div class="ms-title">M1 — Templates &amp; external scripts
+        <span class="ms-badge" style="background:#0d1f3c;color:#7dd3fc;border:1px solid #1a3a6e">Blocks on M0 sign-off · ~2 weeks</span>
+      </div>
+      <div class="ms-meta">Weeks 3–4 · purely additive — copy templates and external scripts from the three source repos into <code>tcs_dashboard/</code>, link to the pilot host, validate items flow. Zero risk to anything already deployed.</div>
+    </div>
+    <div class="ms-right">
+      <span class="ms-count" id="m1-count"></span>
+      <span class="ms-pill" style="background:var(--m1)">2 wk</span>
+      <span class="ms-chevron open">▶</span>
+    </div>
+  </div>
+  <div class="ms-progress"><div class="ms-progress-bar" id="m1-bar" style="background:var(--m1)"></div></div>
+  <div class="tasks open" id="m1-tasks">
+
+    <div class="finding-note">M1 is the lowest-risk milestone — it touches no existing code. Templates import to a Zabbix server live without breaking running monitoring; external scripts go in a directory that doesn't auto-execute until linked.</div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m1c')"></div>
+      <div class="task-body">
+        <div class="task-name">Create <code>tcs_dashboard/templates/</code> + <code>externalscripts/</code> + <code>lib/</code> directories</div>
+        <div class="task-dep">Three new top-level directories under <code>tcs_dashboard/</code>. <code>templates/</code> holds YAML templates lifted from source repos (one file per template). <code>externalscripts/</code> holds Python + shell helpers; install instructions in <code>INSTALL.md</code> direct the operator to copy these into Zabbix's <code>ExternalScripts</code> path (default <code>/usr/lib/zabbix/externalscripts</code>) and chmod +x — they don't live in-place. <code>lib/</code> holds PHP API clients (<code>MilestoneClient.php</code>, <code>XIQClient.php</code>, <code>PFClient.php</code>, <code>SwitchClient.php</code>) namespaced <code>Modules\TcsDashboard\Lib</code>. Update README's directory-tree section.</div>
+      </div>
+      <span class="tag t-new">Net-new</span>
+      <span class="effort">S</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m1c')"></div>
+      <div class="task-body">
+        <div class="task-name">Lift Milestone template + 6 external scripts from <code>jerahl/MilestoneZabbix</code></div>
+        <div class="task-dep">Copy <code>Milestone by HTTP API.yaml</code> → <code>tcs_dashboard/templates/milestone_by_http_api.yaml</code>. Copy six external scripts (<code>milestone_cameras_read.sh</code>, <code>_refresh.sh</code>, <code>_state.py</code>, <code>milestone_ess_read.sh</code>, <code>_refresh.sh</code>, <code>_state.py</code>) → <code>tcs_dashboard/externalscripts/</code>. <em>Verbatim copies for v1.0</em> — don't fork. If Milestone Plan v1.1 ships M1 (three-template split) before our M5, swap the lifted YAML for the new shape — interface stays the same.</div>
+      </div>
+      <span class="tag t-ms">Milestone</span>
+      <span class="effort">S</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m1c')"></div>
+      <div class="task-body">
+        <div class="task-name">Lift EXOS PoE addon from <code>jerahl/ZabbixSwitchPortWidgets</code></div>
+        <div class="task-dep">Copy the PoE template addon YAML (which extends the stock Extreme template with <code>snmp.interfaces.poe.discovery</code> + <code>snmp.interfaces.poe.dstatus[{#SNMPINDEX}]</code> per A4) → <code>tcs_dashboard/templates/extreme_poe_addon.yaml</code>. Operator imports + links to existing switch hosts (already running the stock Extreme template). <em>Test on the pilot site's switch first</em> — some EXOS firmware versions return non-numeric <code>SNMPINDEX</code> values and the addon's regex needs adjustment per Milestone G19 pattern. If the pilot switch's PoE OIDs return blank, walk <code>1.3.6.1.2.1.105.1.1.1.*</code> manually and document the actual OID shape — fall back if needed.</div>
+      </div>
+      <span class="tag t-sw">Switches</span>
+      <span class="effort">M</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m1c')"></div>
+      <div class="task-body">
+        <div class="task-name">Lift XIQ AP template from <code>jerahl/ZabbixExtremeIQ</code></div>
+        <div class="task-dep">Copy <code>XIQ APs by API</code> template YAML → <code>tcs_dashboard/templates/xiq_ap_by_api.yaml</code>. Verbatim — already-working in the source repo. Pilot AP gets this template linked in addition to the stock Extreme AP via SNMPv3 template (existing). <em>Confirm</em> that the existing <code>data-bridge.jsx</code> reads the new XIQ-derived items by key (<code>xiq.ap.client.count[{#SERIAL}]</code>, etc.) without code change — if it doesn't, the bridge changes are a small M3 task, not an M1 issue.</div>
+      </div>
+      <span class="tag t-xiq">XIQ</span>
+      <span class="effort">S</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m1c')"></div>
+      <div class="task-body">
+        <div class="task-name">Lift PHP API clients into <code>tcs_dashboard/lib/</code></div>
+        <div class="task-dep">Four PHP clients, namespaced <code>Modules\TcsDashboard\Lib</code> per AP G16 carry-forward:
+          <br>(1) <code>MilestoneClient.php</code> — extracted from <code>jerahl/MilestoneZabbix/milestone_camera_status/</code> widget's HTTP scaffolding. Methods: <code>__construct(string $scheme, string $host, string $user, #[\SensitiveParameter] string $password)</code>, <code>token()</code>, <code>sites()</code>, <code>recordingServers()</code>, <code>cameras()</code>, <code>camera(string $id)</code>, <code>recordingServer(string $id)</code>, <code>license()</code>, <code>essState()</code>. Keep per-call token fetch (C3).
+          <br>(2) <code>XIQClient.php</code> — verbatim from <code>jerahl/ZabbixExtremeIQ</code> with namespace renamed.
+          <br>(3) <code>PFClient.php</code> — extracted from <code>pf_device</code> widgets (both repos have a copy — pick the newer / cleaner one). Methods: <code>nodeByMac(string $mac)</code>, <code>nodes(int $limit = 1000)</code>, <code>roles()</code>, <code>authFails()</code>.
+          <br>(4) <code>SwitchClient.php</code> — extracted from <code>jerahl/ZabbixSwitchPortWidgets</code>'s SNMP/MAC-learning helper. Method: <code>fdbTable(string $hostid)</code>.
+          <br>Each client takes credentials via constructor (already-resolved macro values, not macro literals). Each handles HTTP/SNMP errors by returning <code>null</code> + logging via <code>error_log()</code> — bridges interpret null as "data missing" and render dashes. <em>PHP 8.0 syntax only</em> per AP G21.</div>
+      </div>
+      <span class="tag t-reuse">Lift wholesale</span>
+      <span class="effort">L</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m1c')"></div>
+      <div class="task-body">
+        <div class="task-name">Macro reader helper — single point of macro resolution</div>
+        <div class="task-dep">New <code>tcs_dashboard/lib/Config.php</code> in <code>Modules\TcsDashboard\Lib</code>. Methods: <code>get(string $name, ?string $default = null): ?string</code> — resolves user macro from a designated config host (or global macros if no host scoping wanted), respects <code>type=secret</code>. <code>milestone(): array</code> — convenience that returns <code>['scheme' =&gt; ..., 'host' =&gt; ..., 'user' =&gt; ..., 'password' =&gt; ...]</code>. Same helpers for <code>xiq()</code>, <code>pf()</code>, <code>idrac()</code>. Every <code>Action*Data</code> uses <code>Config::milestone()</code> + <code>new MilestoneClient(...)</code> — never reads macros inline. <em>Per C12, this is the single place a leak could happen — easy to audit.</em></div>
+      </div>
+      <span class="tag t-new">Net-new</span>
+      <span class="effort">M</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m1c')"></div>
+      <div class="task-body">
+        <div class="task-name">Pilot host smoke test — all four templates linked, items green</div>
+        <div class="task-dep">On the M0-selected pilot site:
+          <br>(1) Import all three templates via Zabbix UI (<em>Configuration → Templates → Import</em>).
+          <br>(2) Copy externalscripts to <code>/usr/lib/zabbix/externalscripts/</code> on the proxy serving the pilot site, chmod +x, set the cron jobs per the source repo's README (15 min for cameras, 1 day for ESS).
+          <br>(3) Set required macros on the pilot config host (<code>{$MILESTONE.HOST}</code> = pilot XProtect mgmt server, <code>{$XIQ.TOKEN}</code> = XIQ API token, <code>{$PF.HOST}</code>+<code>{$PF.TOKEN}</code> if PF is in scope at pilot). Per C12, all secret macros set as <code>type=secret</code>.
+          <br>(4) Link templates: pilot AP gets XIQ template; pilot switch gets EXOS PoE addon; pilot RS / cameras get Milestone template.
+          <br>(5) Wait one full LLD cycle (max 5 min, longer if hourly external scripts on first run).
+          <br>(6) Walk the host items in Zabbix UI, confirm: AP shows XIQ-derived client count + RSSI distribution; switch shows PoE port discovery + per-port PoE status; cameras show ICMP + Milestone state; RS shows Windows agent metrics + Milestone service state.
+          <br>(7) <strong>Document any items that don't populate</strong> — those become carried-forward gotchas (C14+) feeding into M2/M3.</div>
+      </div>
+      <span class="tag t-new">Net-new</span>
+      <span class="effort">M</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m1c')"></div>
+      <div class="task-body">
+        <div class="task-name">Update <code>INSTALL.md</code> + README — full deploy instructions for the four sources</div>
+        <div class="task-dep">Extend <code>tcs_dashboard/README.md</code> with: (a) prerequisite installs (XProtect API Gateway reachable; XIQ Cloud token issued; PacketFence API enabled; iDRAC SNMP allowed); (b) template import order; (c) externalscripts copy + cron setup; (d) macro setup per source with which are secret; (e) pilot validation checklist (item by item). New file <code>tcs_dashboard/INSTALL.md</code> for the long-form version of points (a)–(d). Mirror the structure of <code>jerahl/MilestoneZabbix</code>'s install doc — operators familiar with that repo recognise the shape.</div>
+      </div>
+      <span class="tag t-readme">README / doc</span>
+      <span class="effort">M</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m1c')"></div>
+      <div class="task-body">
+        <div class="task-name">Move + paste the three widget-repo README banners</div>
+        <div class="task-dep">Per the user's note, banner snippets already drafted at <code>tcs_dashboard/notes/widget-repo-readme-banners.md</code>. Operator (jerahl) pastes each into the corresponding source repo manually. <em>Track here</em>: confirm the paste in each repo's README is live and the link to <code>jerahl/ZabbixCustomDashboard</code> resolves. No change to <code>tcs_dashboard</code> needed beyond the existing notes file.</div>
+      </div>
+      <span class="tag t-readme">README / doc</span>
+      <span class="effort">S</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m1c')"></div>
+      <div class="task-body">
+        <div class="task-name">M1 closeout — pilot green, smoke test signed</div>
+        <div class="task-dep">Output <code>tcs_dashboard/notes/M1_Closeout.md</code>: smoke-test verdict per item (green/yellow/red with notes), any new gotchas (C14+), confirmed deploy doc, confirmed banner placement. Sign-off unblocks M2 (Surveillance bridge — priority 1) + M3 in parallel. <em>Track items that flagged yellow</em> — those are the bridge implementation's first real-world test cases.</div>
+      </div>
+      <span class="tag t-readme">README / doc</span>
+      <span class="effort">S</span>
+    </div>
+
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     M2 — Surveillance bridge (PRIORITY 1)
+════════════════════════════════════════════════════════════════════ -->
+<div class="milestone" id="m2">
+  <div class="ms-head open" onclick="toggle(this,'m2c')">
+    <div class="ms-accent" style="background:var(--m2)"></div>
+    <div class="ms-info">
+      <div class="ms-title">M2 — Surveillance + Camera + Server Detail bridges
+        <span class="ms-badge" style="background:#0d2a1a;color:#86efac;border:1px solid #1a4a2a">Priority 1 · Blocks on M1 · ~2 weeks</span>
+      </div>
+      <div class="ms-meta">Weeks 5–6 · wire the three Milestone-side dashboards. Three new <code>Action*Data</code> JSON endpoints, three new <code>*-bridge.jsx</code> adapters. Operator-priority output — surveillance was the explicit "do this first" choice.</div>
+    </div>
+    <div class="ms-right">
+      <span class="ms-count" id="m2-count"></span>
+      <span class="ms-pill" style="background:var(--m2)">2 wk</span>
+      <span class="ms-chevron open">▶</span>
+    </div>
+  </div>
+  <div class="ms-progress"><div class="ms-progress-bar" id="m2-bar" style="background:var(--m2)"></div></div>
+  <div class="tasks open" id="m2-tasks">
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m2c')"></div>
+      <div class="task-body">
+        <div class="task-name">New: <code>ActionSurveillanceData</code> JSON endpoint</div>
+        <div class="task-dep">New action class <code>Modules\TcsDashboard\Actions\ActionSurveillanceData</code>, manifest entry <code>tcs.surveillance.data</code> with <code>"layout":"layout.json","view":null</code> — same shape as existing <code>tcs.dashboard.data</code>. <code>doAction()</code> calls:
+          <br>• <code>MilestoneClient::sites()</code> → list with <code>{id, name, hardwareCount, cameraCount}</code>
+          <br>• <code>MilestoneClient::recordingServers()</code> → list with <code>{id, hostname, ip, version, lastHandshake, status, cpu, mem, disk, network, recordingChannels, archiveLag}</code> joined with Zabbix item.get for the per-RS host's <code>system.cpu.util</code> + <code>vm.memory.utilization</code> + <code>vfs.fs.size[*,pused]</code>
+          <br>• <code>MilestoneClient::cameras()</code> → list of camera summaries (id, name, address, hwModel, vendor, status, recordingState, lastFrameAge, fpsActual, bitrateKbps, parentRsId, attachedSwitchPort?, attachedAp?)
+          <br>• Aggregate KPIs: cameras-online (count where state=OK), recording-servers-up (count where service-state=running), active-alarms (problem.get scoped to surveillance host group), smart-client-sessions (from <code>milestone.smartclient.sessions</code> if exposed)
+          <br>Response shape mirrors the keys <code>nvr-data.jsx</code> defines: <code>MILESTONE</code> (license, mgmt server, retention, evidence lock), <code>SITES</code> (per-site rollup), <code>CAMERAS</code> (camera summary list for the wall), <code>RECORDING_SERVERS</code>, <code>VMS_ALARMS</code>. Cache TTLs per C8: <code>cameras()</code> 60 s, <code>recordingServers()</code> 60 s, <code>sites()</code> 5 min, <code>license()</code> 1 hour. Cache via <code>CCache</code> or APCu — pick whichever the existing <code>ActionDashboardData</code> uses for consistency.</div>
+      </div>
+      <span class="tag t-action">Action*Data</span>
+      <span class="effort">L</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m2c')"></div>
+      <div class="task-body">
+        <div class="task-name">New: <code>surveillance-bridge.jsx</code> — replaces <code>nvr-data.jsx</code> mock</div>
+        <div class="task-dep">New file <code>tcs_dashboard/assets/surveillance-bridge.jsx</code>. IIFE pattern matching <code>data-bridge.jsx</code>:
+          <br>(1) <code>EXPECTED_KEYS</code> = full list of globals <code>nvr-overview.jsx</code> reads (<code>MILESTONE</code>, <code>SITES</code>, <code>CAMERAS</code>, <code>RECORDING_SERVERS</code>, <code>VMS_ALARMS</code>).
+          <br>(2) <code>emptyShape()</code> returns a fully-keyed zero state.
+          <br>(3) <code>applyBoot(snapshot)</code> deep-merges with stub fallback per C5.
+          <br>(4) <code>fetch('zabbix.php?action=tcs.surveillance.data', {credentials:'same-origin'})</code> on a 30 s interval.
+          <br>(5) Tab-visibility gating per C11 (<code>document.visibilityState !== 'visible'</code> skips the tick).
+          <br>(6) ±2 s jitter on each tick.
+          <br>(7) Dispatches <code>tcs:surveillance</code> CustomEvent so consumers can subscribe to fresh-data signals.
+          <br>Update <code>views/surveillance.view.php</code> to load <code>surveillance-bridge.jsx</code> immediately before <code>nvr-data.jsx</code> — the bridge sets globals first, the mock only fills gaps. <em>Don't delete <code>nvr-data.jsx</code></em> — it's the offline / pre-token fallback. Bridge wins when it has data.</div>
+      </div>
+      <span class="tag t-bridge">Frontend bridge</span>
+      <span class="effort">L</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m2c')"></div>
+      <div class="task-body">
+        <div class="task-name">New: <code>ActionCameraData</code> + <code>camera-bridge.jsx</code></div>
+        <div class="task-dep">Same shape as the surveillance pair, scoped to one camera by GUID. Action:
+          <br>• Reads <code>id</code> input (camera GUID), looks up the per-camera Zabbix host by tag <code>cam_id={id}</code> per C7.
+          <br>• <code>MilestoneClient::camera($id)</code> → identity, hwModel, parentRs, recordingState, configured streams, lastFrameAge.
+          <br>• <code>API::Item()-&gt;get()</code> with tag filter for ICMP triplet, vendor SNMP items if Axis (per Milestone Plan v1.1 vendor sub-template), and the dependent state items on the Site host.
+          <br>• Optional: <code>PFClient::nodeByMac($camera->mac)</code> for the "linked switch port + VLAN + role" block in the sidecar.
+          <br>• Response shape: <code>CAMERA = {identity, streamHealth: {fps, bitrate, packetLoss, motion, poe, onvifLatency}, history, config, network, events}</code>.
+          <br>Bridge <code>camera-bridge.jsx</code> reads <code>?id=</code> from URL, includes it in the data fetch URL, otherwise identical pattern to surveillance-bridge.</div>
+      </div>
+      <span class="tag t-action">Action*Data + bridge</span>
+      <span class="effort">L</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m2c')"></div>
+      <div class="task-body">
+        <div class="task-name">New: <code>ActionServerData</code> + <code>server-bridge.jsx</code></div>
+        <div class="task-dep">Recording server detail. Action:
+          <br>• Reads <code>id</code> input (RS GUID), looks up the per-RS Zabbix host by tag <code>rs_id={id}</code>.
+          <br>• <code>MilestoneClient::recordingServer($id)</code> → version, services, storage paths, recording channels.
+          <br>• <code>API::Item()-&gt;get()</code> for OS-baseline metrics (CPU/Mem/Disk/Net), Windows service-state items, perfcounter items, eventlog items.
+          <br>• <strong>iDRAC sub-template items</strong> (if RS has Dell iDRAC linked per Milestone Plan v1.1 G18) — inlet temp, PSU state, fan RPM, RAID state, physical disks LLD, virtual disks LLD. Each cell tagged <code>src=idrac</code> per C13. <em>Per Milestone G16 — never fall back to OS-side metrics for iDRAC-only data; render empty + caption "iDRAC unreachable".</em>
+          <br>• Response shape: <code>RECORDING_SERVER, RAID, CHANNELS</code> + the same <code>{value, src, prev, history}</code> envelope per metric.
+          <br>Bridge <code>server-bridge.jsx</code> reads <code>?id=</code>, fetches, populates globals.</div>
+      </div>
+      <span class="tag t-action">Action*Data + bridge</span>
+      <span class="effort">L</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m2c')"></div>
+      <div class="task-body">
+        <div class="task-name">Camera Wall scale handling — opt-in, per-site, throttled</div>
+        <div class="task-dep">Per Milestone G21 carry-forward. The Surveillance NOC dashboard's Camera Wall fetches camera thumbnails directly from Milestone Mobile Server — at scale this is a thundering-herd risk. Implementation:
+          <br>(1) Tweak: <code>showCameraWall</code> default <code>false</code>; when off, the bridge skips the call entirely.
+          <br>(2) When on, default scope = single site selected via dropdown (operator picks).
+          <br>(3) Thumbnail interval: <code>{$MS.WALL.THUMB.INTERVAL}</code> default 30 s (not 8 s as the design mockup suggests).
+          <br>(4) Pause on tab-hidden via <code>visibilitychange</code>.
+          <br>(5) Thumbnail URLs are signed, single-use; bridge proxies through <code>tcs.surveillance.thumbnail</code> action which validates user permissions then proxies the image — direct Milestone URLs would bypass Zabbix auth.
+          <br>(6) <em>Document in M2 closeout</em>: this is the prettiest mockup feature with the highest scale risk; we shipped a sane default.</div>
+      </div>
+      <span class="tag t-bridge">Frontend bridge</span>
+      <span class="effort">M</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m2c')"></div>
+      <div class="task-body">
+        <div class="task-name">SourceBadge correctness audit — surveillance dashboards × every cell</div>
+        <div class="task-dep">Per C13. Walk the three surveillance dashboards (NOC, Camera Detail, Server Detail) cell-by-cell with the M0 SourceBadge map open. Each cell: confirm the rendered badge matches the actual source path. Take screenshots of each tab on the pilot host in a known state. Catch the off-by-one cases: e.g. "License usage" on the NOC summary shows <code>ext</code> (Milestone API) but "Mgmt Server uptime" should show <code>zbx</code> (Zabbix-polled item on the Mgmt Server host) — easy to mistakenly badge both as <code>ext</code> if the bridge propagates the wrong default. Output: per-dashboard checklist row with date + sign-off in <code>tcs_dashboard/notes/sourcebadge-audit.md</code>.</div>
+      </div>
+      <span class="tag t-readme">README / doc</span>
+      <span class="effort">M</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m2c')"></div>
+      <div class="task-body">
+        <div class="task-name">M2 closeout — surveillance live on pilot, signed off</div>
+        <div class="task-dep">Output <code>tcs_dashboard/notes/M2_Closeout.md</code>: pilot dashboard screenshots (NOC + Camera Detail + Server Detail), 7-day soak verdict (no controller errors, polling cadence held, no operator-visible degradations), SourceBadge audit clean, secret-macro grep clean (C12), Camera Wall scale notes. Sign-off: surveillance is "demo-ready" for stakeholder review at pilot scale; M5 covers fleet rollout.</div>
+      </div>
+      <span class="tag t-readme">README / doc</span>
+      <span class="effort">S</span>
+    </div>
+
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     M3 — Switches + Servers + AP-extend bridges (parallel tracks)
+════════════════════════════════════════════════════════════════════ -->
+<div class="milestone" id="m3">
+  <div class="ms-head open" onclick="toggle(this,'m3c')">
+    <div class="ms-accent" style="background:var(--m3)"></div>
+    <div class="ms-info">
+      <div class="ms-title">M3 — Switches + Servers + AP Detail bridges
+        <span class="ms-badge" style="background:#2a1f0d;color:#fcd34d;border:1px solid #4a3a1a">Parallel · Blocks on M1 · ~3 weeks</span>
+      </div>
+      <div class="ms-meta">Weeks 7–9 · three more bridges. Switches + Servers are net-new; AP Detail is "extend the existing wiring" — turn on AP_SITES from real host.get + wire the XIQ + PF data already collected by the M1 templates.</div>
+    </div>
+    <div class="ms-right">
+      <span class="ms-count" id="m3-count"></span>
+      <span class="ms-pill" style="background:var(--m3)">3 wk</span>
+      <span class="ms-chevron open">▶</span>
+    </div>
+  </div>
+  <div class="ms-progress"><div class="ms-progress-bar" id="m3-bar" style="background:var(--m3)"></div></div>
+  <div class="tasks open" id="m3-tasks">
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m3c')"></div>
+      <div class="task-body">
+        <div class="task-name">New: <code>ActionSwitchesData</code> + <code>switches-bridge.jsx</code></div>
+        <div class="task-dep">Action queries:
+          <br>• <code>host.get</code> filtered by host group <code>Switches/*</code> → site rollup with per-switch summary (CPU, mem, temp, PSU, fan, uptime).
+          <br>• <code>API::Item()-&gt;get()</code> for <code>net.if.status[*]</code>, <code>net.if.adminstatus[*]</code>, <code>net.if.in[*]</code>, <code>net.if.out[*]</code>, plus the EXOS PoE addon items <code>snmp.interfaces.poe.dstatus[{#SNMPINDEX}]</code>.
+          <br>• Per-port detail (lazy on operator click): <code>SwitchClient::fdbTable($hostid)</code> for MAC learning + <code>PFClient::nodeByMac($mac)</code> for endpoint enrichment.
+          <br>• Top-talkers: highest <code>net.if.in</code> ports across the fleet, sorted descending.
+          <br>Response: <code>SWITCH_SITES</code> (site-grouped switch list), <code>ARC_MDF_STACK</code> (active stack detail with all members), <code>makePortDetail</code> (function-shaped helper that the dashboard calls per port-click — bridge exposes a Promise-returning helper that fetches <code>tcs.switches.portdetail.data?hostid=X&port=Y</code> on demand).
+          <br>Bridge mirrors the surveillance pattern.</div>
+      </div>
+      <span class="tag t-action">Action*Data + bridge</span>
+      <span class="effort">L</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m3c')"></div>
+      <div class="task-body">
+        <div class="task-name">New: <code>tcs.switches.portdetail.data</code> — lazy per-port endpoint</div>
+        <div class="task-dep">Separate JSON action because per-port detail is an operator-click action, not a continuous poll. Reads <code>hostid</code> + <code>port</code>, returns: link state, speed, duplex, in/out rates 1H sparkline, errors 1H, discards 1H, PoE state + class + power draw, MAC learning entries (max 10), per-MAC PF enrichment if available, attached-AP detection via LLDP if the port has a neighbour. Cache TTL 30 s — stale during a debugging session is fine. <em>Why lazy</em>: pre-fetching all 56 ports × 24 switches × 26 sites is a ton of useless data when the operator only ever looks at 1 port at a time. Same pattern <code>portdetail/</code> widget in <code>jerahl/ZabbixSwitchPortWidgets</code> uses today.</div>
+      </div>
+      <span class="tag t-action">Action*Data</span>
+      <span class="effort">M</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m3c')"></div>
+      <div class="task-body">
+        <div class="task-name">New: <code>ActionServersData</code> + <code>servers-bridge.jsx</code></div>
+        <div class="task-dep">Action:
+          <br>• <code>host.get</code> filtered by host group <code>Servers/*</code> → fleet tile grid.
+          <br>• <code>API::Item()-&gt;get()</code> for OS-baseline (<code>system.cpu.util</code>, <code>vm.memory.utilization</code>, <code>vfs.fs.size[*,pused]</code>, <code>net.if.in</code>, <code>net.if.out</code>, <code>system.uptime</code>) + Windows-specific (<code>service.info[*]</code>, <code>perf_counter[*]</code>, <code>eventlog[*]</code>).
+          <br>• Filesystems / services / processes / network / sessions tabs each query the items relevant to that tab; lazy-load per tab.
+          <br>• <strong>iDRAC items</strong> for Dell servers: inlet temp, PSU, fan, RAID state — same pattern as M2 server detail. SourceBadge <code>src=idrac</code> per C13.
+          <br>Response: <code>SRV_SITES</code> (site list), <code>SRV_HOST</code> (active host detail), <code>SRV_ITEMS</code> (item map), <code>SRV_FS</code>, <code>SRV_SERVICES</code>, etc. Bridge follows surveillance pattern.</div>
+      </div>
+      <span class="tag t-action">Action*Data + bridge</span>
+      <span class="effort">L</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m3c')"></div>
+      <div class="task-body">
+        <div class="task-name">Extend <code>ActionDashboardData</code> + <code>data-bridge.jsx</code> — turn on AP_SITES + XIQ + PF</div>
+        <div class="task-dep">Existing AP Detail wiring already pulls live ZBX_HOST + ZBX_ITEMS for one AP. Three extensions:
+          <br>(1) <strong>AP_SITES</strong>: stop stubbing to a single-host fallback. <code>ActionDashboardData</code>'s <code>doAction()</code> queries <code>host.get</code> filtered by host group <code>Wireless/*</code>, groups by site (host group sub-token), serializes to the <code>AP_SITES</code> shape <code>app.jsx</code> + <code>shell.jsx</code>'s APNavigator already consume. <code>data-bridge.jsx</code>'s <code>buildApSites()</code> just passes the boot value through unchanged (today it builds a one-host stub).
+          <br>(2) <strong>XIQ items</strong>: pull <code>xiq.ap.client.count[*]</code>, <code>xiq.ap.rssi.dist[*]</code>, <code>xiq.ap.channel.util[*,2.4G]</code> + <code>5G</code>, <code>xiq.ap.radio.state[*,1]</code> + <code>2</code>. Per A6/A7 these come from the lifted XIQ template. The bridge already publishes them as <code>ZBX_ITEMS</code> with <code>src=zbx</code> — switch the badge to <code>xiq</code> for these specific keys (rendered as a distinct tag colour in primitives.jsx — small CSS tweak).
+          <br>(3) <strong>PF clients tab</strong>: <code>PFClient::nodes()</code> filtered by AP MAC ← LLDP discovery on the AP's uplink switch. Returns connected-device list with role / VLAN / posture per the design's Clients tab. Cache TTL 5 min per C8. Currently <code>data-bridge.jsx</code> defaults <code>PF_CLIENTS = []</code> — populate.</div>
+      </div>
+      <span class="tag t-adapt">Adapt</span>
+      <span class="effort">L</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m3c')"></div>
+      <div class="task-body">
+        <div class="task-name">Cross-bridge consistency — site list shared across dashboards</div>
+        <div class="task-dep">Each bridge currently builds its own site list (Wireless dashboards' AP_SITES, Switches' SWITCH_SITES, Servers' SRV_SITES, Surveillance's SITES). The site list is conceptually one thing — every dashboard shows "Bryant HS · 271 hosts" etc. <em>Risk</em>: the four dashboards report inconsistent counts because of permission-scope drift or stale cache. <strong>Resolution v1.0</strong>: each dashboard's site list is per-source-scoped (Wireless sites = sites with APs; Surveillance sites = sites with cameras) — they're <em>allowed</em> to differ when a site has, e.g., switches but no cameras. Dashboard footer captions clarify scope: "Wireless APs at 24 of 26 sites" rather than "26 sites" — the Global Dashboard reconciles in M4. Document in <code>tcs_dashboard/notes/site-list-semantics.md</code>.</div>
+      </div>
+      <span class="tag t-readme">README / doc</span>
+      <span class="effort">S</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m3c')"></div>
+      <div class="task-body">
+        <div class="task-name">SourceBadge audit — switches + servers + AP-extend</div>
+        <div class="task-dep">Same exercise as the M2 SourceBadge audit, on the three M3 dashboards. Switches dashboard's most error-prone cells: PoE state (<code>zbx</code> via SNMP item) vs PoE budget (computed from per-port draw — derived, badge style TBD), MAC learning entries (<code>zbx</code> via <code>SwitchClient::fdbTable</code>) vs PF role enrichment (<code>pf</code> via <code>PFClient::nodeByMac</code>). Servers dashboard: OS metrics (<code>zbx</code>) vs iDRAC metrics (<code>idrac</code>) — never confuse per Milestone G16. AP Detail: stock SNMP (<code>zbx</code>) vs XIQ-derived (<code>xiq</code>) — distinct badge per C13.</div>
+      </div>
+      <span class="tag t-readme">README / doc</span>
+      <span class="effort">M</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m3c')"></div>
+      <div class="task-body">
+        <div class="task-name">M3 closeout — switches + servers + AP-extend live on pilot, signed</div>
+        <div class="task-dep">Output <code>tcs_dashboard/notes/M3_Closeout.md</code>. Three new bridges + one extended bridge live on the pilot site. 7-day soak verdict per dashboard. SourceBadge audits clean. Performance baseline: each bridge's poll cycle measured (target &lt;500 ms p95 server-side), cache hit rates measured (target &gt;80% on the medium/expensive endpoints). Sign-off unblocks M4 (Global Dashboard aggregator).</div>
+      </div>
+      <span class="tag t-readme">README / doc</span>
+      <span class="effort">S</span>
+    </div>
+
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     M4 — Global Dashboard aggregator + cross-bridge polish
+════════════════════════════════════════════════════════════════════ -->
+<div class="milestone" id="m4">
+  <div class="ms-head open" onclick="toggle(this,'m4c')">
+    <div class="ms-accent" style="background:var(--m4)"></div>
+    <div class="ms-info">
+      <div class="ms-title">M4 — Global Dashboard + bridge orchestration
+        <span class="ms-badge" style="background:#2a0d0d;color:#fca5a5;border:1px solid #4a1a1a">Blocks on M3 · ~2 weeks</span>
+      </div>
+      <div class="ms-meta">Weeks 10–11 · Global Dashboard pulls aggregate trigger/host counts; cross-bridge orchestration consolidates polling; optional SSE streaming endpoint for the Camera Wall + alarm feed.</div>
+    </div>
+    <div class="ms-right">
+      <span class="ms-count" id="m4-count"></span>
+      <span class="ms-pill" style="background:var(--m4)">2 wk</span>
+      <span class="ms-chevron open">▶</span>
+    </div>
+  </div>
+  <div class="ms-progress"><div class="ms-progress-bar" id="m4-bar" style="background:var(--m4)"></div></div>
+  <div class="tasks open" id="m4-tasks">
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m4c')"></div>
+      <div class="task-body">
+        <div class="task-name">New: <code>ActionGlobalData</code> + <code>global-bridge.jsx</code></div>
+        <div class="task-dep">Pure-Zabbix aggregator — no external sources. Action queries:
+          <br>• <code>problem.get</code> grouped by severity → severity strip cells (Disaster / High / Warning / Info / Acked / Hosts down).
+          <br>• <code>problem.get</code> 24h time-bucketed → trigger trend sparkline.
+          <br>• <code>host.get</code> grouped by site host group → site list with per-site problem count → drives the heatmap.
+          <br>• <code>host.get</code> grouped by host group prefix (<code>Wireless/*</code>, <code>Switches/*</code>, <code>Servers/*</code>, <code>Surveillance/*</code>) → "Problems by domain" card with deep-link to each dashboard.
+          <br>• Top problem hotspots: top 6 sites by problem count, with severity breakdown.
+          <br>• Recent events: <code>event.get</code> across all relevant host groups, sorted desc, top 50.
+          <br>Per C6, "Showing N of M" footer when permission-filtered. Cache TTL 60 s — operators tolerate slightly-stale aggregates better than slow page loads. Bridge follows surveillance pattern.</div>
+      </div>
+      <span class="tag t-action">Action*Data + bridge</span>
+      <span class="effort">L</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m4c')"></div>
+      <div class="task-body">
+        <div class="task-name">Cross-bridge polling consolidation — anti-thundering-herd</div>
+        <div class="task-dep">Per C11. With six bridges live on the same browser tab (impossible today — only one dashboard renders at a time — but the multi-tab operator hits the same problem with multiple tabs), the worst case is 6 × 30 s polls → 12 req/min/tab. Implementations:
+          <br>(1) <em>Already shipped from M2 onwards</em>: <code>visibilitychange</code> gating, ±2 s jitter.
+          <br>(2) <em>New in M4</em>: a shared-bridge coordinator <code>tcs-bridge-coord.jsx</code> loaded before the per-page bridge — when multiple bridges need the same host's items, they batch into one Zabbix API call. Reduces controller-side load even when the operator has 3 tabs open. <em>Inline this only if M3's perf baseline shows pressure</em> — premature optimisation otherwise.
+          <br>(3) Document the cadence per dashboard in <code>tcs_dashboard/notes/polling-cadence.md</code> for ops awareness.</div>
+      </div>
+      <span class="tag t-adapt">Adapt</span>
+      <span class="effort">M</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m4c')"></div>
+      <div class="task-body">
+        <div class="task-name">Optional: SSE streaming for Camera Wall + alarm feed</div>
+        <div class="task-dep">Per the existing README's "live refresh" note: Zabbix's frontend supports streaming responses from a controller. Implementation:
+          <br>(1) New action <code>tcs.surveillance.stream</code> with <code>Content-Type: text/event-stream</code>; loops <code>MilestoneClient::cameras()</code> + alarm poll every 10 s and emits <code>data: {json}\n\n</code> per tick.
+          <br>(2) Bridge subscribes via <code>EventSource</code> when <code>showLiveStream</code> tweak is on, falls back to polling otherwise.
+          <br>(3) Connection budget concern: SSE is one persistent HTTP connection per operator tab — at 30 simultaneous operators that's 30 long-running connections holding a Zabbix worker. Cap via <code>{$TCS.STREAM.MAX_CONNECTIONS}</code> macro default 50; controller refuses 51st with "fall back to polling".
+          <br><em>Optional</em> — defer to M5 if M4 perf is fine on poll-only. Dashboards work either way.</div>
+      </div>
+      <span class="tag t-new">Net-new</span>
+      <span class="effort">L</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m4c')"></div>
+      <div class="task-body">
+        <div class="task-name">Health-check endpoint — sidebar footer signals</div>
+        <div class="task-dep">The unified sidebar's footer renders three "● 7.0.4 / ● v12.3 / ● 24.2 R2" rows currently hardcoded. Wire to a real health endpoint:
+          <br>New action <code>tcs.health.data</code>, JSON. Pings each upstream (Zabbix server uptime, PacketFence /api/v1/health, XIQ /api/v1/health, XProtect API Gateway TCP 443). Returns <code>{zabbix: {ok, version}, pf: {ok, version}, xiq: {ok}, xprotect: {ok, version}}</code>. Sidebar reads this once on load (no continuous poll — operator-visible metadata is fine at boot-time accuracy). Each row's dot turns red when unreachable. <em>Cheap insurance against the most operationally-confusing failure mode</em>: a green dashboard while one upstream is silently dead.</div>
+      </div>
+      <span class="tag t-action">Action*Data</span>
+      <span class="effort">M</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m4c')"></div>
+      <div class="task-body">
+        <div class="task-name">M4 closeout — Global green, polling consolidated, all six dashboards live</div>
+        <div class="task-dep">Output <code>tcs_dashboard/notes/M4_Closeout.md</code>. All six dashboards now backed by live data on the pilot site. Global Dashboard counts reconcile with the per-domain dashboards (Wireless count + Switches count + Servers count + Surveillance count = global host count) — discrepancy ≤ 5% acceptable (different host groups have different scopes per M3 site-list-semantics). Performance baseline: each bridge p95 latency, cache hit rates, peak concurrent connections. Sign-off unblocks M5 (fleet rollout).</div>
+      </div>
+      <span class="tag t-readme">README / doc</span>
+      <span class="effort">S</span>
+    </div>
+
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     M5 — Polish, fleet rollout, ship
+════════════════════════════════════════════════════════════════════ -->
+<div class="milestone" id="m5">
+  <div class="ms-head open" onclick="toggle(this,'m5c')">
+    <div class="ms-accent" style="background:var(--m5)"></div>
+    <div class="ms-info">
+      <div class="ms-title">M5 — Polish, fleet rollout, ship
+        <span class="ms-badge" style="background:#1f0d2a;color:#c084fc;border:1px solid #3a1a4a">Blocks on M4 · ~1 week</span>
+      </div>
+      <div class="ms-meta">Week 12 · esbuild build step (drops Babel-standalone), air-gap support, multi-site validation, permissions parity test, secret-macro audit, sign-off.</div>
+    </div>
+    <div class="ms-right">
+      <span class="ms-count" id="m5-count"></span>
+      <span class="ms-pill" style="background:var(--m5)">1 wk</span>
+      <span class="ms-chevron open">▶</span>
+    </div>
+  </div>
+  <div class="ms-progress"><div class="ms-progress-bar" id="m5-bar" style="background:var(--m5)"></div></div>
+  <div class="tasks open" id="m5-tasks">
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m5c')"></div>
+      <div class="task-body">
+        <div class="task-name">esbuild build step — drop Babel-standalone, single bundle per dashboard</div>
+        <div class="task-dep">Per C4. Babel-standalone is the largest CDN dep + adds 1.5–2 s first-paint cost. Implementation:
+          <br>(1) <code>tcs_dashboard/build.mjs</code> — esbuild config that compiles each dashboard's JSX entry chain into a single <code>dist/&lt;dashboard&gt;.js</code> bundle. Same primitives + tweaks-panel + global-nav shared.
+          <br>(2) Each <code>views/*.view.php</code> swaps Babel + per-file <code>&lt;script type="text/babel"&gt;</code> tags for one <code>&lt;script src="dist/&lt;dashboard&gt;.js"&gt;</code>.
+          <br>(3) <code>npm run build</code> produces the dist/ output checked into the repo (Zabbix module install is "git pull + scan directory" — no Node on the Zabbix server).
+          <br>(4) Source maps emitted alongside for debugging.
+          <br><em>Removes the air-gap concern</em> — no CDN deps left except React + ReactDOM, both of which the air-gap section already covers (vendor + reference locally).</div>
+      </div>
+      <span class="tag t-new">Net-new</span>
+      <span class="effort">L</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m5c')"></div>
+      <div class="task-body">
+        <div class="task-name">Air-gap install path — vendor React + ReactDOM, document offline workflow</div>
+        <div class="task-dep">README already documents this in the existing "Air-gapped installs" section. M5 makes it real:
+          <br>(1) <code>tcs_dashboard/assets/vendor/</code> with React 18.3.1 + ReactDOM 18.3.1 (production builds, ~140 KB combined gzipped).
+          <br>(2) Each view's <code>&lt;script&gt;</code> path conditionally swaps unpkg → <code>vendor/</code> based on a manifest setting <code>{$TCS.ASSETS.MODE}</code> = <code>cdn|local</code> default <code>cdn</code>.
+          <br>(3) Air-gap install instructions in <code>INSTALL.md</code>: set the macro to <code>local</code> + run <code>npm run build</code> (which is a one-time online step on a build host, not the Zabbix server).
+          <br>(4) Test offline by blocking <code>unpkg.com</code> on the test Zabbix server's egress, confirming the dashboards still load.</div>
+      </div>
+      <span class="tag t-new">Net-new</span>
+      <span class="effort">M</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m5c')"></div>
+      <div class="task-body">
+        <div class="task-name">Multi-site validation — pilot → medium site → full fleet</div>
+        <div class="task-dep">Three-stage rollout:
+          <br>(1) <strong>Pilot site (Bryant HS)</strong> — running since M2. 7-day green required.
+          <br>(2) <strong>Medium site</strong> — pick a school with 50+ APs, 5+ switches, 200+ cameras, 2 RSes. Link templates, populate macros, monitor 3 days. Catch the scale-tier issues that single-site testing misses (host.get permission overhead, item.get pagination, cache eviction under real load).
+          <br>(3) <strong>Full fleet (26 sites)</strong> — link templates org-wide, monitor 24h. <em>Sign-off gate</em>: every dashboard renders within 3 s on cold cache; every bridge poll succeeds &gt;99%; no operator-visible degradations.
+          <br>Output: rollout report in <code>tcs_dashboard/notes/M5_Rollout.md</code>.</div>
+      </div>
+      <span class="tag t-new">Net-new</span>
+      <span class="effort">L</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m5c')"></div>
+      <div class="task-body">
+        <div class="task-name">Secret-macro grep audit — every Action*Data response, every error log</div>
+        <div class="task-dep">Per C12. Automated test:
+          <br>(1) Set known-distinctive secret macro values in test env (e.g. <code>{$MILESTONE.PASSWORD}=GRAPETOMATO123</code>).
+          <br>(2) Hit every <code>tcs.*.data</code> action 100×, capture all responses + all error_log output.
+          <br>(3) Grep for the literal string <code>GRAPETOMATO123</code> across all captured output.
+          <br>(4) <strong>Zero hits required</strong>. Any hit = leak, fix before sign-off.
+          <br>(5) Run again with <code>{$XIQ.TOKEN}=BANANATOKEN456</code> and <code>{$PF.TOKEN}=CITRUSPF789</code>.
+          <br>Output: audit report in <code>tcs_dashboard/notes/M5_SecretAudit.md</code>. <em>This is the only thing in the whole project that's a security boundary</em> — get it right.</div>
+      </div>
+      <span class="tag t-new">Net-new</span>
+      <span class="effort">M</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m5c')"></div>
+      <div class="task-body">
+        <div class="task-name">Permissions parity — operator role walks every dashboard</div>
+        <div class="task-dep">Per M0's permissions-checklist. Log in as <code>operator_dashboards</code> Zabbix role, walk every tab on every dashboard:
+          <br>(1) Confirm secret macros never visible (re-run M0 audit live).
+          <br>(2) Confirm <code>host.get</code>/<code>problem.get</code> respect role permissions — operator sees only their assigned host groups.
+          <br>(3) Confirm "Showing N of M" footer renders when scope-limited.
+          <br>(4) Confirm any admin-only links / buttons are hidden or disabled (not just hidden via CSS — server-side permission check).
+          <br>Sign-off: operator can complete every defined "shift task" (acknowledge alarm, drill into camera, view server health, search by MAC) without an admin escalation.</div>
+      </div>
+      <span class="tag t-new">Net-new</span>
+      <span class="effort">M</span>
+    </div>
+
+    <div class="task">
+      <div class="task-check" onclick="check(this,'m5c')"></div>
+      <div class="task-body">
+        <div class="task-name">v1.0 release — tag, README final, demo</div>
+        <div class="task-dep">Tag <code>v1.0.0</code> on the merge commit to main. README final pass:
+          <br>(1) Update directory tree with new <code>templates/</code>, <code>externalscripts/</code>, <code>lib/</code>, <code>dist/</code>, <code>notes/</code> folders.
+          <br>(2) Add a "Quick start" section: clone, link templates, set macros, hit a URL.
+          <br>(3) Update version notes (Zabbix 7.0 / 7.2 / 7.4 still tested; PHP 8.0 still required).
+          <br>(4) Cross-link to <code>jerahl/MilestoneZabbix</code> + <code>jerahl/ZabbixSwitchPortWidgets</code> + <code>jerahl/ZabbixExtremeIQ</code> as upstream data sources.
+          <br>Demo to stakeholders: 30 min walkthrough — Global → drill into a problem → into the affected dashboard → into the host → resolved. Sign-off: project complete; v2 enhancements (Redfish iDRAC path, full SSE, real-time camera thumbnails) become a backlog list.</div>
+      </div>
+      <span class="tag t-readme">README / doc</span>
+      <span class="effort">M</span>
+    </div>
+
+  </div>
+</div>
+
+</div><!-- /main -->
+
+<script>
+const milestones = ['m0','m1','m2','m3','m4','m5'];
+
+function toggle(head, ms) {
+  const tasks = document.getElementById(ms + '-tasks');
+  const chevron = head.querySelector('.ms-chevron');
+  const open = tasks.classList.toggle('open');
+  head.classList.toggle('open', open);
+  chevron.classList.toggle('open', open);
+}
+
+function check(box, ms) {
+  box.classList.toggle('done');
+  const name = box.nextElementSibling.querySelector('.task-name');
+  name.classList.toggle('done', box.classList.contains('done'));
+  updateCounts();
+}
+
+function updateCounts() {
+  let totalDone = 0, total = 0;
+  milestones.forEach(ms => {
+    const checks = document.querySelectorAll('#' + ms + '-tasks .task-check');
+    const done   = document.querySelectorAll('#' + ms + '-tasks .task-check.done');
+    const pct = checks.length ? (done.length / checks.length) * 100 : 0;
+    document.getElementById(ms + '-bar').style.width = pct + '%';
+    document.getElementById(ms + '-count').textContent = done.length + ' / ' + checks.length;
+    totalDone += done.length;
+    total     += checks.length;
+  });
+  document.getElementById('done-count').textContent = totalDone + ' / ' + total;
+  document.getElementById('progress-bar').style.width = (total ? (totalDone / total) * 100 : 0) + '%';
+}
+
+document.querySelectorAll('.ms-head').forEach(h => h.classList.add('open'));
+updateCounts();
+</script>
+</body>
+</html>

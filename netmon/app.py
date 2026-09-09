@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -27,13 +28,15 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 from netmon import __version__, db, migrate
 from netmon import settings as settings_engine
 from netmon.api import (
-    actions, alerts, auth_routes, devices, events, health, history as history_api, nac,
-    registry, search, settings, sites, status, summary, surveillance, switches,
-    voip, wireless,
+    actions, alerts, auth_routes, camera_ops, devices, events, health,
+    history as history_api, nac, registry, search, settings, sites, status, summary,
+    surveillance, switches, voip, wireless,
 )
 from netmon.auth.sessions import DbSessionStore, SessionStore
 from netmon.engine.engine import AlertEngine
 from netmon.history import HistorySampler
+from netmon.reachability import ReachabilityDeriver
+from netmon.collectors.ess_live import EssLive
 from netmon.collectors.milestone import MilestoneCollector, MilestoneError
 from netmon.collectors.packetfence import PfCollector
 from netmon.collectors.pf_client import PfError
@@ -49,6 +52,42 @@ from netmon.poller.snmp_inventory import SnmpInventory
 from netmon.supervisor import Supervisor, _heartbeat
 
 log = logging.getLogger("netmon.app")
+
+
+def configure_logging() -> None:
+    """Give netmon's own loggers a level and a handler.
+
+    uvicorn configures only the ``uvicorn*`` loggers and leaves the root at
+    WARNING, so every INFO this codebase emits — sweep durations, per-pass
+    progress, the collector timings you need to diagnose anything — was being
+    dropped on the deployed box. docs/design/109 §4.1 asks the next agent to
+    "turn on DEBUG for one full run"; until now there was no way to do that
+    short of editing code, and no way to see INFO at all.
+
+    Level comes from ``NETMON_LOG_LEVEL`` (default INFO), and
+    ``NETMON_DEBUG_LOGGERS`` takes a comma-separated list of logger names to
+    raise to DEBUG on their own — targeted tracing without drowning the journal:
+
+        systemctl set-environment NETMON_DEBUG_LOGGERS=netmon.snmp_inventory
+
+    SQLAlchemy is pinned at WARNING because its INFO level means "echo every
+    statement", which is not what asking netmon for detail should mean.
+    """
+    level = os.environ.get("NETMON_LOG_LEVEL", "INFO").upper()
+    netmon_log = logging.getLogger("netmon")
+    netmon_log.setLevel(getattr(logging, level, logging.INFO))
+    if not netmon_log.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s %(message)s"))
+        netmon_log.addHandler(handler)
+    # Propagation is left ON deliberately. Muting it stops duplicate lines if
+    # something ever adds a root handler, but it also blindfolds every consumer
+    # that listens at the root — pytest's caplog included — and a test that
+    # cannot see a warning is worse than a line printed twice.
+    for name in os.environ.get("NETMON_DEBUG_LOGGERS", "").split(","):
+        if name.strip():
+            logging.getLogger(name.strip()).setLevel(logging.DEBUG)
+    logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
 
 
 def register_tasks(app: FastAPI, cfg: Config, engine) -> None:
@@ -114,6 +153,22 @@ def register_tasks(app: FastAPI, cfg: Config, engine) -> None:
             supervisor.register("milestone", ms.run_guarded, interval_s=ms.interval_s, timeout_s=ms.timeout_s)
             log.info("Milestone collector enabled: %ss", ms.interval_s)
 
+            # Live Events/State subscription (spec 20 S7). Default OFF: it is a
+            # second writer of camera `source_status` and a socket held open for
+            # hours, so it is a deliberate switch rather than something that
+            # arrives with an upgrade. With it off, the 120s snapshot inside the
+            # cycle above is unchanged and remains the only ESS reader.
+            ms_settings = (cfg.sources.get("milestone").settings
+                           if cfg.sources.get("milestone") else {})
+            if str(ms_settings.get("ess_live", "")).strip().lower() in ("1", "true", "yes", "on"):
+                ess_live = EssLive.from_collector(engine, ms, ms_settings)
+                app.state.ess_live = ess_live
+                supervisor.register("milestone_ess_live", ess_live.run,
+                                    interval_s=30.0, timeout_s=0.0, long_running=True)
+                log.info("Milestone live ESS enabled: flush %ss, watchdog %ss "
+                         "(camera source_status deltas)",
+                         ess_live.flush_s, ess_live.watchdog_s)
+
     if cfg.source_enabled("threecx"):
         try:
             tcx = ThreeCxCollector.from_config(engine, cfg)
@@ -144,6 +199,13 @@ def register_tasks(app: FastAPI, cfg: Config, engine) -> None:
                             interval_s=sampler.interval_s, timeout_s=sampler.timeout_s)
         log.info("history sampler enabled: %ss, retain %dh",
                  cfg.history.interval_s, cfg.history.retention_hours)
+
+    # Derives the reachability tier from source_status + ping. Pure DB, no
+    # source calls, so it is always on: it cannot fail an integration and its
+    # absence would leave the tier rules matching nothing at all.
+    reach = ReachabilityDeriver(engine)
+    supervisor.register("reachability", reach.run_guarded,
+                        interval_s=reach.interval_s, timeout_s=reach.timeout_s)
 
 
 @asynccontextmanager
@@ -205,6 +267,7 @@ def create_app(
     ``config``/``supervisor`` are injectable for tests; production passes
     neither and the config is loaded from disk.
     """
+    configure_logging()
     cfg = config or load_config()
 
     app = FastAPI(
@@ -242,6 +305,10 @@ def create_app(
     app.include_router(alerts.router)
     app.include_router(settings.router)
     app.include_router(actions.router)
+    # Camera-hardware writes (spec 20 S8 / D11): admin-only, dry-run by default,
+    # and refused outright unless [camera_ops] says otherwise. Registered after
+    # surveillance so its /api/surveillance/* paths sit beside the read ones.
+    app.include_router(camera_ops.router)
 
     # Static React UI (Phase 4), if built. Guarded so the app still boots when
     # the bundle is absent (fresh clone / API-only dev). Build with

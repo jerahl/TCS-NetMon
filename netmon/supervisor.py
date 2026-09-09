@@ -31,6 +31,12 @@ class TaskSpec:
     interval_s: float
     timeout_s: float
     enabled: bool = True
+    #: A task that runs until cancelled rather than once per interval — the
+    #: live Milestone subscription (spec 20 S7). The per-run timeout is
+    #: meaningless for it: staying connected for hours is success, and
+    #: `timeout_s` would kill it on schedule. `interval_s` becomes the pause
+    #: before restarting it if it ever returns or raises.
+    long_running: bool = False
 
 
 @dataclass
@@ -56,11 +62,13 @@ class Supervisor:
         interval_s: float,
         timeout_s: float,
         enabled: bool = True,
+        long_running: bool = False,
     ) -> None:
         if any(s.name == name for s in self.specs):
             raise ValueError(f"task {name!r} already registered")
         self.specs.append(
-            TaskSpec(name=name, fn=fn, interval_s=interval_s, timeout_s=timeout_s, enabled=enabled)
+            TaskSpec(name=name, fn=fn, interval_s=interval_s, timeout_s=timeout_s,
+                     enabled=enabled, long_running=long_running)
         )
 
     async def _run_loop(self, spec: TaskSpec) -> None:
@@ -71,7 +79,16 @@ class Supervisor:
             stats.runs += 1
             stats.last_run_at = time.time()
             try:
-                await asyncio.wait_for(spec.fn(), timeout=spec.timeout_s)
+                if spec.long_running:
+                    # No timeout: for a live subscription, running for hours is
+                    # the success case. The exception boundary and the restart
+                    # below still apply, so a socket task that dies is
+                    # rescheduled exactly like a cycle that raised.
+                    await spec.fn()
+                    log.warning("long-running task %s returned; restarting in %.0fs",
+                                spec.name, spec.interval_s)
+                else:
+                    await asyncio.wait_for(spec.fn(), timeout=spec.timeout_s)
                 stats.last_error = None
             except asyncio.CancelledError:
                 raise

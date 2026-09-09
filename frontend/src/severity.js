@@ -33,6 +33,14 @@ const SOURCE_BADGE = {
   pf: "PF",
   milestone: "MS",
   ms: "MS",
+  // The Events/State stream is a distinct source from the Config API — it is
+  // what knows whether a camera is communicating (spec 19 §12) — and the page
+  // attributes camera status to it, so it needs its own badge rather than
+  // falling through to the uppercased passthrough.
+  "milestone-ess": "MS·ESS",
+  // NetMon's own derivations and alert engine: reachability tiers, open alerts.
+  netmon: "NM",
+  reachability: "NM",
   threecx: "3CX",
   "3cx": "3CX",
   rconfig: "RCFG",

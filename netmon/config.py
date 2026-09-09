@@ -52,6 +52,19 @@ class WebConfig:
     # NetMon only builds a target URL (host/port); it never handles credentials
     # (ssheasy prompts for them in-terminal) — read-only-first still holds.
     ssheasy_url: str = ""
+    # CARTO Basemaps API key for the site map's raster tiles. Without it CARTO
+    # stamps every tile "API KEY REQUIRED" — which on the one page ZCD has no
+    # answer to is the first thing a visitor sees.
+    #
+    # It is a credential, so it lives here and reaches the browser through
+    # /api/meta, never through the repo (§4.6). It is *also* unavoidably visible
+    # in the browser's network tab, because it is a query parameter on a tile
+    # URL — that is how the service is designed. Keeping it out of git still
+    # matters: a committed key is in history and indexed forever, and this key
+    # carries a 5,000,000-tile monthly quota and a no-sharing term.
+    #
+    # Empty → the map still works, watermarked, rather than losing its basemap.
+    carto_api_key: str = ""
     # Base URL of the PacketFence *admin UI*, for deep-linking an endpoint:
     # <packetfence_url>/admin/#/node/<mac> (the shape ZCD uses —
     # ActionSearchData.php:287). This is deliberately NOT reused from
@@ -126,6 +139,14 @@ class PollerConfig:
     fping_path: str = "fping"
     fping_timeout_ms: int = 500
     fping_retries: int = 1
+    # Device types excluded from the ICMP sweep. Empty by default: cameras were
+    # excluded while `device_down` could misread their silence as an outage, and
+    # migration 023 scopes that rule instead, so the sweep can now record the
+    # fact without the engine drawing the wrong conclusion from it. M1
+    # (OpenProject #92) wants exactly that — "the disagreement worth surfacing,
+    # not hiding". Kept as an escape hatch for a device class that should never
+    # be probed.
+    ping_exclude_device_types: tuple[str, ...] = ()
     snmpget_path: str = "snmpget"
     snmp_version: str = "2c"
     snmp_community: str = ""  # secret; config file only
@@ -144,6 +165,11 @@ class SnmpInventoryConfig:
     enabled: bool = False
     snmpbulkwalk_path: str = "snmpbulkwalk"
     concurrency: int = 8  # switches in flight
+    # Skip switches the native poller currently reports as not answering SNMP.
+    # They cost a full timeout per OID root and return nothing (docs/design/109
+    # measured 361s a pass on two such hosts); their rows go honestly stale
+    # instead. Set false to sweep every registered switch regardless.
+    skip_snmp_down: bool = True
     # Hard budget for ONE supervised run (all due sweeps across the fleet).
     # Deliberately decoupled from the sweep intervals: a run that overruns the
     # fastest interval just delays the next tick (cadence slips honestly); it
@@ -175,6 +201,58 @@ class EngineConfig:
     smtp_port: int = 25
     smtp_from: str = ""
     default_target: str = ""
+
+
+@dataclass(frozen=True)
+class CameraSnapshotConfig:
+    """Camera still-image proxy (spec 11 D7, approved 2026-07-28).
+
+    A credentialed GET to the camera, streamed back same-origin, because
+    browsers strip embedded credentials from `<img>` subrequests — so the
+    picture cannot be fetched directly and the camera login must never reach
+    the browser.
+
+    Default **off**: it needs a shared read-only camera account provisioned in
+    `/etc/netmon/netmon.conf`, and it is the one place NetMon talks to a device
+    at page-render time rather than serving its own database. That relaxation of
+    the zero-source-calls-at-render invariant (CLAUDE.md §6) is deliberate and
+    bounded — `max_concurrent` caps it, `cache_s` lets the browser stop asking,
+    and turning `enabled` off returns the pages to DB-only with no deploy.
+
+    `channel_param` is empty by design. 178 cameras on this estate are one
+    imager of several on a shared device, and a bare snapshot path on such a
+    device returns a *different imager's* picture. The parameter name differs by
+    vendor and firmware, so those cameras report "not configured" until someone
+    confirms it against a real device — a wrong guess would serve a plausible
+    image of the wrong place, which nobody would notice.
+
+    `password_backup` (`pass_backup` in the file) is a second password for the
+    *same* account, tried only after the camera answers 401 to the first. A
+    fleet of 2,651 cameras is not on one password: a rotation reaches the
+    cameras that were online for it, and the ones that were down, or were
+    installed before it, still answer to the previous one. Without a fallback
+    those tiles read "camera rejected the configured account" and someone has
+    to decide, per camera, which password it is on. Optional, and empty means
+    one credential is tried exactly as before.
+    """
+    enabled: bool = False
+    user: str = ""
+    password: str = ""
+    password_backup: str = ""
+    # Cameras on the VMS network carry self-signed certificates, so verification
+    # is off by default. Named rather than hidden: it is a real trade-off, and
+    # the traffic stays inside the management network.
+    verify_ssl: bool = False
+    connect_timeout_s: float = 3.0
+    timeout_s: float = 6.0
+    # A camera wall asks for up to 48 stills at once. Without a cap that is 48
+    # simultaneous connections from the monitoring host to the camera VLAN.
+    max_concurrent: int = 8
+    # Browser cache lifetime. Short, because a still is only interesting when
+    # it is current, but non-zero so a re-render does not re-fetch every tile.
+    cache_s: int = 5
+    # Vendor query parameter that selects the imager on a multi-camera device.
+    channel_param: str = ""
 
 
 @dataclass(frozen=True)
@@ -236,6 +314,59 @@ class SourceToggle:
 
 
 @dataclass(frozen=True)
+class CameraOpsConfig:
+    """Bulk camera operations (spec 20 S8, gate D11 approved in principle).
+
+    The first NetMon write that goes **straight to hardware** rather than
+    through a platform that validates it, so the defaults are the most cautious
+    in the file: everything off, dry-run on, and the two operations gated
+    separately.
+
+    The account is deliberately NOT the snapshot proxy's. `[camera_snapshot]`
+    documents its credential as read-only and says the account "must not be able
+    to change camera configuration" — which is exactly right, and exactly why it
+    cannot push firmware. Reusing it would either fail every write or quietly
+    mean the read-only account was never read-only.
+    """
+    enabled: bool = False
+    dry_run: bool = True
+    #: Per-operation, because they carry different risk. The setting catalogue
+    #: is deferred (owner, 2026-09-07) so `config_change` has nothing to run yet.
+    config_change: bool = False
+    firmware_update: bool = False
+    #: The privileged camera account. Empty until the owner provisions one.
+    user: str = ""
+    password: str = ""
+    #: Reuse `[camera_snapshot]`'s account instead of a separate one
+    #: (owner-directed 2026-09-08). Off by default and deliberately explicit:
+    #: that section documents its credential as read-only, so borrowing it for
+    #: writes has to be a decision somebody typed, not a fallback that happens
+    #: quietly. On this estate the snapshot account is `service`, which on Bosch
+    #: hardware is the privileged level — so the "read-only" note describes an
+    #: intention, not an enforced limit.
+    use_snapshot_credentials: bool = False
+    #: While set, pre-flight refuses **every camera except this device id**.
+    #: The proving ground the owner chose (2026-09-08) instead of a low-stakes
+    #: setting catalogue, expressed in code rather than in someone's memory: it
+    #: cannot be forgotten at 22:00 on the night of the first real batch.
+    proving_device_id: int = 0
+    #: Vetted images live here, one directory per vendor. Outside the repo for
+    #: the same reason credentials are.
+    firmware_dir: str = "/var/lib/netmon/firmware"
+    #: The ring discipline. Copied onto each batch at creation so a later config
+    #: edit cannot change the rules a running batch plays by.
+    canary_count: int = 1
+    ring_size: int = 10
+    max_concurrent: int = 3
+    max_batch: int = 50
+    abort_pct: int = 10
+    reboot_timeout_s: int = 300
+    connect_timeout_s: float = 5.0
+    timeout_s: float = 120.0
+    verify_ssl: bool = False
+
+
+@dataclass(frozen=True)
 class Config:
     db: DBConfig
     web: WebConfig
@@ -246,6 +377,8 @@ class Config:
     engine: EngineConfig
     history: HistoryConfig
     actions: ActionsConfig
+    camera_snapshot: CameraSnapshotConfig
+    camera_ops: CameraOpsConfig
     sources: dict[str, SourceToggle]
     path: str
 
@@ -273,7 +406,15 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
             f"see netmon.conf.example)"
         )
 
-    parser = configparser.ConfigParser()
+    # `interpolation=None`: this file is mostly secrets, and configparser's
+    # default BasicInterpolation rewrites them. A `%` is not a literal to it —
+    # `%%` collapses to one `%` and a lone `%` raises — so a camera password
+    # containing `%%` was silently delivered a character short and every
+    # snapshot came back "camera rejected both configured passwords" (found on
+    # alb-cam-100, 2026-09-08: the value in the file authenticated, the value
+    # NetMon sent did not). No key here has ever wanted interpolation; a config
+    # of credentials must hand back exactly what was typed.
+    parser = configparser.ConfigParser(interpolation=None)
     # Preserve key case for group DNs etc.
     parser.optionxform = str  # type: ignore[assignment]
     read_ok = parser.read(conf_path)
@@ -296,6 +437,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         session_ttl=parser.getint("web", "session_ttl", fallback=43200),
         zabbix_url=parser.get("web", "zabbix_url", fallback="").strip().rstrip("/"),
         ssheasy_url=parser.get("web", "ssheasy_url", fallback="").strip().rstrip("/"),
+        carto_api_key=parser.get("web", "carto_api_key", fallback="").strip(),
     )
 
     # --- [auth] — SAML SP (ClassLink) + dev bypass ---
@@ -394,6 +536,10 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         fping_path=parser.get("poller", "fping_path", fallback="fping").strip(),
         fping_timeout_ms=_pint("fping_timeout_ms", 500),
         fping_retries=_pint("fping_retries", 1),
+        ping_exclude_device_types=tuple(
+            t.strip() for t in parser.get(
+                "poller", "ping_exclude_device_types", fallback="").split(",")
+            if t.strip()),
         snmpget_path=parser.get("poller", "snmpget_path", fallback="snmpget").strip(),
         snmp_version=parser.get("poller", "snmp_version", fallback="2c").strip(),
         snmp_community=parser.get("poller", "snmp_community", fallback="").strip(),
@@ -417,6 +563,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         enabled=_sbool("enabled", False),
         snmpbulkwalk_path=parser.get("snmp_inventory", "snmpbulkwalk_path", fallback="snmpbulkwalk").strip(),
         concurrency=_sint("concurrency", 8),
+        skip_snmp_down=_sbool("skip_snmp_down", True),
         run_timeout_s=_sint("run_timeout_s", 900),
         sweep_ports=_sbool("sweep_ports", True),
         ports_interval_s=_sint("ports_interval_s", 120),
@@ -466,6 +613,71 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
     def _abool(key: str, default: bool = True) -> bool:
         return _as_bool(parser.get("actions", key, fallback="true" if default else "false"))
 
+    camera_snapshot = CameraSnapshotConfig(
+        enabled=_as_bool(parser.get("camera_snapshot", "enabled", fallback="false")),
+        user=parser.get("camera_snapshot", "user", fallback="").strip(),
+        password=parser.get("camera_snapshot", "pass", fallback=""),
+        password_backup=parser.get("camera_snapshot", "pass_backup", fallback=""),
+        verify_ssl=_as_bool(parser.get("camera_snapshot", "verify_ssl", fallback="false")),
+        connect_timeout_s=parser.getfloat("camera_snapshot", "connect_timeout_s", fallback=3.0),
+        timeout_s=parser.getfloat("camera_snapshot", "timeout_s", fallback=6.0),
+        max_concurrent=parser.getint("camera_snapshot", "max_concurrent", fallback=8),
+        cache_s=parser.getint("camera_snapshot", "cache_s", fallback=5),
+        channel_param=parser.get("camera_snapshot", "channel_param", fallback="").strip(),
+    )
+    if camera_snapshot.enabled and not camera_snapshot.user:
+        # Refuse rather than silently serve 503s: an operator who switched this
+        # on and sees empty tiles should be told the account is missing.
+        raise ConfigError("[camera_snapshot] enabled = true needs `user` (and `pass`) — "
+                          "the shared read-only camera account")
+
+    def _ops(key: str, default: str = "false") -> bool:
+        return _as_bool(parser.get("camera_ops", key, fallback=default))
+
+    camera_ops = CameraOpsConfig(
+        enabled=_ops("enabled"),
+        dry_run=_ops("dry_run", "true"),
+        config_change=_ops("config_change"),
+        firmware_update=_ops("firmware_update"),
+        user=parser.get("camera_ops", "user", fallback="").strip(),
+        password=parser.get("camera_ops", "pass", fallback=""),
+        use_snapshot_credentials=_ops("use_snapshot_credentials"),
+        proving_device_id=parser.getint("camera_ops", "proving_device_id", fallback=0),
+        firmware_dir=parser.get("camera_ops", "firmware_dir",
+                                fallback="/var/lib/netmon/firmware").strip(),
+        canary_count=parser.getint("camera_ops", "canary_count", fallback=1),
+        ring_size=parser.getint("camera_ops", "ring_size", fallback=10),
+        max_concurrent=parser.getint("camera_ops", "max_concurrent", fallback=3),
+        max_batch=parser.getint("camera_ops", "max_batch", fallback=50),
+        abort_pct=parser.getint("camera_ops", "abort_pct", fallback=10),
+        reboot_timeout_s=parser.getint("camera_ops", "reboot_timeout_s", fallback=300),
+        connect_timeout_s=parser.getfloat("camera_ops", "connect_timeout_s", fallback=5.0),
+        timeout_s=parser.getfloat("camera_ops", "timeout_s", fallback=120.0),
+        verify_ssl=_as_bool(parser.get("camera_ops", "verify_ssl", fallback="false")),
+    )
+    if camera_ops.use_snapshot_credentials and camera_ops.user:
+        raise ConfigError("[camera_ops] sets both `user` and use_snapshot_credentials — "
+                          "pick one, so it is unambiguous which account writes to a camera")
+    if (camera_ops.enabled and not camera_ops.dry_run
+            and camera_ops.use_snapshot_credentials and not camera_snapshot.user):
+        raise ConfigError("[camera_ops] use_snapshot_credentials = true but "
+                          "[camera_snapshot] has no account to borrow")
+    if (camera_ops.enabled and not camera_ops.dry_run
+            and not camera_ops.use_snapshot_credentials and not camera_ops.user):
+        # Live and credential-less would refuse every camera at pre-flight and
+        # look like a fleet-wide fault. Fail at boot where it is one line.
+        raise ConfigError("[camera_ops] enabled with dry_run = false needs `user` and "
+                          "`pass` — a privileged camera account, NOT the read-only "
+                          "one in [camera_snapshot]")
+    if camera_ops.canary_count < 1:
+        raise ConfigError("[camera_ops] canary_count must be at least 1 — the canary "
+                          "is what stops a bad image reaching the second camera")
+    if camera_ops.max_batch < 1 or camera_ops.ring_size < 1:
+        raise ConfigError("[camera_ops] max_batch and ring_size must be positive")
+    if not 0 < camera_ops.abort_pct <= 100:
+        raise ConfigError("[camera_ops] abort_pct must be between 1 and 100; 0 would "
+                          "abort a batch on its first success")
+
     actions = ActionsConfig(
         enabled=_abool("enabled"),
         reevaluate_access=_abool("reevaluate_access"),
@@ -500,5 +712,5 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
 
     return Config(db=db, web=web, auth=auth, security=security, poller=poller,
                   snmp_inventory=snmp_inventory, engine=engine, history=history,
-                  actions=actions,
-                  sources=sources, path=conf_path)
+                  actions=actions, camera_snapshot=camera_snapshot,
+                  camera_ops=camera_ops, sources=sources, path=conf_path)

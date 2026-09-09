@@ -45,6 +45,20 @@ const TIER_LABEL = {
 // Basemap tile sources — the one permitted external runtime fetch (spec 09
 // decision 2, owner-approved 2026-07-14). Point these at a self-hosted tile
 // pack to remove even that dependency.
+//
+// The CARTO styles need an API key or every tile arrives stamped "API KEY
+// REQUIRED" — which is what this page showed until 2026-09-08. The key is not
+// in this file: it comes from /api/meta, sourced from [web] carto_api_key in
+// /etc/netmon/netmon.conf. It is unavoidably visible in the browser's network
+// tab (it is a query parameter on a tile URL — that is how the service works),
+// but keeping it out of the repo still matters: a committed key is in git
+// history and indexed forever, and this one carries a monthly tile quota and a
+// no-sharing term.
+//
+// Attribution is not decoration. The free tier is granted in exchange for
+// keeping the CARTO and OpenStreetMap credits visible, so the `attribution`
+// strings below are a licence condition — do not remove them to tidy the
+// corner of the map.
 const TILES = {
   dark: ["https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", "&copy; OpenStreetMap &copy; CARTO"],
   light: ["https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", "&copy; OpenStreetMap &copy; CARTO"],
@@ -95,6 +109,7 @@ export function MapPage() {
 
   // ---- admin map editor (drag sites, edit fiber paths) ----
   const [canEdit, setCanEdit] = React.useState(false);   // admin && [security] allow_web_edit
+  const [cartoKey, setCartoKey] = React.useState("");    // [web] carto_api_key, via /api/meta
   const [edit, setEdit] = React.useState(false);         // edit mode on
   const [editLink, setEditLink] = React.useState(null);  // link id whose path is being edited
   const [linkAdd, setLinkAdd] = React.useState(false);   // picking two sites for a new link
@@ -123,10 +138,16 @@ export function MapPage() {
   const pickRef = React.useRef(() => {});   // latest pickSiteForLink for bound-once handlers
   const capInputRef = React.useRef(null);
 
-  // Static fact: is web editing enabled AND am I an admin? Gates the EDIT button.
+  // Static facts from one fetch: whether the EDIT button is allowed, and the
+  // CARTO key the basemap needs. The key arrives after first paint, so the
+  // tile guard below keys on `theme|key` — otherwise the watermarked layer
+  // built on the first render would never be replaced.
   React.useEffect(() => {
     Promise.all([getJSON("/api/meta").catch(() => ({})), getJSON("/auth/me").catch(() => ({}))])
-      .then(([meta, me]) => setCanEdit(!!meta?.can_edit && me?.role === "admin"));
+      .then(([meta, me]) => {
+        setCanEdit(!!meta?.can_edit && me?.role === "admin");
+        setCartoKey(meta?.carto_api_key || "");
+      });
   }, []);
 
   // ---- live data: poll the three endpoints; keep last good data on failure.
@@ -191,11 +212,19 @@ export function MapPage() {
     const map = mapRef.current;
 
     // Basemap (external fetch; degrade gracefully — vectors don't need it).
-    if (tileThemeRef.current !== theme) {
-      tileThemeRef.current = theme;
+    // Rebuilt when the theme changes *or* when the key lands, since the key is
+    // fetched asynchronously and the first layer is built without it.
+    const tileToken = `${theme}|${cartoKey ? "keyed" : "unkeyed"}`;
+    if (tileThemeRef.current !== tileToken) {
+      tileThemeRef.current = tileToken;
       if (tileRef.current) tileRef.current.remove();
       const [url, attribution] = TILES[theme] || TILES.dark;
-      const layer = L.tileLayer(url, { maxZoom: 19, attribution });
+      // Only CARTO's styles take the key; Esri's imagery does not and must not
+      // receive it.
+      const keyed = (cartoKey && url.includes("cartocdn.com"))
+        ? `${url}${url.includes("?") ? "&" : "?"}key=${encodeURIComponent(cartoKey)}`
+        : url;
+      const layer = L.tileLayer(keyed, { maxZoom: 19, attribution });
       // 'load' fires even when every tile errored, so clear the warning only
       // on an actual successful tile ('tileload').
       layer.on("tileerror", () => setTilesDown(true));
@@ -327,7 +356,7 @@ export function MapPage() {
         delete lay.sites[name];
       }
     }
-  }, [data, selected, theme]);
+  }, [data, selected, theme, cartoKey]);
 
   // Destroy the map on unmount (route change).
   React.useEffect(

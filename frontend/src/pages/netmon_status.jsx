@@ -28,6 +28,45 @@ function StatusWord({ ok, okText, badText }) {
   );
 }
 
+// One card for the live ESS stream. Exported for the render check.
+export function EssLiveCard({ live }) {
+  const connected = !!live.connected;
+  return (
+    <Card kicker="Milestone Events/State" title="Live subscription"
+          source="milestone-ess">
+      <div className="stat-row">
+        <Stat label="Socket"
+              value={connected ? "connected" : "down"}
+              severity={connected ? "ok" : "crit"} />
+        <Stat label="Reconnects" value={live.reconnects ?? 0}
+              severity={(live.reconnects ?? 0) > 5 ? "warn" : undefined} />
+        <Stat label="Frames" value={(live.frames ?? 0).toLocaleString()} />
+        <Stat label="Events" value={(live.events ?? 0).toLocaleString()} />
+        {/* Applied is deliberately far smaller than events: over 99% of this
+            stream is motion and recording churn, which is dropped. A number
+            close to `events` would mean the filter had stopped working. */}
+        <Stat label="State changes applied" value={(live.applied ?? 0).toLocaleString()}
+              title="mostly the baseline written at each connect; deltas after that" />
+        <Stat label="Snapshot states" value={(live.snapshot_states ?? 0).toLocaleString()}
+              title="states read from getState at connect — counted apart from stream events" />
+        <Stat label="Last frame"
+              value={live.last_message_at
+                ? ageOf(new Date(live.last_message_at * 1000).toISOString()) + " ago"
+                : "—"}
+              severity={connected && !live.last_message_at ? "warn" : undefined} />
+      </div>
+      {Array.isArray(live.top_event_types) && live.top_event_types.length > 0 && (
+        <div className="msg" style={{ fontSize: 11, marginTop: 10 }}>
+          Busiest event types since connect:{" "}
+          {live.top_event_types.map(([name, n]) => `${name} ${n.toLocaleString()}`).join(" · ")}.
+          {" "}Only <span className="mono">Communication*</span> moves state;
+          the rest is counted so the stream can be understood, never written.
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export function NetmonStatusPage() {
   const [status, setStatus] = React.useState(null);
   const [error, setError] = React.useState(null);
@@ -130,6 +169,13 @@ export function NetmonStatusPage() {
           </tbody>
         </table>
       </Card>
+
+      {/* The live Milestone subscription (spec 20 S7). Its collector_health row
+          cannot answer the question a held-open socket raises — a stream that
+          reconnects every minute and one that has been up for a week write the
+          same successful flushes — so the connection itself is reported here.
+          Absent entirely when [milestone] ess_live is off. */}
+      {status.ess_live && <EssLiveCard live={status.ess_live} />}
 
       <Card kicker="Database" title="Row counts">
         <div className="stat-row">

@@ -107,3 +107,52 @@ def test_poller_in_process_is_not_web_editable(tmp_path):
     from netmon import settings
 
     assert "poller.in_process" not in settings.BY_KEY
+
+
+def test_carto_api_key_is_optional_and_not_defaulted(tmp_path):
+    """The map must survive a config that has no basemap key.
+
+    Empty means the tiles arrive watermarked, which is worse than keyed and far
+    better than a map with no basemap at all — so this must never raise, and it
+    must never invent a placeholder that would be sent to CARTO as a real key.
+    """
+    from netmon.config import load_config
+    from tests.conftest import write_config
+
+    cfg = load_config(write_config(tmp_path))
+    assert cfg.web.carto_api_key == ""
+
+    conf = write_config(tmp_path, extra_sections="")
+    text = conf.read_text().replace("[web]\n", "[web]\ncarto_api_key =  k3y-with-spaces  \n")
+    conf.write_text(text)
+    # Whitespace is stripped: a trailing space becomes %20 in a tile URL and
+    # the key silently stops matching.
+    assert load_config(conf).web.carto_api_key == "k3y-with-spaces"
+
+
+def test_a_secret_containing_percent_is_delivered_verbatim(tmp_path):
+    """configparser must not rewrite a credential.
+
+    The default BasicInterpolation treats `%` as syntax: `%%` collapses to one
+    `%` and a lone `%` raises. A real camera password containing `%%` was
+    therefore delivered a character short, the camera answered 401, and the
+    tile read "camera rejected both configured passwords" while the value in
+    the file authenticated perfectly by hand (alb-cam-100, 2026-09-08).
+
+    Every value in this file is checked, not just the camera's: it is a file of
+    credentials — DB URL, SNMP community, API tokens — and any of them may
+    contain a `%`.
+    """
+    password = "Ab%%9x?Qz1w"
+    conf = write_config(
+        tmp_path,
+        db_url="sqlite:///" + str(tmp_path / "pc.db") + "?x=100%25",
+        extra_sections=(f"[camera_snapshot]\nenabled = true\nuser = service\n"
+                        f"pass = {password}\npass_backup = 50%off\n\n"
+                        f"[poller]\nsnmp_community = c0mmun1ty%%\n"),
+    )
+    cfg = load_config(conf)
+    assert cfg.camera_snapshot.password == password
+    assert cfg.camera_snapshot.password_backup == "50%off"
+    assert cfg.poller.snmp_community == "c0mmun1ty%%"
+    assert cfg.db.url.endswith("?x=100%25")

@@ -246,15 +246,49 @@ def fetch_camera_groupname_map(
     base: str, token: str, ctx: ssl.SSLContext | None,
     timeout: float, api_base: str,
 ) -> dict[str, str]:
-    """Return {camera-guid: group-display-name}. Empty on any error."""
+    """Return {camera-guid: group-display-name}. Empty on any error.
+
+    One HTTP call via /cameraGroups?includeChildren=cameras — was 1 + N
+    (one per group) before. The OpenAPI spec lists `cameras` as a valid
+    includeChildren on cameraGroups, so the embedded membership comes
+    back inline. Older API versions that don't honour it get the
+    per-group walk as a fallback.
+    """
     out: dict[str, str] = {}
+    fast_url = f"{base}{api_base}/cameraGroups?includeChildren=cameras"
+    try:
+        gr = _http_get_json(fast_url, token, ctx, timeout)
+        for g in (gr.get("array") or gr.get("data") or []):
+            if not isinstance(g, dict):
+                continue
+            gid = g.get("id")
+            if not gid:
+                continue
+            gname = (g.get("displayName") or g.get("name")
+                     or g.get("description") or str(gid))
+            for c in (g.get("cameras") or []):
+                cid = c.get("id") if isinstance(c, dict) else None
+                # First group claiming a camera wins (Milestone groups are
+                # effectively exclusive at the leaf folder).
+                if cid and cid not in out:
+                    out[cid] = gname
+        # If at least one group came back with embedded cameras we trust
+        # the fast path. Otherwise fall through to the per-group walk so
+        # an API version that ignored includeChildren doesn't strand us
+        # with an empty map.
+        if out:
+            return out
+    except Exception as e:  # noqa: BLE001
+        print(f"[grpmap] /cameraGroups?includeChildren=cameras failed: {e}; "
+              f"falling back to per-group walk", file=sys.stderr)
+
+    # Fallback: N+1 walk (the original implementation).
     try:
         gr = _http_get_json(f"{base}{api_base}/cameraGroups", token, ctx, timeout)
     except Exception as e:  # noqa: BLE001
         print(f"[grpmap] cameraGroups fetch failed: {e}", file=sys.stderr)
         return out
-    groups = gr.get("array") or gr.get("data") or []
-    for g in groups:
+    for g in (gr.get("array") or gr.get("data") or []):
         if not isinstance(g, dict):
             continue
         gid = g.get("id")
@@ -272,8 +306,6 @@ def fetch_camera_groupname_map(
             continue
         for c in (ch.get("array") or ch.get("data") or []):
             cid = c.get("id") if isinstance(c, dict) else None
-            # First group claiming a camera wins (Milestone groups are
-            # effectively exclusive at the leaf folder).
             if cid and cid not in out:
                 out[cid] = gname
     return out
@@ -294,18 +326,37 @@ def fetch_hardware_recordingserver_map(
 ) -> dict[str, str]:
     """Return {hardware-guid: recording-server-guid}.
 
-    Returns {} (and logs to stderr) on any error so a failure here just
-    leaves recordingServerId empty rather than killing the whole snapshot.
+    One HTTP call via /recordingServers?includeChildren=hardware — was
+    1 + N (one per RS) before. Falls back to the per-RS walk if the
+    server doesn't honour the include. Returns {} and logs on any error
+    so the snapshot still writes (recordingServerId just stays empty).
     """
     out: dict[str, str] = {}
+    fast_url = f"{base}{api_base}/recordingServers?includeChildren=hardware"
+    try:
+        rs_resp = _http_get_json(fast_url, token, ctx, timeout)
+        for rs in (rs_resp.get("array") or rs_resp.get("data") or []):
+            rs_id = rs.get("id") if isinstance(rs, dict) else None
+            if not rs_id:
+                continue
+            for hw in (rs.get("hardware") or []):
+                hwid = hw.get("id") if isinstance(hw, dict) else None
+                if hwid:
+                    out[hwid] = rs_id
+        if out:
+            return out
+    except Exception as e:  # noqa: BLE001
+        print(f"[rsid] /recordingServers?includeChildren=hardware failed: {e}; "
+              f"falling back to per-RS walk", file=sys.stderr)
+
+    # Fallback: N+1 walk (the original implementation).
     try:
         rs_resp = _http_get_json(
             f"{base}{api_base}/recordingServers", token, ctx, timeout)
     except Exception as e:  # noqa: BLE001
         print(f"[rsid] recordingServers fetch failed: {e}", file=sys.stderr)
         return out
-    rs_list = rs_resp.get("array") or rs_resp.get("data") or []
-    for rs in rs_list:
+    for rs in (rs_resp.get("array") or rs_resp.get("data") or []):
         rs_id = rs.get("id") if isinstance(rs, dict) else None
         if not rs_id:
             continue

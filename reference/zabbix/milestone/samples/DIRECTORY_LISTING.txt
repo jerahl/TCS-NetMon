@@ -1,0 +1,8 @@
+total 12400
+drwxr-xr-x   2 zabbix zabbix     177 Sep  7 09:16 .
+drwxr-xr-x. 32 root   root      4096 Jun  1 17:19 ..
+-rw-r--r--   1 zabbix zabbix      46 Sep  7 09:16 milestone_cameras_state.err
+-rw-r--r--   1 zabbix zabbix 6222606 Sep  4 22:02 milestone_cameras_state.json
+-rw-r--r--   1 zabbix zabbix       0 Sep  7 09:15 milestone_cameras_state.lock
+-rw-r--r--   1 zabbix zabbix 6462162 Sep  7 03:15 milestone_ess_state.json
+-rw-r--r--   1 zabbix zabbix       0 Sep  7 03:15 milestone_ess_state.lock

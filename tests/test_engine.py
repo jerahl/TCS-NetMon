@@ -245,3 +245,57 @@ def test_contested_ip_verdict_cannot_vouch_for_a_dead_device(tmp_path):
     # Missing column => legacy caller => trusted, so behaviour is unchanged.
     legacy = {"source_down": 1, "ping_up": 1, "has_state": 1}
     assert device_down(legacy) is False
+
+
+def _bare(tmp_path, name):
+    e = db.make_engine(f"sqlite:///{tmp_path / name}")
+    create_core_tables(e)
+    return e
+
+
+def test_rule_scoped_to_device_types_ignores_everything_else(tmp_path):
+    """ICMP silence does not mean the same thing for every device class.
+
+    193 of 2,649 addressed cameras never answer ICMP while Milestone reports
+    each one actively recording, spread across every site — so for that class a
+    non-answer means "this model does not speak ICMP", not "this camera is
+    down". Sweeping them is still right (M1 #92: the disagreement is worth
+    surfacing), but `device_down` must not read it as an outage.
+    """
+    engine = _bare(tmp_path, "scoped.db")
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO devices (id, name, site, device_type, enabled) VALUES "
+                       "(1,'sw-1','S','switch',1),(2,'cam-1','S','camera',1)"))
+        c.execute(text("INSERT INTO alert_rules (name, dimension, device_types, `condition`, "
+                       "severity, min_duration_s, enabled) VALUES "
+                       "('device_down','ping','switch,ap','{\"op\":\"eq\",\"value\":\"down\"}','crit',0,1)"))
+        # Both are silent on ICMP; only the switch is actually down.
+        for did in (1, 2):
+            c.execute(text("INSERT INTO device_state (device_id, dimension, value, severity, "
+                           "source, updated_at) VALUES (:d,'ping','down','crit','poller',:t)"),
+                      {"d": did, "t": datetime.now(timezone.utc)})
+
+    asyncio.run(AlertEngine(engine, _cfg()).run_once())
+
+    opened = db.fetch_all(engine, "SELECT device_id FROM alerts WHERE closed_at IS NULL")
+    assert [r["device_id"] for r in opened] == [1]      # the switch, not the camera
+
+
+def test_rule_without_device_types_still_applies_fleet_wide(tmp_path):
+    """NULL must keep every pre-existing rule behaving exactly as it did."""
+    engine = _bare(tmp_path, "fleetwide.db")
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO devices (id, name, site, device_type, enabled) VALUES "
+                       "(1,'sw-1','S','switch',1),(2,'cam-1','S','camera',1)"))
+        c.execute(text("INSERT INTO alert_rules (name, dimension, device_types, `condition`, "
+                       "severity, min_duration_s, enabled) VALUES "
+                       "('device_down','ping',NULL,'{\"op\":\"eq\",\"value\":\"down\"}','crit',0,1)"))
+        for did in (1, 2):
+            c.execute(text("INSERT INTO device_state (device_id, dimension, value, severity, "
+                           "source, updated_at) VALUES (:d,'ping','down','crit','poller',:t)"),
+                      {"d": did, "t": datetime.now(timezone.utc)})
+
+    asyncio.run(AlertEngine(engine, _cfg()).run_once())
+    opened = {r["device_id"] for r in db.fetch_all(
+        engine, "SELECT device_id FROM alerts WHERE closed_at IS NULL")}
+    assert opened == {1, 2}

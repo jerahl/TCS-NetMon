@@ -281,7 +281,9 @@ def _from_config(path: str | None) -> dict[str, str]:
     conf_path = path or os.environ.get("NETMON_CONF")
     if not conf_path or not Path(conf_path).is_file():
         return {}
-    parser = configparser.ConfigParser()
+    # interpolation=None for the same reason as netmon/config.py: a `%` in a
+    # password is a character, not syntax.
+    parser = configparser.ConfigParser(interpolation=None)
     parser.optionxform = str  # type: ignore[assignment]
     parser.read(conf_path)
     if not parser.has_section("zabbix"):

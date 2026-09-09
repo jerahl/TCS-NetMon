@@ -18,6 +18,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from netmon import db
@@ -33,20 +34,32 @@ REACHABILITY_FLAGS_SQL = """\
        MAX(CASE WHEN s.dimension = 'source_status' AND s.value = 'down' THEN 1 ELSE 0 END) AS source_down,
        MAX(CASE WHEN s.dimension = 'snmp' AND s.value = 'up' THEN 1 ELSE 0 END) AS snmp_up,
        MAX(CASE WHEN s.device_id IS NULL THEN 0 ELSE 1 END) AS has_state,
-       (SELECT COUNT(*) FROM devices x
+       (SELECT COUNT(DISTINCT cx.hardware_id)
+             + COUNT(DISTINCT CASE WHEN cx.hardware_id IS NULL THEN x.id END)
+          FROM devices x LEFT JOIN cameras cx ON cx.device_id = x.id
          WHERE x.enabled = 1 AND x.mgmt_ip = d.mgmt_ip
            AND d.mgmt_ip IS NOT NULL AND d.mgmt_ip <> '') AS ip_claimants"""
 
 
 def native_trustworthy(d: dict[str, Any]) -> bool:
-    """False when more than one enabled device claims this ``mgmt_ip``.
+    """False when more than one **physical device** claims this ``mgmt_ip``.
 
-    A probe is keyed by address, so when two rows share one the verdict cannot
-    say which device answered — a decommissioned switch reads ``up`` because
+    A probe is keyed by address, so when two devices share one the verdict
+    cannot say which answered — a decommissioned switch reads ``up`` because
     its replacement responds. The poller refuses to *write* such a verdict, but
     rows written before that guard existed are still in the table, and they are
     exactly the ones that must not be believed: on 2026-07-28 they closed
     alerts for hardware named ``oak-DEAD`` and ``DEAD_AP``.
+
+    **Camera rows of one physical device are not rivals.** Milestone models a
+    camera as a channel of a hardware record, and 61 devices here carry more
+    than one — an AXIS M3007 panoramic carries eleven. Those eleven share one
+    network interface and are up or down together, so counting them as eleven
+    claimants refused a verdict that is not in doubt. Claimants are therefore
+    counted per physical device (``cameras.hardware_id`` where present, else the
+    device row), which leaves the original protection exactly as it was: two
+    *different* devices on one address still disagree, and 10.132.18.209 —
+    where a Bosch 5000i and 5100i are both registered — is still refused.
 
     Absent the ``ip_claimants`` column a caller is treated as trustworthy, so
     projections that predate it keep their behaviour.
@@ -84,6 +97,81 @@ def device_down(d: dict[str, Any]) -> bool:
         return bool(d.get("source_down"))
     native_up = d.get("ping_up") or d.get("snmp_up")
     return bool(d.get("ping_down") or (d.get("source_down") and not native_up))
+
+
+def write_states(
+    engine: Engine,
+    rows: list[tuple[int, str, str, str, str]],
+) -> int:
+    """Batched :func:`write_state` — same semantics, three statements.
+
+    ``rows`` is ``(device_id, dimension, value, severity, source)``.
+    Returns how many values actually changed.
+
+    Why this exists: ``write_state`` does a SELECT plus an upsert, each in its
+    own transaction, which is fine for a switch sweep and ruinous for a camera
+    fleet. The Milestone cycle writes `recording` for 2,662 cameras plus
+    `source_status` for as many again and 22 recorders — over 5,000 calls, so
+    more than 10,000 round trips, which measured **68 seconds** of a 120-second
+    supervisor boundary and timed out 61 of 517 cycles. The HTTP it was blamed
+    on totals 21 s.
+
+    The semantics are deliberately identical, including the parts that are easy
+    to lose in a batch: a previously-absent state still counts as coming from
+    ``unknown`` so a first observation is a recorded transition, and
+    ``updated_at`` is refreshed for every row whether or not the value moved,
+    because liveness is what the staleness badges read.
+    """
+    if not rows:
+        return 0
+    now = datetime.now(timezone.utc)
+    # Deduplicate on (device_id, dimension), last write winning, so a caller
+    # that writes the same pair twice in one pass cannot produce two conflicting
+    # UPDATEs in one executemany.
+    latest: dict[tuple[int, str], tuple[int, str, str, str, str]] = {}
+    for r in rows:
+        latest[(int(r[0]), r[1])] = r
+
+    with engine.begin() as conn:
+        keys = list(latest)
+        current: dict[tuple[int, str], str] = {}
+        # Chunked so the IN-list cannot outgrow the placeholder limit on a
+        # fleet-sized write.
+        ids = sorted({k[0] for k in keys})
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            ph = ", ".join(f":d{j}" for j in range(len(chunk)))
+            for row in conn.execute(
+                    text(f"SELECT device_id, dimension, value FROM device_state "
+                         f"WHERE device_id IN ({ph})"),
+                    {f"d{j}": v for j, v in enumerate(chunk)}):
+                current[(int(row[0]), row[1])] = row[2]
+
+        updates, inserts, events = [], [], []
+        for key, (dev, dim, value, severity, source) in latest.items():
+            payload = {"d": dev, "dim": dim, "value": value,
+                       "severity": severity, "source": source, "at": now}
+            (updates if key in current else inserts).append(payload)
+            old = current.get(key, "unknown")
+            if old != value:
+                events.append({**payload, "old": old})
+
+        if updates:
+            conn.execute(text(
+                "UPDATE device_state SET value = :value, severity = :severity, "
+                "source = :source, updated_at = :at "
+                "WHERE device_id = :d AND dimension = :dim"), updates)
+        if inserts:
+            conn.execute(text(
+                "INSERT INTO device_state (device_id, dimension, value, severity, "
+                "source, updated_at) VALUES (:d, :dim, :value, :severity, :source, :at)"),
+                inserts)
+        if events:
+            conn.execute(text(
+                "INSERT INTO state_events (device_id, dimension, old_value, new_value, "
+                "severity, source, occurred_at) "
+                "VALUES (:d, :dim, :old, :value, :severity, :source, :at)"), events)
+    return len(events)
 
 
 def write_state(

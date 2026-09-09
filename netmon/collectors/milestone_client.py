@@ -18,7 +18,20 @@ TIMEOUT = 30.0
 # The hardware tree is ~2,500 records on this deployment and the 30s default
 # reliably timed out against the live gateway (measured 2026-07-28; 180s
 # succeeded). Scoped to that one call so every other failure stays fast.
+#
+# Note this exceeds the collector's own supervisor boundary (timeout_s =
+# max(60, interval_s) = 120s at the default interval), so a genuinely hung
+# /hardware is cancelled by the supervisor at 120s rather than by httpx here.
+# Both paths record a failure, so it fails loud either way.
 HARDWARE_TIMEOUT = 180.0
+# /cameras returns ~2,662 records / 2.9 MB and its latency is highly variable:
+# measured 5.5, 14.0, 18.9, 7.4, 19.2 and 8.5 seconds across six consecutive
+# calls (2026-09-06). Against the 30s default that spikes over the limit often
+# enough to cost roughly one cycle in four — 187 timeouts over three days,
+# each one a skipped inventory and state refresh. Same reasoning as the
+# hardware tree, and still well inside the supervisor's 120s boundary so a real
+# hang is caught rather than waited out.
+BULK_TIMEOUT = 60.0
 
 
 class MilestoneError(Exception):
@@ -101,7 +114,15 @@ class MilestoneClient:
             try:
                 resp = await client.get(path, headers=headers)
             except httpx.HTTPError as exc:
-                raise MilestoneError(f"Milestone transport error on {path}: {exc}") from exc
+                # httpx timeout exceptions stringify to "", so interpolating the
+                # exception alone produced "Milestone transport error on
+                # /api/rest/v1/cameras: " in collector_health — an error that
+                # names no cause. The class is the diagnosis here: ReadTimeout
+                # says the gateway was slow, ConnectError says it was not there,
+                # and those want different responses (§4.5).
+                detail = str(exc) or "no detail"
+                raise MilestoneError(
+                    f"Milestone {type(exc).__name__} on {path}: {detail}") from exc
             if resp.status_code == 401 and attempt == 1:
                 self._token = None
                 await self._get_token(client)
@@ -120,24 +141,174 @@ class MilestoneClient:
         return _items(data)
 
     async def cameras(self) -> list[dict]:
-        async with await self._mkclient() as client:
+        """Every camera. ~2,662 records / 2.9 MB here, so it gets BULK_TIMEOUT —
+        the response is slow and jittery enough to cross the 30s default about
+        one cycle in four, and a timeout here loses the whole cycle."""
+        async with httpx.AsyncClient(base_url=self._base, timeout=BULK_TIMEOUT,
+                                     verify=self._verify) as client:
             data = await self._get(client, "/api/rest/v1/cameras")
         return _items(data)
 
-    async def storage(self) -> list[dict]:
-        """Storage volumes per recording server (Config API). 404/absent →
-        empty (older XProtect versions lack this endpoint)."""
+    async def storage(self, recording_server_ids: list[str] | None = None) -> list[dict]:
+        """Storage volumes per recording server, with their archives.
+
+        **There is no ``GET /storages`` collection endpoint.** It answers HTTP
+        400 on this deployment, and that is not a version quirk to fail soft
+        around — the collection simply does not exist in the Config API. Only
+        ``/storages/{id}``, ``/storages/{id}/archiveStorages`` and
+        ``/recordingServers/{id}/storages`` do. NetMon called the collection for
+        months, caught the 400, and reported a clean cycle over an empty storage
+        roll-up (spec 14 D-5; found by scripts/validate_payloads.py 2026-07-28).
+
+        So the walk is per recording server: one call each, plus one per live
+        storage for its archives. On this estate that is 22 + 22 = 44 GETs.
+
+        Each returned row is a live storage annotated with ``archives`` and the
+        recording server it belongs to, so the caller can roll up without
+        re-deriving the parentage.
+        """
+        ids = recording_server_ids
         async with await self._mkclient() as client:
-            data = await self._get(client, "/api/rest/v1/storages")
+            if ids is None:
+                ids = [str(r.get("id")) for r in
+                       _items(await self._get(client, "/api/rest/v1/recordingServers"))
+                       if r.get("id")]
+            out: list[dict] = []
+            for rid in ids:
+                stores = _items(await self._get(
+                    client, f"/api/rest/v1/recordingServers/{rid}/storages"))
+                for st in stores:
+                    sid = str(st.get("id") or "")
+                    st["recordingServerId"] = rid
+                    st["archives"] = _items(await self._get(
+                        client, f"/api/rest/v1/storages/{sid}/archiveStorages")) if sid else []
+                    out.append(st)
+        return out
+
+    async def event_types(self) -> list[dict]:
+        """Event-type catalogue: GUID → name/displayName/stateGroupId.
+
+        This is what turns the ESS's raw type GUIDs into something nameable, so
+        the state mapping is a join against the install rather than a guess
+        (reference/zabbix/milestone/milestone_ess_resolve.py does the same).
+        """
+        async with await self._mkclient() as client:
+            data = await self._get(client, "/api/rest/v1/eventTypes?page=0&size=2000")
         return _items(data)
 
+    async def hardware_driver_settings(self, hardware_id: str) -> dict:
+        """The device's own identity: MAC, serial, firmware, vendor.
+
+        **This is where the camera MAC lives.** Neither ``/cameras`` nor
+        ``/hardware`` carries one — the collector looked on both for months and
+        wrote NULL for the whole estate — but the Management Client displays a
+        MAC for every camera, because it reads this resource. The parent
+        ``/hardware/{id}`` object stops at name, model, address and driver path.
+
+        Per hardware, not per camera: the 61 multi-camera devices have one NIC
+        between them (migration 022), so every camera on a hardware shares this.
+
+        One request per hardware record, ~300 ms each, with no collection form —
+        ``/hardwareDriverSettings`` without a parent answers 400 telling you to
+        prefix it. That is why the caller backfills in bounded batches rather
+        than sweeping 2,489 records on every cycle.
+
+        Returns the flattened ``hardwareDriverSettings`` block, or ``{}`` when
+        the driver exposes none. Deliberately drops the sibling ``ptz`` block
+        and the password-policy fields, which are of no interest here.
+        """
+        async with await self._mkclient() as client:
+            data = await self._get(
+                client, f"/api/rest/v1/hardware/{hardware_id}/hardwareDriverSettings")
+        for entry in _items(data):
+            settings = entry.get("hardwareDriverSettings")
+            if isinstance(settings, dict):
+                return settings
+        return {}
+
+    async def site_info(self) -> dict:
+        """The management server's own record — name and XProtect version.
+
+        `/sites` returns one row on a single-site deployment, carrying
+        `displayName`, `computerName`, `domainName`, `timeZone` and `version`
+        ("25.2.0.1" here, i.e. 2025 R2 — the version spec 19 §8 had to infer).
+        """
+        async with await self._mkclient() as client:
+            data = await self._get(client, "/api/rest/v1/sites")
+        rows = _items(data)
+        return rows[0] if rows else {}
+
+    async def license_details(self) -> list[dict]:
+        """Per-licence-type activation counts.
+
+        `/licenseDetails` returns one row per licence type — "Device License"
+        is the one that counts cameras — with `activated`, `notLicensed` and
+        `inGrace`. Note `activated` arrives as a STRING ("2491").
+
+        There is no *total* anywhere in this response, and none in
+        `/licenseInformations` either: XProtect Professional+ is licensed per
+        activated device, so "used of total" — the ratio ZCD draws as a bar —
+        does not exist to be read. The caller reports what is there.
+        """
+        async with await self._mkclient() as client:
+            data = await self._get(client, "/api/rest/v1/licenseDetails")
+        return _items(data)
+
+    async def camera_groups(self) -> list[dict]:
+        """The Smart Client organisational tree — one record per group, child
+        cameras inline (migration 026).
+
+        ``includeChildren=cameras,cameraGroups`` is what makes this one request
+        instead of one per group. Confirmed live 2026-09-07: 26 groups named by
+        school code, flat, with each child camera carrying ``id``, ``channel``
+        and ``relations`` — so the caller can bucket cameras without a second
+        fetch.
+
+        Two shapes are tolerated because the API has used both: children inline
+        at the top level (``node["cameras"]``, what 2025 R2 returns) and nested
+        under ``node["children"]`` (what the reference collector was written
+        against). :func:`group_children` reads either.
+
+        One oversize page first, proper pagination only if the gateway rejects
+        it — the same strategy the reference implementation uses, and on this
+        estate the fast path is the only one that ever runs.
+        """
+        q = "includeChildren=cameras,cameraGroups"
+        async with await self._mkclient() as client:
+            try:
+                data = await self._get(
+                    client, f"/api/rest/v1/cameraGroups?{q}&page=0&size=10000")
+                return _items(data)
+            except MilestoneError as exc:
+                # Oversize page refused → page properly. Anything else is a
+                # real failure and is left to the caller to record.
+                if not any(code in str(exc) for code in ("400", "404", "413", "414")):
+                    raise
+            out: list[dict] = []
+            page = 0
+            while True:
+                data = await self._get(
+                    client, f"/api/rest/v1/cameraGroups?{q}&page={page}&size=500")
+                batch = _items(data)
+                out.extend(batch)
+                if len(batch) < 500:
+                    return out
+                page += 1
+                if page > 40:  # 20k groups — a runaway, not a real estate
+                    log.warning("cameraGroups pagination exceeded 40 pages; stopping")
+                    return out
+
     async def hardware(self) -> list[dict]:
-        """Hardware (a camera's physical host) → model, MAC and network address.
+        """Hardware (a camera's physical host) → model and network address.
 
         Cameras link to hardware through ``camera.relations.parent``, **not** a
         ``hardwareId`` field — ``/cameras`` does not return one (confirmed live
         2026-07-28; the previous docstring asserted otherwise and the collector's
         lookup was built on it, which is why ``cameras.ip`` was always NULL).
+
+        Carries no MAC, serial or firmware despite the name suggesting a
+        physical device — those are one resource deeper, in
+        :meth:`hardware_driver_settings`.
 
         Uses a longer timeout than the other calls: this is ~2,500 records and
         the default 30s reliably hit ``httpx.ReadTimeout`` on the live gateway.

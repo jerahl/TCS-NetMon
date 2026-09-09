@@ -27,10 +27,16 @@ The Zabbix EXTERNAL item milestone_rs_read.sh[3600] cats the file
 on each poll, with a staleness check.
 
 REST endpoints used (Milestone API Gateway /api/rest/v1):
-  GET /recordingServers                          (list + state + version)
-  GET /recordingServers/{id}/storages            (per-RS storage config)
-  GET /recordingServers/{id}/hardware            (parent-hardware list)
-  GET /hardware/{id}/cameras                     (cameras under hardware)
+  GET /recordingServers?disabled&includeChildren=storages,hardware,cameras
+                                                 (one-shot pull of every RS,
+                                                  its storages config, the
+                                                  hardware list, and each
+                                                  hardware's cameras — was
+                                                  1 + N(RS) + N(RS)·M(HW)
+                                                  round trips, now one)
+  GET /storageInformation/{id}                   (live usedSpace + mount state
+                                                  per storage; not available via
+                                                  includeChildren on /storages)
 """
 
 import argparse
@@ -104,42 +110,125 @@ def _as_int(v, default=0):
         return default
 
 
+# Size fields on /storages and /storageInformation are documented in MB
+# (see the OpenAPI spec's storages.maxSize and storageInformation.usedSpace).
+# Snapshot exposes bytes so the dashboard can format TB/GB without converting.
+_MB = 1024 * 1024
+
+
+def _collect_storage_info(base, token, ctx, timeout, sid):
+    """Fetch live usage + mount state for one storage via /storageInformation/{id}.
+
+    Returns ({}, error_msg) on failure so the caller can fall through to
+    zero-usage without losing the snapshot. storageInformation isn't a
+    valid includeChildren target on /storages (per the OpenAPI spec
+    storageInformation is a sibling top-level resource, not a child of
+    storages), so this is a separate call per storage. Total storages
+    across a fleet is typically tiny (1-3 per RS), so the cost is bounded.
+    """
+    try:
+        si = api_get(base, token,
+                     f"/api/rest/v1/storageInformation/{sid}",
+                     ctx, timeout)
+        return si, None
+    except Exception as e:  # noqa: BLE001
+        return {}, str(e)
+
+
+def _normalize_storages(storages_raw, base, token, ctx, timeout, rs_id):
+    """Turn the /storages array (with embedded /storageInformation per row)
+    into the snapshot's storages list. Pulls /storageInformation per storage
+    for live usedSpace / lockedUsedSpace / isMounted / isAvailable, which
+    aren't exposed on /storages itself."""
+    out = []
+    for s in (storages_raw or []):
+        sid = s.get("id")
+        # Configured capacity from /storages.maxSize (MB per spec).
+        # Older API versions returned 'size' — keep that as a fallback.
+        max_mb = _as_int(s.get("maxSize")) or _as_int(s.get("size"))
+        size_bytes = max_mb * _MB
+
+        used_bytes = 0
+        locked_bytes = 0
+        is_mounted = None
+        is_available = None
+        if sid:
+            si, err = _collect_storage_info(base, token, ctx, timeout, sid)
+            if err:
+                logging.warning("storageInformation fetch failed for "
+                                "storage %s on RS %s: %s", sid, rs_id, err)
+            else:
+                used_bytes   = _as_int(si.get("usedSpace")) * _MB
+                locked_bytes = _as_int(si.get("lockedUsedSpace")) * _MB
+                is_mounted   = si.get("isMounted")
+                is_available = si.get("isAvailable")
+
+        out.append({
+            "id":               sid,
+            "name":             s.get("name") or s.get("displayName") or "",
+            "path":             s.get("diskPath") or s.get("path") or "",
+            "sizeBytes":        size_bytes,
+            "usedBytes":        used_bytes,
+            "lockedUsedBytes":  locked_bytes,
+            "isMounted":        is_mounted,
+            "isAvailable":      is_available,
+            "retentionMinutes": _as_int(s.get("retainMinutes")),
+            "default":          bool(s.get("isDefault", False)),
+        })
+    return out
+
+
 def collect_rs(rs, base, token, ctx, timeout):
-    """Return the per-RS record dict (augmented with storages + counts)."""
+    """Return the per-RS record dict (augmented with storages + counts).
+
+    Expects the top-level call to have already populated rs['storages']
+    and rs['hardware'] (with each hardware carrying nested 'cameras')
+    via includeChildren. Falls back to direct subpath fetches if any of
+    them are missing — covers older API versions that didn't propagate
+    nested includes.
+    """
     rs_id = rs.get("id")
 
-    # Storages on this RS — drives the Storage tab and Sites-row storage bar.
-    storages = []
-    try:
-        sr = api_get(base, token,
-                     f"/api/rest/v1/recordingServers/{rs_id}/storages",
-                     ctx, timeout)
-        for s in (sr.get("array", []) or []):
-            storages.append({
-                "id":               s.get("id"),
-                "name":             s.get("name") or s.get("displayName") or "",
-                "path":             s.get("path") or "",
-                "sizeBytes":        _as_int(s.get("size")),
-                "usedBytes":        _as_int(s.get("usedSpace")),
-                "retentionMinutes": _as_int(s.get("retainMinutes")),
-                "default":          bool(s.get("isDefault", False)),
-            })
-    except Exception as e:
-        logging.warning("storages fetch failed for RS %s: %s", rs_id, e)
+    # Storages — prefer the embedded copy from the top-level call. Fall
+    # back to a direct fetch if it wasn't included.
+    storages_raw = rs.get("storages")
+    if not isinstance(storages_raw, list):
+        try:
+            sr = api_get(base, token,
+                         f"/api/rest/v1/recordingServers/{rs_id}/storages",
+                         ctx, timeout)
+            storages_raw = sr.get("array", []) or []
+        except Exception as e:
+            logging.warning("storages fetch failed for RS %s: %s", rs_id, e)
+            storages_raw = []
+    storages = _normalize_storages(storages_raw, base, token, ctx, timeout, rs_id)
 
-    # Hardware + cameras. /hardware/{id}/cameras avoids a flat /cameras call
-    # at sites with thousands of cameras (the cameras snapshot covers that).
-    # Here we only want the count rolled up by RS so the dashboard can show
-    # "RS hosts N cameras" without re-walking the full cameras snapshot.
-    hw_count  = 0
+    # Hardware + cameras — prefer embedded. /recordingServers?include
+    # Children=hardware,cameras yields each hardware with a nested
+    # 'cameras' array, so counting is a walk through the embedded data
+    # without any per-hardware round-trips.
+    hw_arr = rs.get("hardware") if isinstance(rs.get("hardware"), list) else None
+    if hw_arr is None:
+        try:
+            hr = api_get(
+                base, token,
+                f"/api/rest/v1/recordingServers/{rs_id}/hardware"
+                f"?includeChildren=cameras",
+                ctx, timeout)
+            hw_arr = hr.get("array", []) or []
+        except Exception as e:
+            logging.warning("hardware fetch failed for RS %s: %s", rs_id, e)
+            hw_arr = []
+
+    hw_count  = len(hw_arr)
     cam_count = 0
-    try:
-        hr = api_get(base, token,
-                     f"/api/rest/v1/recordingServers/{rs_id}/hardware",
-                     ctx, timeout)
-        hw_arr = hr.get("array", []) or []
-        hw_count = len(hw_arr)
-        for hw in hw_arr:
+    for hw in hw_arr:
+        cams = hw.get("cameras")
+        if isinstance(cams, list):
+            cam_count += len(cams)
+        else:
+            # includeChildren=cameras wasn't honoured by this API version
+            # for the embedded hardware — fall back to a direct fetch.
             hw_id = hw.get("id")
             if not hw_id:
                 continue
@@ -151,11 +240,10 @@ def collect_rs(rs, base, token, ctx, timeout):
             except Exception as e:
                 logging.warning("camera count fetch failed for HW %s: %s",
                                 hw_id, e)
-    except Exception as e:
-        logging.warning("hardware fetch failed for RS %s: %s", rs_id, e)
 
-    size_total = sum(s["sizeBytes"] for s in storages)
-    used_total = sum(s["usedBytes"] for s in storages)
+    size_total   = sum(s["sizeBytes"]       for s in storages)
+    used_total   = sum(s["usedBytes"]       for s in storages)
+    locked_total = sum(s["lockedUsedBytes"] for s in storages)
     retentions = [s["retentionMinutes"] for s in storages
                   if s["retentionMinutes"] > 0]
     retention_min = min(retentions) if retentions else 0
@@ -177,6 +265,7 @@ def collect_rs(rs, base, token, ctx, timeout):
         "hardwareCount":               hw_count,
         "storageTotalBytes":           size_total,
         "storageUsedBytes":            used_total,
+        "storageLockedBytes":          locked_total,
         "storageRetentionMinutesMin":  retention_min,
         "storages":                    storages,
     }
@@ -190,8 +279,22 @@ def collect(host, user, password, scheme, client_id, timeout, insecure):
         ctx.verify_mode    = ssl.CERT_NONE
 
     token = get_token(base, user, password, client_id, ctx, timeout)
-    rs_resp = api_get(base, token,
-                      "/api/rest/v1/recordingServers?disabled", ctx, timeout)
+
+    # One round-trip pulls every RS, their storages config, all parent
+    # hardware, and (transitively) the cameras under each hardware. If the
+    # server rejects the deep include (older API versions, or a quirk where
+    # only single-level children are honoured), fall back to the flat RS
+    # list — collect_rs handles the missing-child case by sub-fetching.
+    deep_url = ("/api/rest/v1/recordingServers"
+                "?disabled&includeChildren=storages,hardware,cameras")
+    try:
+        rs_resp = api_get(base, token, deep_url, ctx, timeout)
+    except Exception as e:
+        logging.warning("deep includeChildren rejected (%s); "
+                        "falling back to flat /recordingServers list", e)
+        rs_resp = api_get(base, token,
+                          "/api/rest/v1/recordingServers?disabled",
+                          ctx, timeout)
     rs_list = rs_resp.get("array", []) or []
 
     out_array     = []
@@ -213,6 +316,9 @@ def collect(host, user, password, scheme, client_id, timeout, insecure):
                 "path":             s["path"],
                 "sizeBytes":        s["sizeBytes"],
                 "usedBytes":        s["usedBytes"],
+                "lockedUsedBytes":  s["lockedUsedBytes"],
+                "isMounted":        s["isMounted"],
+                "isAvailable":      s["isAvailable"],
                 "retentionMinutes": s["retentionMinutes"],
                 "default":          s["default"],
             })

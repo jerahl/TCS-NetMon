@@ -15,6 +15,8 @@ import { VoipPage } from "./pages/voip.jsx";
 import { MapPage } from "./pages/map.jsx";
 import { NetmonStatusPage } from "./pages/netmon_status.jsx";
 import { WirelessPage } from "./pages/wireless.jsx";
+import { CameraDetailPage } from "./pages/camera_detail.jsx";
+import { CamerasPage } from "./pages/cameras.jsx";
 import { XiqPage } from "./pages/xiq.jsx";
 import { SettingsPage } from "./pages/settings.jsx";
 import { RegistryPage } from "./pages/registry.jsx";
@@ -33,6 +35,10 @@ function parseRoute() {
   if (parts[0] === "switches") return { name: "switches", id: parts[1] || null, query };
   if (parts[0] === "nac") return { name: "nac", query };
   if (parts[0] === "surveillance") return { name: "surveillance", query };
+  // #/cameras is the fleet page (tree navigator + embedded detail); #/camera/:id
+  // is the standalone detail page, kept because links to it exist everywhere.
+  if (parts[0] === "cameras") return { name: "cameras", id: parts[1] || null, query };
+  if (parts[0] === "camera" && parts[1]) return { name: "camera", id: parts[1], query };
   if (parts[0] === "events") return { name: "events", query };
   if (parts[0] === "problems") return { name: "problems", query };
   if (parts[0] === "voip") return { name: "voip", query };
@@ -64,6 +70,8 @@ const CRUMBS = {
   nac: "NAC", events: "Events", problems: "Problems", map: "Site Map",
   "netmon-status": "NetMon Status", registry: "Registry", settings: "Settings",
   ap: "AP Detail",
+  cameras: "Cameras",
+  camera: "Camera Detail",
 };
 
 // ZCD's topbar (spec 14 §2 row 1): breadcrumb, search, refresh. Ported to
@@ -114,7 +122,7 @@ function App() {
   let page, active;
   if (route.name === "switches") { page = <SwitchesPage id={route.id} query={route.query} />; active = "switches"; }
   else if (route.name === "nac") { page = <NacPage query={route.query} />; active = "nac"; }
-  else if (route.name === "surveillance") { page = <SurveillancePage />; active = "surveillance"; }
+  else if (route.name === "surveillance") { page = <SurveillancePage query={route.query} />; active = "surveillance"; }
   else if (route.name === "events") { page = <EventsPage />; active = "events"; }
   else if (route.name === "problems") { page = <ProblemsPage />; active = "problems"; }
   else if (route.name === "voip") { page = <VoipPage />; active = "voip"; }
@@ -125,6 +133,8 @@ function App() {
   else if (route.name === "settings") { page = <SettingsPage />; active = "settings"; }
   else if (route.name === "registry") { page = <RegistryPage />; active = "registry"; }
   else if (route.name === "ap") { page = <ApDetailPage id={route.id} />; active = "wireless"; }
+  else if (route.name === "cameras") { page = <CamerasPage id={route.id} query={route.query} />; active = "cameras"; }
+  else if (route.name === "camera") { page = <CameraDetailPage id={route.id} />; active = "cameras"; }
   else { page = <GlobalPage />; active = "global"; }
 
   // The map is a full-bleed NOC view — no content padding.

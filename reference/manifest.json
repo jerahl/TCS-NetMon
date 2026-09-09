@@ -1,0 +1,222 @@
+{
+    "manifest_version": 2.0,
+    "id": "tcs_dashboard",
+    "name": "TCS Dashboard",
+    "version": "1.3.0",
+    "namespace": "TcsDashboard",
+    "description": "Custom-skinned operations dashboards for Zabbix (TCS / Extreme / PacketFence / Milestone XProtect).",
+    "author": "TCS Networking",
+    "url": "",
+    "actions": {
+        "tcs.global.view": {
+            "class": "ActionGlobal",
+            "view": "global.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.global.data": {
+            "class": "ActionGlobalData",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.search.data": {
+            "class": "ActionSearchData",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.dashboard.view": {
+            "class": "ActionDashboard",
+            "view": "dashboard.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.dashboard.data": {
+            "class": "ActionDashboardData",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.surveillance.view": {
+            "class": "ActionSurveillance",
+            "view": "surveillance.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.surveillance.data": {
+            "class": "ActionSurveillanceData",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.switches.view": {
+            "class": "ActionSwitches",
+            "view": "switches.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.xiq.view": {
+            "class": "ActionXiq",
+            "view": "xiq.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.xiq.data": {
+            "class": "ActionXiqData",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.switches.fleet.data": {
+            "class": "ActionSwitchesFleetData",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.switches.snapshot.data": {
+            "class": "ActionSwitchesSnapshotData",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.switches.port.history.data": {
+            "class": "ActionSwitchesPortHistoryData",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.switches.xiq.data": {
+            "class": "ActionSwitchesXiqData",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.servers.view": {
+            "class": "ActionServers",
+            "view": "servers.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.servers.data": {
+            "class": "ActionServersData",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.problems.view": {
+            "class": "ActionProblems",
+            "view": "problems.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.problems.data": {
+            "class": "ActionProblemsData",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.events.view": {
+            "class": "ActionEvents",
+            "view": "events.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.events.data": {
+            "class": "ActionEventsData",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.events.update": {
+            "class": "ActionEventsUpdate",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.camera.view": {
+            "class": "ActionCamera",
+            "view": "camera.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.camera.data": {
+            "class": "ActionCameraData",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.camera.snapshot": {
+            "class": "ActionCameraSnapshot",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.server.view": {
+            "class": "ActionServer",
+            "view": "server.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.switch.cyclepoe": {
+            "class": "ActionSwitchCyclePoe",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.xiq.ap.reboot": {
+            "class": "ActionXiqApReboot",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.pf.device": {
+            "class": "ActionPfDevice",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.pf.clients.view": {
+            "class": "ActionPfClients",
+            "view": "pf.clients.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.pf.nac.view": {
+            "class": "ActionPfNac",
+            "view": "pf.nac.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.pf.sessions.view": {
+            "class": "ActionPfSessions",
+            "view": "pf.sessions.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.pf.quarantine.view": {
+            "class": "ActionPfQuarantine",
+            "view": "pf.quarantine.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.pf.status.view": {
+            "class": "ActionPfStatus",
+            "view": "pf.status.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.voip.view": {
+            "class": "ActionVoip",
+            "view": "voip.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.voip.data": {
+            "class": "ActionVoipData",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.voip.calls.data": {
+            "class": "ActionVoipCallsData",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.voip.top.data": {
+            "class": "ActionVoipTopData",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.fortigate.view": {
+            "class": "ActionFortigate",
+            "view": "fortigate.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.fortigate.data": {
+            "class": "ActionFortigateData",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.xdr.view": {
+            "class": "ActionXdr",
+            "view": "xdr.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.zbx.status.view": {
+            "class": "ActionZbxStatus",
+            "view": "zbx.status.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.zbx.status.data": {
+            "class": "ActionZbxStatusData",
+            "layout": "layout.json",
+            "view": null
+        }
+    }
+}

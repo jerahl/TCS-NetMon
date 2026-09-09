@@ -1,0 +1,262 @@
+zabbix_export:
+  version: '7.0'
+  templates:
+    - template: 'Extreme EXOS by SNMP'
+      name: 'Extreme EXOS by SNMP'
+      discovery_rules:
+        # ─────────────────────────────────────────────────────────────
+        # Per-stack-member CPU utilization.
+        #
+        # Walks extremeCpuMonitorSystemTable (1.3.6.1.4.1.1916.1.32.1.4)
+        # — one row per slot. {#SNMPVALUE} resolves to the slot id and is
+        # also used as the OID index suffix.
+        # ─────────────────────────────────────────────────────────────
+        - uuid: a31c6f8b4e9d4f53a2b8c41f2e6d9013
+          name: 'CPU Discovery'
+          type: SNMP_AGENT
+          snmp_oid: 'discovery[{#SNMPVALUE},1.3.6.1.4.1.1916.1.32.1.4.1.1]'
+          key: cpu.discovery
+          delay: 1h
+          description: |
+            EXTREME-SOFTWARE-MONITOR-MIB::extremeCpuMonitorSystemTable
+            One row per stack member; reports the slot's aggregate CPU.
+          item_prototypes:
+            - uuid: 11b2f7d04c9442f0a91e30e8b6d52c41
+              name: 'CPU {#SNMPVALUE}: utilization (1m)'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.1916.1.32.1.4.1.8.{#SNMPINDEX}'
+              key: 'system.cpu.util[extremeCpuMonitorSystemUtilization1min.{#SNMPINDEX}]'
+              value_type: FLOAT
+              units: '%'
+              description: |
+                MIB: EXTREME-SOFTWARE-MONITOR-MIB
+                CPU utilization (1-minute average) of stack member {#SNMPVALUE}.
+              preprocessing:
+                - type: TRIM
+                  parameters:
+                    - ' '
+              tags:
+                - tag: component
+                  value: cpu
+                - tag: 'Stack Member'
+                  value: '{#SNMPVALUE}'
+              trigger_prototypes:
+                - uuid: 2cd16a83fb7c4e9d8b2a9d6c1f3b4e07
+                  expression: 'min(/Extreme EXOS by SNMP/system.cpu.util[extremeCpuMonitorSystemUtilization1min.{#SNMPINDEX}],5m)>{$CPU.UTIL.CRIT}'
+                  name: 'CPU {#SNMPVALUE}: High CPU utilization'
+                  event_name: 'CPU {#SNMPVALUE}: utilization >{$CPU.UTIL.CRIT}% for 5m'
+                  priority: AVERAGE
+                  description: 'Per-member CPU utilization too high.'
+                  tags:
+                    - tag: scope
+                      value: performance
+            - uuid: 41e9d8c3a07b4f12b6a1c0e8d29f3b54
+              name: 'CPU {#SNMPVALUE}: utilization (5m)'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.1916.1.32.1.4.1.9.{#SNMPINDEX}'
+              key: 'system.cpu.util[extremeCpuMonitorSystemUtilization5min.{#SNMPINDEX}]'
+              value_type: FLOAT
+              units: '%'
+              description: |
+                MIB: EXTREME-SOFTWARE-MONITOR-MIB
+                CPU utilization (5-minute average) of stack member {#SNMPVALUE}.
+              preprocessing:
+                - type: TRIM
+                  parameters:
+                    - ' '
+              tags:
+                - tag: component
+                  value: cpu
+                - tag: 'Stack Member'
+                  value: '{#SNMPVALUE}'
+
+        # ─────────────────────────────────────────────────────────────
+        # Per-stack-member temperature, EXOS image version.
+        #
+        # Extends the existing Stack Discovery rule (key: stack.discovery)
+        # with three more prototypes. The discovery rule itself is already
+        # defined in the base template — these item_prototypes need to be
+        # appended to it.
+        # ─────────────────────────────────────────────────────────────
+        - uuid: ce3233fe9d0740129136b1f8826551c7  # match base template's stack.discovery
+          name: 'Stack Discovery'
+          type: SNMP_AGENT
+          snmp_oid: 'discovery[{#SNMPVALUE},1.3.6.1.4.1.1916.1.33.2.1.1]'
+          key: stack.discovery
+          delay: 1h
+          item_prototypes:
+            - uuid: c5a72f1e0d8b46e3a14b2f8e6c9d3a17
+              name: 'Stack Member {#SNMPVALUE}: EXOS image version'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.1916.1.33.2.1.7.{#SNMPINDEX}'
+              key: 'system.hw.firmware[extremeStackMemberCurImageVersion.{#SNMPINDEX}]'
+              delay: 1h
+              trends: '0'
+              value_type: CHAR
+              description: |
+                MIB: EXTREME-STACKING-MIB
+                Current image version running on stack member {#SNMPVALUE}.
+              preprocessing:
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 12h
+              tags:
+                - tag: component
+                  value: firmware
+                - tag: 'Stack Member'
+                  value: '{#SNMPVALUE}'
+            - uuid: 7a18c2d549b14f6398bc12a3e6f9d4b8
+              name: 'Stack Member {#SNMPVALUE}: temperature'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.1916.1.33.2.1.21.{#SNMPINDEX}'
+              key: 'sensor.temp.value[extremeStackMemberCurrentTemperature.{#SNMPINDEX}]'
+              value_type: FLOAT
+              units: °C
+              description: |
+                MIB: EXTREME-STACKING-MIB
+                Current temperature measured inside the device enclosure of
+                stack member {#SNMPVALUE}.
+              tags:
+                - tag: component
+                  value: temperature
+                - tag: 'Stack Member'
+                  value: '{#SNMPVALUE}'
+              trigger_prototypes:
+                - uuid: 8b3d6e0f29c64a7e9d12c8a4f7e1b5a30
+                  expression: 'avg(/Extreme EXOS by SNMP/sensor.temp.value[extremeStackMemberCurrentTemperature.{#SNMPINDEX}],5m)>{$TEMP_WARN}'
+                  recovery_expression: 'max(/Extreme EXOS by SNMP/sensor.temp.value[extremeStackMemberCurrentTemperature.{#SNMPINDEX}],5m)<{$TEMP_WARN}-3'
+                  name: 'Stack Member {#SNMPVALUE}: temperature above warning'
+                  event_name: 'Stack Member {#SNMPVALUE}: temperature >{$TEMP_WARN}°C'
+                  priority: WARNING
+                  description: 'Per-member temperature above the warning threshold.'
+                  dependencies:
+                    - name: 'Stack Member {#SNMPVALUE}: temperature above critical'
+                      expression: 'avg(/Extreme EXOS by SNMP/sensor.temp.value[extremeStackMemberCurrentTemperature.{#SNMPINDEX}],5m)>{$TEMP_CRIT}'
+                  tags:
+                    - tag: scope
+                      value: performance
+                - uuid: 9e4c1f0a83d745b29a6e3d8c2f1b7a014
+                  expression: 'avg(/Extreme EXOS by SNMP/sensor.temp.value[extremeStackMemberCurrentTemperature.{#SNMPINDEX}],5m)>{$TEMP_CRIT}'
+                  recovery_expression: 'max(/Extreme EXOS by SNMP/sensor.temp.value[extremeStackMemberCurrentTemperature.{#SNMPINDEX}],5m)<{$TEMP_CRIT}-3'
+                  name: 'Stack Member {#SNMPVALUE}: temperature above critical'
+                  event_name: 'Stack Member {#SNMPVALUE}: temperature >{$TEMP_CRIT}°C'
+                  priority: HIGH
+                  description: 'Per-member temperature above the critical threshold.'
+                  tags:
+                    - tag: scope
+                      value: availability
+                    - tag: scope
+                      value: performance
+
+        # ─────────────────────────────────────────────────────────────
+        # Per-slot chassis serial.
+        #
+        # Walks extremeSlotTable (1.3.6.1.4.1.1916.1.1.2.2) — on a stack
+        # this is populated with one row per stack member, indexed by
+        # slot number. Gives us the hardware serial per slot, which the
+        # Stack Health cards display alongside CPU/mem/temp.
+        # ─────────────────────────────────────────────────────────────
+        - uuid: 4d8b3f1c0e7a429cb6d8e215f3c9a8b2
+          name: 'Slot Inventory'
+          type: SNMP_AGENT
+          snmp_oid: 'discovery[{#SNMPVALUE},1.3.6.1.4.1.1916.1.1.2.2.1.1]'
+          key: slot.discovery
+          delay: 1h
+          description: |
+            EXTREME-SYSTEM-MIB::extremeSlotTable
+            One row per chassis slot; on a stack, one row per member.
+          item_prototypes:
+            - uuid: 3f6d9e8a1c2b41f5b3a7c0e8d4f9b620
+              name: 'Slot {#SNMPVALUE}: serial number'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.1916.1.1.2.2.1.6.{#SNMPINDEX}'
+              key: 'system.hw.serialnumber[extremeSlotModuleSerialNumber.{#SNMPINDEX}]'
+              delay: 1h
+              trends: '0'
+              value_type: CHAR
+              description: |
+                MIB: EXTREME-SYSTEM-MIB
+                Hardware serial number of the module in slot {#SNMPVALUE}.
+              preprocessing:
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 24h
+              tags:
+                - tag: component
+                  value: inventory
+                - tag: 'Stack Member'
+                  value: '{#SNMPVALUE}'
+
+        # ─────────────────────────────────────────────────────────────
+        # Fan slot mapping.
+        #
+        # Extends the existing FAN Discovery rule with one prototype that
+        # records extremeFanPositionSlotNum (.1.7) for each fan. The
+        # dashboard PHP cross-references this with the fan-speed items
+        # already created by the base template so it can group fans by
+        # stack member.
+        # ─────────────────────────────────────────────────────────────
+        - uuid: 1ed41878ed4a455c8a3871169225b8f6  # match base template's fan.discovery
+          name: 'FAN Discovery'
+          type: SNMP_AGENT
+          snmp_oid: 'discovery[{#SNMPVALUE},1.3.6.1.4.1.1916.1.1.1.9.1.1]'
+          key: fan.discovery
+          delay: 1h
+          item_prototypes:
+            - uuid: 6c2f7d1a4b8e459db3a6e0f8c1d92407
+              name: 'Fan {#SNMPVALUE}: position slot'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.1916.1.1.1.9.1.7.{#SNMPINDEX}'
+              key: 'sensor.fan.slot[extremeFanPositionSlotNum.{#SNMPINDEX}]'
+              delay: 1h
+              trends: '0'
+              description: |
+                MIB: EXTREME-SYSTEM-MIB
+                Slot number containing fan {#SNMPVALUE}. Used by the
+                dashboard to group fans by stack member.
+              preprocessing:
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 12h
+              tags:
+                - tag: component
+                  value: fan
+
+        # ─────────────────────────────────────────────────────────────
+        # PSU wattage.
+        #
+        # Extends the existing PSU Discovery with a wattage prototype.
+        # extremePowerSupplyTable has no slot field, so the dashboard
+        # uses a heuristic ({$PSU.PER.MEMBER}, default 2) to map PSU
+        # numbers to stack slots: PSU N belongs to slot
+        # ceil(N / {$PSU.PER.MEMBER}). Override on the host if your
+        # hardware has a different PSU layout.
+        # ─────────────────────────────────────────────────────────────
+        - uuid: f3211654d55c4c778817e82ed2c123b6  # match base template's psu.discovery
+          name: 'PSU Discovery'
+          type: SNMP_AGENT
+          snmp_oid: 'discovery[{#SNMPVALUE},1.3.6.1.4.1.1916.1.1.1.27.1.1]'
+          key: psu.discovery
+          delay: 1h
+          item_prototypes:
+            - uuid: 5e1a8c3f0d2b46789a4c1e6f8d3b720c
+              name: 'PSU {#SNMPVALUE}: wattage'
+              type: SNMP_AGENT
+              snmp_oid: '1.3.6.1.4.1.1916.1.1.1.27.1.12.{#SNMPINDEX}'
+              key: 'sensor.psu.wattage[extremePowerSupplyWattage.{#SNMPINDEX}]'
+              delay: 5m
+              units: W
+              description: |
+                MIB: EXTREME-SYSTEM-MIB
+                Total power available from PSU {#SNMPVALUE}.
+              tags:
+                - tag: component
+                  value: power
+                - tag: PSU
+                  value: '{#SNMPVALUE}'
+      macros:
+        # Default to 2 PSUs per stack member (5520/5320 layout). Override
+        # on the host if your stack runs single-PSU members.
+        - macro: '{$PSU.PER.MEMBER}'
+          value: '2'
+          description: 'PSUs per stack member; used by the dashboard to group PSUs by slot.'

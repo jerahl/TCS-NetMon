@@ -89,11 +89,16 @@ def ui_meta(
     cfg: Config = Depends(get_config),
     _user=Depends(require_role(Role.viewer)),
 ) -> UiMeta:
+    # Absent [milestone] section → empty host, and the Surveillance header
+    # omits the slot rather than showing a placeholder that looks like a name.
+    milestone = cfg.sources.get("milestone")
     return UiMeta(
         version=__version__,
         zabbix_url=cfg.web.zabbix_url,
         ssheasy_url=cfg.web.ssheasy_url,
+        carto_api_key=cfg.web.carto_api_key,
         packetfence_url=cfg.web.packetfence_url,
+        milestone_host=(milestone.settings.get("host", "") if milestone else ""),
         can_edit=cfg.security.allow_web_edit,
     )
 
@@ -163,6 +168,9 @@ def netmon_status(
 
     started_at = getattr(request.app.state, "started_at", None)
     sessions = getattr(request.app.state, "sessions", None)
+    # Set only when [milestone] ess_live is on; None keeps the field absent
+    # rather than reporting a disconnected stream that was never asked for.
+    ess_live = getattr(request.app.state, "ess_live", None)
     return NetmonStatus(
         version=__version__,
         started_at=(
@@ -178,4 +186,5 @@ def netmon_status(
         tasks=tasks,
         collectors=_collector_health_rows(engine),
         db=_db_stats(engine, sessions.count() if sessions is not None else 0),
+        ess_live=ess_live.status() if ess_live is not None else None,
     )

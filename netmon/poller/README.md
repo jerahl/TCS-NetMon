@@ -139,9 +139,31 @@ a collector-level error.
 
 ## Config (`[snmp_inventory]`)
 
-`enabled`, `snmpbulkwalk_path`, `concurrency`, and per-sweep `sweep_<name>` +
-`<name>_interval_s`. SNMP credentials/version are **reused from `[poller]`**. See
-`netmon.conf.example`.
+`enabled`, `snmpbulkwalk_path`, `concurrency`, `skip_snmp_down`, and per-sweep
+`sweep_<name>` + `<name>_interval_s`. SNMP credentials/version are **reused from
+`[poller]`**. See `netmon.conf.example`.
+
+## Cost, and the two rules that keep it honest
+
+Measured on the live fleet 2026-09-08 (157 switches, `concurrency = 8`), a pass
+with every sweep due is ~3,400 CPU-seconds of `snmpbulkwalk` spread over ~7x
+parallelism. `ports` and `poe` are ~37% each, `entity` ~12%, `fdb` ~7%. Full
+numbers and method: `docs/design/109-snmp-inventory-performance.md`.
+
+**A walk that did not finish is not data.** `snmpbulkwalk` exits 1 on timeout
+*after printing whatever it already received*, so a lost packet looks exactly
+like a short table. `_snmpbulkwalk` therefore raises `SnmpWalkError` on any
+non-zero exit and the switch is skipped for that sweep, keeping its last good
+rows and their old `updated_at`. Without this, replace-on-refresh pruned every
+row the truncated walk never reached — and stamped the survivors fresh.
+
+**Some OID columns are cheaper fetched as one table walk, and some are not.**
+`_WALK_TABLES` lists the ones that are, each with its measurement. Merging
+extremePethSlotTable's six columns is 22% faster on the `poe` pass; merging
+ifTable or entPhysicalTable measured 1.3-3.7x *slower*, because those tables
+carry ~3x the lines we want. Before adding an entry, measure both speed **and**
+equivalence: the stack table looked 15% faster and silently returned nothing on
+non-stacked switches, where the agent answers at the column OID as a scalar.
 
 ## Not yet collected (columns present, left NULL)
 

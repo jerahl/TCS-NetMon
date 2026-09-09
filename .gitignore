@@ -37,3 +37,8 @@ netmon.conf
 /xiq_devices.json
 /zbx_sites.json
 /topology.json
+
+# Vendor firmware images and documentation are kept outside the repo
+# (/var/lib/netmon/firmware). A gigabyte of Bosch binary does not belong in git.
+*.fw
+docs/RCP_doc_*.pdf

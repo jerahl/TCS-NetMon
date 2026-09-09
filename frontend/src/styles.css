@@ -13,13 +13,61 @@
  * offline-tolerance property). The `--sans`/`--mono` stacks below are ZCD's own,
  * unmodified, so where those faces are installed locally the rendering is
  * identical and elsewhere it falls back exactly as ZCD's stacks specify. No
- * <link> is added. Self-hosted woff2 is the follow-up (spec 18/G0).
+ * <link> is added. **Resolved (spec 20 S1, owner-approved 2026-09-07): the two
+ * families are now self-hosted from `frontend/fonts/` — see the @font-face
+ * block below.** Same faces ZCD renders, no CDN, no runtime fetch off-box.
  *
  * After the port: an alias block mapping NetMon's older token names onto the
  * ported ones, then NetMon's own component CSS — the ~210 classes (⌘K palette,
  * sparklines, action buttons, site map, switch faceplate) that have no ZCD
  * counterpart and so could not be ported from it.
  */
+
+/* ═══════════════ SELF-HOSTED FACES (spec 20 S1) ══════════════════════════
+ * ZCD pulls Inter + JetBrains Mono from fonts.googleapis.com in every
+ * *.view.php. NetMon vendors them instead: the files live in frontend/fonts/
+ * and esbuild copies them to netmon/web/fonts/ with the url()s below rewritten
+ * (build.mjs `.woff2` file loader). Upstream releases, OFL — licences sit
+ * beside the files.
+ *
+ * Inter ships as ONE variable file covering 100–900, which is both smaller
+ * than the four static weights it replaces (352 KB vs ~455 KB) and lets the
+ * `font-weight: 500` the design uses in a dozen places render as an actual
+ * 500 rather than snapping to 400 or 700. JetBrains Mono has no variable
+ * woff2 upstream, so its three used weights are static.
+ *
+ * `font-display: swap` — a NOC page must paint its numbers immediately; a
+ * blocking font fetch on a local file is unlikely but the fallback stacks are
+ * metrically close enough that the swap is not disruptive.
+ */
+@font-face {
+  font-family: "Inter";
+  src: url("../fonts/InterVariable.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("../fonts/JetBrainsMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("../fonts/JetBrainsMono-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("../fonts/JetBrainsMono-SemiBold.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
 
 /* ═══════════════ PORT BEGINS — reference/assets/styles.css verbatim ═══════ */
 
@@ -4535,6 +4583,23 @@ table.grid.kv td:first-child { color: var(--muted); width: 160px; }
 @keyframes blink { 50% { opacity: 0.3; } }
 .cam-tile .stamp { position: absolute; bottom: 8px; right: 8px; font-size: 9px; color: rgba(255,255,255,0.85); }
 
+/* Camera wall pager (48 tiles a page). Sits between the grid and the
+   explanatory footer, on its own hairline so it reads as a control strip
+   rather than as part of the last tile row. */
+.cam-wall-pager {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px 0;
+  border-top: 1px solid var(--line);
+  margin-top: 10px;
+}
+.cam-wall-pager .cwp-at {
+  font-size: 11px; color: var(--fg-2); font-family: var(--mono);
+}
+.cam-wall-pager .cwp-jump { margin-left: auto; display: flex; gap: 10px; }
+.cam-wall-pager .btn:disabled,
+.cam-wall-pager .linkish:disabled { opacity: 0.45; cursor: default; }
+.cam-wall-pager .linkish:disabled:hover { text-decoration: none; }
+
 /* Bird-eye dot for camera shape */
 .cam-tile.ptz .frame::before {
   content: ""; position: absolute; left: 50%; top: 50%;
@@ -4802,6 +4867,87 @@ kbd.k { font-family: var(--mono); font-size: 10px; background: var(--bg-2); bord
 .state-pill.ok   { background: rgba(52,211,153,0.10); border-color: rgba(52,211,153,0.30); color: var(--ok); }
 .state-pill.warn { background: rgba(245,179,0,0.10);  border-color: rgba(245,179,0,0.30);  color: var(--warn); }
 .state-pill.err  { background: rgba(242,95,92,0.12);  border-color: rgba(242,95,92,0.35);  color: var(--err); }
+
+/* ───────── S8: bulk camera operations ───────── */
+
+/* The gates between a click and a camera being flashed, in the order the code
+   checks them. Closed ones are tinted rather than hidden: "why is the button
+   disabled" deserves an answer on the page. */
+.gate-strip { display: flex; flex-wrap: wrap; gap: 8px; }
+.gate {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 10.5px; padding: 3px 9px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--bg-2);
+}
+.gate.shut { border-color: rgba(245,179,0,0.35); background: rgba(245,179,0,0.07); }
+.gate .gl { color: var(--fg-2); font-family: var(--mono); }
+.gate .gv { color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; }
+.link-tbl tr.sel td { background: rgba(52,152,219,0.10); }
+.link-tbl tr.sel td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+.warn-text { color: var(--warn); }
+
+/* The school selector on the firmware picker. A roll goes site by site, so the
+   chips double as a map of where the work is: the number is what is still
+   eligible, and a school with none is dimmed rather than hidden — "this one is
+   done" is worth reading. */
+.school-picker { display: flex; flex-direction: column; gap: 8px; }
+.school-picker .sp-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted);
+}
+.school-picker .cfb-select { max-width: 380px; }
+.sp-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.sp-chip {
+  font: inherit; font-size: 10.5px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--bg-2); color: var(--fg-2);
+}
+.sp-chip:hover { border-color: var(--line-2); background: var(--bg-3); }
+.sp-chip.active { border-color: var(--accent); color: var(--fg); }
+.sp-chip.done { opacity: 0.45; }
+.sp-chip b { font-family: var(--mono); color: var(--fg); }
+.sp-chip.done b { color: var(--muted); }
+
+/* ───────── S6: sites / storage / alarm actions ───────── */
+
+/* Configured-capacity cell. The bar compares recorders (or schools) to each
+   other — there is no consumed figure to make a percentage from — so it is
+   deliberately a different colour from the ok/warn utilisation bars, and the
+   words "used —" travel with it. */
+.cap-cell { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.cap-cell .util-bar {
+  display: inline-block; width: 60px; height: 6px;
+  background: var(--bg-3); border-radius: 3px; overflow: hidden;
+  vertical-align: middle;
+}
+.cap-cell .util-bar i { display: block; height: 100%; background: var(--accent); opacity: 0.65; }
+.nvr-tbl .cap-cell .util-bar { width: 52px; }
+
+/* The chevron that opens a school's cameras. */
+.link-tbl .chev {
+  color: var(--muted); text-decoration: none; font-size: 15px; line-height: 1;
+  padding: 0 4px;
+}
+.link-tbl .chev:hover { color: var(--accent); }
+
+/* Fleet storage: ring slot beside its explanation. When there is no fraction
+   to draw, the slot carries the configured total instead of an invented arc. */
+.fleet-storage { display: flex; gap: 18px; align-items: center; padding: 4px 0; }
+.fleet-storage .fleet-note { font-size: 11.5px; color: var(--fg-2); line-height: 1.55; }
+.fleet-nofrac {
+  width: 96px; height: 96px; flex: none;
+  border: 1px dashed var(--line-2); border-radius: 50%;
+  display: grid; place-items: center; text-align: center;
+}
+.fleet-nofrac .v { font-size: 15px; color: var(--fg); }
+.fleet-nofrac .k {
+  font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px;
+}
+
+/* Alarm rows with working row actions need a column for them. */
+.alarm-row.has-act { grid-template-columns: 90px 60px 70px 130px 1fr 110px auto; }
+.alarm-row .act { display: flex; gap: 6px; justify-content: flex-end; }
+.alarm-row .act .btn { padding: 2px 8px; font-size: 10px; }
 
 .rec-pill {
   display: inline-block; font-size: 10.5px; padding: 1px 8px; border-radius: 10px;
@@ -6063,3 +6209,141 @@ kbd.k { font-family: var(--mono); font-size: 10px; background: var(--bg-2); bord
   margin-right: 6px;
 }
 .dur-bar > div { height: 100%; background: var(--pf); }
+
+/* ───────── Small button (spec 20 S1) ─────────
+ * `.btn.btn-sm` was already used by the camera detail page and the camera
+ * table's row action, but never defined — so a "Detail" affordance inside an
+ * 11.5px table row rendered at full button size and broke the row rhythm.
+ * ZCD writes this variant as `.btn.sm`; both spellings resolve here so a
+ * component ported verbatim from `reference/` keeps working.
+ */
+.btn.btn-sm, .btn.sm {
+  font-size: 9.5px;
+  padding: 3px 8px;
+  gap: 4px;
+}
+
+/* ───────── Alarm feed row (spec 20 S1) ─────────
+ * `.alarm-row` comes from surveillance.css and assumes ZCD's six-column shape
+ * (timestamp, severity label, dot, object, message, site). NetMon's severity
+ * text is rendered by <SevText> rather than ZCD's fixed-width `.sev` chip, so
+ * the second column needs its own width or the grid collapses the label.
+ */
+.alarm-row > *:nth-child(2) { font-size: 10px; font-weight: 600; }
+.alarm-row .msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.alarm-row .obj a { color: var(--accent); text-decoration: none; }
+.alarm-row .obj a:hover { text-decoration: underline; }
+
+/* ═══════════ Camera detail (spec 20 S5) ═══════════
+ * ZCD's `tcs.camera.view` lays the page out as `320px 1fr` with an inline
+ * style: preview and physical facts pinned left, the active tab's cards right.
+ * As CSS instead, because this page also renders *inside* the Cameras page's
+ * right pane (behind a 380px navigator) and has to collapse there rather than
+ * squeeze the cards to nothing.
+ */
+.cam-detail-cols {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 14px;
+  align-items: start;
+  margin-top: 14px;
+}
+.cam-detail-side { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.cam-detail-main { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+/* Two rails plus two columns stops fitting well before a phone: the navigator
+ * is 380px and the sidecar 320px, so the sidecar stacks first. */
+@media (max-width: 1500px) {
+  .cam-detail-cols { grid-template-columns: 1fr; }
+}
+
+/* The preview frame. ZCD paints a decorative gradient here, which on a NOC wall
+ * reads as a dark scene — i.e. as though the camera were working. Until the
+ * snapshot proxy exists (D7) the frame says what it is instead. */
+.cam-preview-empty {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; padding: 18px; text-align: center;
+  background:
+    repeating-linear-gradient(135deg, rgba(255,255,255,0.02) 0 8px, transparent 8px 16px),
+    var(--bg-2);
+}
+.cam-preview-empty .cpe-title {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 1.5px;
+  text-transform: uppercase; color: var(--muted);
+}
+.cam-preview-empty .cpe-sub { font-size: 10.5px; color: var(--muted-2); line-height: 1.45; }
+
+/* Overlays carry facts NetMon actually has — the camera's name and its
+ * configured stream — in ZCD's corners. */
+.cam-preview-overlay {
+  position: absolute; font-family: var(--mono); font-size: 9.5px;
+  color: rgba(255,255,255,0.85); text-shadow: 0 1px 2px rgba(0,0,0,0.9);
+  pointer-events: none;
+}
+.cam-preview-overlay.tl { top: 8px; left: 10px; color: #fff; }
+.cam-preview-overlay.bl { bottom: 8px; left: 10px; }
+.cam-preview-overlay.br {
+  bottom: 8px; right: 10px; color: #fff;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.rec-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--err); box-shadow: 0 0 6px var(--err);
+  animation: blink 1.4s infinite;
+}
+
+/* Transition strip — ZCD's "Live Telemetry · 24h" slot. Sparklines there; a
+ * change log here, because `state_events` is per-device and a 2,662-series
+ * ring buffer is not something D3 permits. */
+.tl-strip { display: flex; flex-direction: column; }
+.tl-item {
+  display: grid; grid-template-columns: 10px 90px 1fr;
+  gap: 10px; align-items: center;
+  padding: 7px 14px; border-bottom: 1px solid var(--line);
+  font-size: 11.5px;
+}
+.tl-item:last-child { border-bottom: 0; }
+.tl-item:hover { background: var(--bg-2); }
+.tl-dot { width: 8px; height: 8px; border-radius: 50%; }
+.tl-when { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+.tl-what { color: var(--fg-2); }
+.tl-what b { color: var(--fg); font-weight: 600; }
+
+/* `.stat-grid` already defaults to four columns; naming it makes the intent
+ * explicit alongside the cols-3 / cols-6 variants surveillance.css defines. */
+.stat-grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
+@media (max-width: 1100px) {
+  .stat-grid.cols-4 { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* Trend rows — ZCD's "Live Ingress · 24h" slot (spec 20 S2). One labelled
+ * sparkline per reachability tier rather than ZCD's single area chart, because
+ * the tiers are five different questions and overlaying them would hide the
+ * small ones under `up`. */
+.trend-rows { display: flex; flex-direction: column; }
+.trend-row {
+  display: grid; grid-template-columns: 150px 1fr 60px;
+  gap: 12px; align-items: center;
+  padding: 6px 0; border-bottom: 1px solid var(--line);
+}
+.trend-row:last-child { border-bottom: 0; }
+.trend-row .trend-label {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11.5px; color: var(--fg-2);
+}
+.trend-row .trend-val { font-size: 12px; text-align: right; color: var(--fg); font-weight: 600; }
+.trend-row .spark { width: 100%; }
+
+/* Camera-wall tile note (spec 20 S4). A tile that cannot show a still says why
+ * — "proxy disabled", "no profile for this driver", "imager 2 of a shared
+ * device" are all different problems and a blank frame conflates them with a
+ * dead camera. */
+.cam-tile-note {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: 10px; text-align: center;
+  font-family: var(--mono); font-size: 9px; line-height: 1.4;
+  color: var(--muted); background: var(--bg-2);
+  text-transform: none; letter-spacing: 0;
+}
+.cam-tile .ts { font-size: 11px; text-shadow: none; }

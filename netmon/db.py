@@ -8,6 +8,7 @@ helpers so call sites stay boring.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import create_engine, text
@@ -27,17 +28,43 @@ def make_engine(url: str) -> Engine:
     return create_engine(url, pool_pre_ping=True, future=True, connect_args=connect_args)
 
 
+def _plain(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Row as a dict, with ``Decimal`` reduced to ``int``/``float``.
+
+    MariaDB returns ``SUM()`` as ``Decimal``, and FastAPI serialises a
+    ``Decimal`` as a JSON **string**. Every count computed with SUM therefore
+    reached the browser quoted, where JavaScript's ``+`` concatenates instead of
+    adding: a site with 1 camera down and 0 unreachable rendered a badge of
+    "10", and ``"0"`` being truthy made every tile red.
+
+    This cannot be caught on SQLite, which returns a plain int for SUM, and a
+    value assertion passes on both backends because ``Decimal("1") == 1``. So
+    the fix belongs here rather than at each call site: the type only misbehaves
+    once it crosses into JSON, which is far from where the SQL was written.
+
+    Integral values become ``int`` so counts stay counts; anything with a
+    fractional part becomes ``float``. ``COUNT()`` already returns int and is
+    untouched.
+    """
+    out: dict[str, Any] = {}
+    for key, value in row.items():
+        if isinstance(value, Decimal):
+            value = int(value) if value == value.to_integral_value() else float(value)
+        out[key] = value
+    return out
+
+
 def fetch_all(engine: Engine, sql: str, params: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
     """Run a SELECT and return rows as plain dicts."""
     with engine.connect() as conn:
         result = conn.execute(text(sql), params or {})
-        return [dict(row) for row in result.mappings()]
+        return [_plain(row) for row in result.mappings()]
 
 
 def fetch_one(engine: Engine, sql: str, params: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
     with engine.connect() as conn:
         row = conn.execute(text(sql), params or {}).mappings().first()
-        return dict(row) if row is not None else None
+        return _plain(row) if row is not None else None
 
 
 def execute(engine: Engine, sql: str, params: Mapping[str, Any] | Iterable[Mapping[str, Any]] | None = None) -> int:

@@ -153,6 +153,46 @@ def build_voip(engine: Engine) -> dict[str, float]:
             "voip.trunks_registered": float(row.get("reg") or 0)}
 
 
+def build_surveillance(engine: Engine) -> dict[str, float]:
+    """Camera reachability by tier, for the Surveillance overview's 24h chart.
+
+    Six series, not 2,662: the ring buffer is deliberately low-cardinality
+    (D3), so what is sampled is the *estate's* shape over time. Per-camera
+    history is `state_events`, which the camera detail page reads directly.
+
+    Each tier is its own series rather than one "down" line, because the tiers
+    do not move together — a switch outage moves `down_confirmed`, a recording
+    server losing its cameras moves `down_source_only`, and telling those apart
+    on a chart is the point (spec 19 §13).
+    """
+    rows = db.fetch_all(
+        engine,
+        "SELECT reach.value AS tier, COUNT(*) AS n FROM cameras c "
+        "JOIN devices d ON d.id = c.device_id AND d.enabled = 1 "
+        "LEFT JOIN device_state reach ON reach.device_id = c.device_id "
+        "  AND reach.dimension = 'reachability' GROUP BY reach.value",
+    )
+    by = {(r["tier"] or "unknown"): float(r["n"] or 0) for r in rows}
+    blind = _scalar(
+        engine,
+        "SELECT COUNT(*) FROM cameras c JOIN device_state s "
+        "  ON s.device_id = c.device_id AND s.dimension = 'source_status' "
+        "WHERE s.value = 'blind'")
+    return {
+        "surveillance.cameras_total": sum(by.values()),
+        "surveillance.cameras_up": by.get("up", 0.0),
+        "surveillance.down_confirmed": by.get("down_confirmed", 0.0),
+        "surveillance.down_source_only": by.get("down_source_only", 0.0),
+        "surveillance.down_network_only": by.get("down_network_only", 0.0),
+        "surveillance.blind": blind,
+        "surveillance.recording": _scalar(
+            engine,
+            "SELECT COUNT(*) FROM cameras c JOIN device_state s "
+            "  ON s.device_id = c.device_id AND s.dimension = 'recording' "
+            "WHERE s.value = 'up'"),
+    }
+
+
 def build_misc(engine: Engine) -> dict[str, float]:
     return {
         "wireless.clients": _scalar(engine, "SELECT COUNT(*) FROM wireless_clients"),
@@ -178,7 +218,8 @@ def build_switches(engine: Engine) -> dict[str, float]:
 
 def build_all(engine: Engine) -> dict[str, float]:
     values: dict[str, float] = {}
-    for fn in (build_fleet, build_alerts, build_voip, build_misc, build_switches):
+    for fn in (build_fleet, build_alerts, build_voip, build_misc, build_switches,
+               build_surveillance):
         values.update(fn(engine))
     return values
 

@@ -2,11 +2,12 @@
   "name": "netmon-frontend",
   "version": "0.1.0",
   "private": true,
-  "description": "TCS NetMon React UI (esbuild → static, served by FastAPI).",
+  "description": "TCS NetMon React UI (esbuild \u2192 static, served by FastAPI).",
   "type": "module",
   "scripts": {
-    "build": "node build.mjs",
-    "watch": "node build.mjs --watch"
+    "build": "node build.mjs && node render-check.mjs",
+    "watch": "node build.mjs --watch",
+    "render-check": "node render-check.mjs"
   },
   "dependencies": {
     "leaflet": "1.9.4",

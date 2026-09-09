@@ -10,6 +10,11 @@
 # This is stdlib configparser (INI) syntax. Values are read by
 # netmon/config.py, which validates required keys and fails loud on missing
 # secrets.
+#
+# Values are taken LITERALLY: string interpolation is switched off, so a `%` in
+# a password is a `%` and must NOT be doubled. (With the default on, `%%` in a
+# camera password was delivered as a single `%` and the camera answered 401 —
+# fixed 2026-09-08. If you escaped a `%` as `%%` in an earlier config, undo it.)
 
 [db]
 # SQLAlchemy URL. Production is MariaDB via the PyMySQL driver; dev/test may
@@ -41,6 +46,22 @@ session_ttl = 43200
 # only builds a host/port target — credentials are entered in the terminal,
 # never handled here. Leave empty to hide the affordance.
 # ssheasy_url = https://ssheasy.example.internal
+
+# CARTO Basemaps API key for the site map's raster tiles (spec 09).
+#
+# Without it CARTO stamps every tile "API KEY REQUIRED", which is what the map
+# showed until 2026-09-08. Get a free key at carto.com/basemaps/apikey — the
+# free tier is 5,000,000 tile requests a calendar month, in exchange for
+# keeping the CARTO and OpenStreetMap attribution visible on the map (the map
+# page renders it; do not remove it).
+#
+# This key reaches the browser through /api/meta, because it is a query
+# parameter on a tile URL — there is no way to use it server-side. It still
+# belongs here rather than in the repo: a committed key is in git history and
+# indexed forever, and this one carries a quota and a no-sharing term.
+#
+# Empty → the map still works, watermarked, rather than losing its basemap.
+# carto_api_key = REPLACE_WITH_CARTO_BASEMAPS_KEY
 # Base URL of the PacketFence ADMIN UI (not the REST API base in [packetfence]
 # — on a normal deployment those are different ports). Used to deep-link an
 # endpoint as <packetfence_url>/admin/#/node/<mac> from AP and port detail.
@@ -127,6 +148,13 @@ enabled = false
 in_process = true
 ping_interval_s = 60
 snmp_interval_s = 300
+# Device types the ICMP sweep skips (comma-separated; empty sweeps everything).
+# Empty by default. Cameras were excluded while the device_down rule could read
+# their ICMP silence as an outage — 193 of 2,649 never answer while Milestone
+# reports them recording — and migration 023 scopes that rule by device type
+# instead, so the sweep records the fact and the engine declines to misread it.
+ping_exclude_device_types =
+
 # Hysteresis: consecutive failures to declare DOWN / successes to declare UP.
 fail_threshold = 3
 ok_threshold = 2
@@ -149,6 +177,15 @@ enabled = false
 # snmpbulkwalk_path = snmpbulkwalk
 # Switches swept concurrently (bounded so a fleet sweep finishes in-interval).
 concurrency = 8
+# Skip switches the native poller currently reports as NOT answering SNMP.
+# A silent host costs a full timeout (snmp_timeout_s x snmp_retries) on every
+# OID root and returns nothing: measured 361s a pass on two such switches out
+# of 157. Their inventory rows then age without refresh, which the UI badges
+# honestly, and the sweep resumes on its own within one poll of the host
+# answering again. Only a fresh, uncontested `snmp = down` verdict skips --
+# never an unknown, a stale one, or a shared management address.
+# Set false to sweep every registered switch regardless.
+skip_snmp_down = true
 # Hard budget (seconds) for ONE full run — all due sweeps across the fleet.
 # The first run after startup has every sweep due at once and legitimately
 # outlives ports_interval_s; overrunning an interval just delays the next
@@ -215,8 +252,40 @@ scheme = https
 client_id = GrantValidatorClient
 verify_ssl = true
 interval_s = 120
-# Live Events/State WebSocket wiring needs the `websockets` dependency
-# (owner approval pending); the Config-API poll above provides state until then.
+# Camera MAC/serial/firmware backfill. These live in
+# /hardware/{id}/hardwareDriverSettings, which has no collection form — one
+# request per hardware record, ~300ms each — so each cycle fetches at most this
+# many of the records still missing a MAC. 150 at a 120s interval fills ~2,500
+# hardware in about half an hour and then costs nothing, because the values are
+# static and already known. Set to 0 to disable the backfill entirely; the rest
+# of the cycle is unaffected and MACs already stored are kept.
+identity_batch = 150
+identity_concurrency = 6
+# Live Events/State subscription (spec 20 S7). Default OFF.
+#
+# With this false, the cycle above opens the ESS socket once per interval, reads
+# ~16,500 states out of one getState reply and closes it — so a camera that
+# stops talking is invisible for up to `interval_s`. With it true, a supervised
+# task holds the subscription open and applies camera `source_status` as the
+# events arrive, reconnecting with back-off and re-applying a full snapshot each
+# time it reconnects.
+#
+# Measured on this estate 2026-09-08: ~61 frames/s, ~200 events/s, of which over
+# 99% are motion and recording churn that is deliberately dropped — only
+# Communication* events move state. Deltas are coalesced and written once per
+# `ess_live_flush_s`, never per event.
+#
+# The 120s snapshot keeps running either way and repairs anything the stream
+# missed while reconnecting; both derive the same dimension from the same
+# interface, so they agree, and `write_states` logs a transition only when a
+# value actually moves.
+ess_live = false
+# How often staged deltas are written. Lower is fresher and chattier.
+ess_live_flush_s = 5
+# Reconnect if no frame arrives in this long. Higher than ws.py's 60s default on
+# purpose: overnight the motion traffic that dominates the stream stops, and a
+# 60s watchdog would force a needless 4 MB resync every minute until dawn.
+ess_live_watchdog_s = 180
 
 [threecx]
 # 3CX v20 REST API (voice). Read-only. OAuth2 client-credentials.
@@ -299,3 +368,126 @@ poe_snippet_id = 4
 # Minimum role: operator or admin. `viewer` is refused at startup — a read-only
 # role must never be able to reboot an AP.
 min_role = operator
+
+[camera_ops]
+# Bulk camera operations — firmware update and (later) configuration change.
+# Spec 20 S8, gate D11. THE MOST DANGEROUS THING NETMON CAN DO: a wrong image
+# bricks a camera and costs a truck roll, so every default here is off.
+#
+# Not built yet beyond pre-flight and planning; there is no executor. These keys
+# exist so the shape is reviewable before anything can send.
+enabled = false
+# Walks every check and records what it *would* do, sending nothing. Stays true
+# until the owner has watched a batch behave on a lab/spare camera.
+dry_run = true
+# Per operation, because they carry different risk. The setting catalogue is
+# deferred, so config_change has nothing to run yet.
+config_change = false
+firmware_update = false
+#
+# A PRIVILEGED camera account — by default NOT the read-only one in
+# [camera_snapshot], which is documented as unable to change camera
+# configuration. Both are SECRETS.
+# user = netmon-ops
+# pass = REPLACE_WITH_PRIVILEGED_CAMERA_PASSWORD
+#
+# Or borrow [camera_snapshot]'s account instead of provisioning a second one.
+# Off by default and deliberately explicit — that section calls its credential
+# read-only, so using it for writes has to be something somebody typed rather
+# than a fallback that happens quietly. Setting both `user` and this is refused
+# at load, so it is always unambiguous which account writes to a camera.
+use_snapshot_credentials = false
+#
+# THE PROVING GROUND, enforced rather than remembered. While this is set,
+# pre-flight refuses every camera except this device id — whatever a batch asks
+# for. It exists because deferring the setting catalogue means firmware is the
+# first thing this machinery does, and the first live batches belong on one
+# nominated camera rather than on a school.
+#
+# 0 = no restriction. Set an id while proving a new vendor, a new platform or a
+# new image; clear it once one camera has gone through and verified. Note what
+# clearing it changes: the canary stops being a camera somebody chose in advance
+# and becomes the first camera of whatever batch is created.
+proving_device_id = 0
+#
+# Vetted firmware images, one directory per vendor, outside the repo for the
+# same reason credentials are. Each image is registered in `firmware_images`
+# with a SHA-256 and a model allow-list; a push refuses any camera not on it.
+#
+# The store must be READABLE BY THE SERVICE USER. An image uploaded through the
+# page is written by that user and is fine by construction; one dropped on disk
+# by hand is not, and a root-owned 0640 file is what made the deploy button
+# answer HTTP 500 on 2026-09-09. For a root-owned store:
+#     chown -R root:netmon /var/lib/netmon/firmware
+#     chmod -R g+rX       /var/lib/netmon/firmware
+firmware_dir = /var/lib/netmon/firmware
+#
+# The ring discipline. Copied onto each batch at creation, so editing this file
+# mid-roll cannot change the rules a running batch plays by.
+# The canary runs ALONE and the batch stops until it verifies — it is the only
+# thing between a bad image and the second camera. 0 is refused at load.
+canary_count = 1
+ring_size = 10
+max_concurrent = 3
+# Hard cap per batch. The fleet is 2,651, so a full roll is many batches by
+# design — that is the point, not a limitation.
+max_batch = 50
+# Halt the batch when a ring's failure rate exceeds this percentage.
+abort_pct = 10
+# How long to wait for a camera to come back and report the new version.
+reboot_timeout_s = 300
+connect_timeout_s = 5
+timeout_s = 120
+# Cameras on the VMS network carry self-signed certificates, as with snapshots.
+verify_ssl = false
+
+[camera_snapshot]
+# Camera still-image proxy (spec 11 D7, approved 2026-07-28; built spec 20 S4).
+#
+# Browsers strip embedded credentials from <img> subrequests, so a camera still
+# cannot be fetched directly by the page. This proxies it server-side with a
+# shared read-only camera account, which keeps the camera login off the browser
+# entirely.
+#
+# Default OFF. It needs the account below, and it is the one place NetMon talks
+# to a device while rendering a page rather than serving its own database —
+# a deliberate, bounded relaxation of the zero-source-calls-at-render rule
+# (CLAUDE.md §6). Turning `enabled` off returns those pages to DB-only with no
+# deploy.
+#
+# SSRF posture: the proxy takes a NetMon `device_id`, never a URL or address,
+# and resolves the target from the `cameras` row — so it can only ever reach an
+# address Milestone registered for a camera.
+enabled = false
+# The shared read-only camera account (the same one ZCD used as
+# {$TCS.CAM.USER} / {$TCS.CAM.PASS}). Read-only: this account must not be able
+# to change camera configuration.
+# user = netmon-ro
+# pass = REPLACE_WITH_CAMERA_PASSWORD
+#
+# A second password for the SAME account, tried only after a camera answers 401
+# to the one above. Both are taken literally — do not double a `%`. 2,651 cameras are not all on one password: a rotation
+# reaches the cameras that were online for it, and the ones that were down, or
+# were installed before it, still answer to the previous one. Optional — leave
+# it out and exactly one credential is tried, as before. Also a SECRET.
+# pass_backup = REPLACE_WITH_PREVIOUS_CAMERA_PASSWORD
+#
+# Cameras on the VMS network carry self-signed certificates. Named rather than
+# hidden, because it is a real trade-off; the traffic stays inside the
+# management network.
+verify_ssl = false
+connect_timeout_s = 3
+timeout_s = 6
+# A camera wall asks for up to 48 stills at once; without a cap that is 48
+# simultaneous connections from this host to the camera VLAN.
+max_concurrent = 8
+# Browser cache lifetime for a still, in seconds.
+cache_s = 5
+# Vendor query parameter that selects which imager to photograph on a
+# multi-camera device. EMPTY BY DESIGN: 178 cameras on this estate are one
+# imager of several, and a bare snapshot path on such a device returns a
+# *different imager's* picture — a plausible image of the wrong place, which
+# nobody notices. Those cameras report "not configured" until this is confirmed
+# against a real device. Bosch and Axis both count imagers from 1 while
+# Milestone counts from 0; NetMon applies that offset.
+# channel_param = channel
