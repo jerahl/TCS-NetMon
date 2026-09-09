@@ -278,3 +278,198 @@ def test_ddi_endpoints_require_auth(tmp_path):
         for path in ("/api/ddi", "/api/ddi/addresses", "/api/ddi/scopes",
                      "/api/ddi/lookup/02005e100002"):
             assert client.get(path).status_code in (401, 403), path
+
+
+# --- /api/ddi/resolve : the on-demand lookup (spec 21 §7b) ------------------
+#
+# Micetro is no longer polled on a schedule, so these exercise the live path.
+# `MicetroClient` is stubbed at the module the endpoint imports at call time.
+
+class FakeLookup:
+    """Stands in for MicetroClient. Records what was asked, and how often."""
+
+    by_ip: dict = {}
+    scan_hit: dict | None = None
+    raise_with: Exception | None = None
+    calls: list = []
+
+    def __init__(self, **kw):
+        pass
+
+    async def ipam_record(self, ip):
+        from netmon.collectors.micetro_client import MicetroNotFound
+        FakeLookup.calls.append(("ip", ip))
+        if FakeLookup.raise_with:
+            raise FakeLookup.raise_with
+        rec = FakeLookup.by_ip.get(ip)
+        if rec is None:
+            raise MicetroNotFound(f"no such object {ip}")
+        return rec
+
+    async def find_by_client_identifier(self, mac, concurrency=8):
+        FakeLookup.calls.append(("scan", mac))
+        if FakeLookup.raise_with:
+            raise FakeLookup.raise_with
+        return FakeLookup.scan_hit
+
+
+def _rec(ip, mac=None, name=None):
+    r = {"address": ip, "state": "Assigned"}
+    if mac:
+        r["dhcpLeases"] = [{"mac": mac, "state": "active"}]
+    if name:
+        r["dnsHosts"] = [{"dnsRecord": {"name": name}}]
+    return r
+
+
+def _stub(monkeypatch, *, by_ip=None, scan_hit=None, raise_with=None):
+    import netmon.api.ddi as ddi_mod
+    import netmon.collectors.micetro_client as mc
+    FakeLookup.by_ip = by_ip or {}
+    FakeLookup.scan_hit = scan_hit
+    FakeLookup.raise_with = raise_with
+    FakeLookup.calls = []
+    monkeypatch.setattr(mc, "MicetroClient", FakeLookup)
+    ddi_mod._CACHE.clear()          # each test starts cold
+    return FakeLookup
+
+
+def test_resolve_by_ip_is_one_request(tmp_path, monkeypatch):
+    fake = _stub(monkeypatch, by_ip={
+        "192.0.2.31": _rec("192.0.2.31", "02:00:5e:10:00:01", "chrome14.tcs.internal")})
+    with TestClient(_app(_setup(tmp_path, MICETRO_ON))) as client:
+        body = client.get("/api/ddi/resolve?ip=192.0.2.31").json()
+    assert body["found"] is True
+    assert body["method"] == "ip"
+    assert body["record"]["dns_name"] == "chrome14.tcs.internal"
+    assert body["record"]["mac"] == "02:00:5e:10:00:01"
+    assert body["live"] is True and body["cached"] is False
+    assert fake.calls == [("ip", "192.0.2.31")]
+
+
+def test_resolve_not_found_is_200_not_404(tmp_path, monkeypatch):
+    """"Micetro does not know this" is an answer, not a failure."""
+    _stub(monkeypatch, by_ip={})
+    with TestClient(_app(_setup(tmp_path, MICETRO_ON))) as client:
+        r = client.get("/api/ddi/resolve?ip=192.0.2.99")
+    assert r.status_code == 200
+    assert r.json()["found"] is False and r.json()["record"] is None
+
+
+def test_resolve_by_mac_uses_a_locally_known_ip(tmp_path, monkeypatch):
+    """PacketFence already has an IP for ~84% of FDB MACs — one request, no scan."""
+    fake = _stub(monkeypatch, by_ip={
+        "192.0.2.31": _rec("192.0.2.31", "02:00:5e:10:00:01", "chrome14.tcs.internal")})
+    rows = ("INSERT INTO pf_nodes (mac, ip, updated_at) VALUES "
+            "('02:00:5e:10:00:01','192.0.2.31','2026-09-09 07:00:00')")
+    with TestClient(_app(_setup(tmp_path, MICETRO_ON, seed=False, extra_rows=rows))) as client:
+        body = client.get("/api/ddi/resolve?mac=02005e100001").json()
+    assert body["found"] is True
+    assert body["method"] == "mac-via-local-ip:pf_nodes"
+    assert ("scan", "02:00:5e:10:00:01") not in fake.calls
+
+
+def test_resolve_by_mac_rejects_a_stale_local_ip_and_scans(tmp_path, monkeypatch):
+    """A re-leased address holds someone else now.
+
+    Reporting the new tenant as this MAC's identity would be a fabrication, so
+    the local hint is only trusted when Micetro confirms the MAC.
+    """
+    fake = _stub(
+        monkeypatch,
+        # The locally-known IP now belongs to a different MAC.
+        by_ip={"192.0.2.31": _rec("192.0.2.31", "02:00:5e:99:99:99", "someone-else")},
+        scan_hit=_rec("192.0.2.60", "02:00:5e:10:00:01", "the-real-one"))
+    rows = ("INSERT INTO pf_nodes (mac, ip, updated_at) VALUES "
+            "('02:00:5e:10:00:01','192.0.2.31','2026-09-09 07:00:00')")
+    with TestClient(_app(_setup(tmp_path, MICETRO_ON, seed=False, extra_rows=rows))) as client:
+        body = client.get("/api/ddi/resolve?mac=02005e100001").json()
+    assert body["method"] == "mac-scan"
+    assert body["record"]["ip"] == "192.0.2.60"
+    assert ("scan", "02:00:5e:10:00:01") in fake.calls
+
+
+def test_resolve_by_mac_falls_back_to_the_scan_with_no_local_ip(tmp_path, monkeypatch):
+    _stub(monkeypatch, scan_hit=_rec("192.0.2.77", "02:00:5e:10:00:03"))
+    with TestClient(_app(_setup(tmp_path, MICETRO_ON, seed=False))) as client:
+        body = client.get("/api/ddi/resolve?mac=02005e100003").json()
+    assert body["found"] is True and body["method"] == "mac-scan"
+
+
+def test_resolve_deep_false_declines_the_scan_and_says_why(tmp_path, monkeypatch):
+    """16% of FDB MACs have no local IP; the answer must explain, not just be empty."""
+    fake = _stub(monkeypatch, scan_hit=_rec("192.0.2.77", "02:00:5e:10:00:03"))
+    with TestClient(_app(_setup(tmp_path, MICETRO_ON, seed=False))) as client:
+        body = client.get("/api/ddi/resolve?mac=02005e100003&deep=false").json()
+    assert body["found"] is False
+    assert body["method"] == "declined"
+    assert "declined" in (body["note"] or "")
+    assert not any(c[0] == "scan" for c in fake.calls)
+
+
+def test_resolve_caches_so_a_double_click_is_not_a_second_scan(tmp_path, monkeypatch):
+    fake = _stub(monkeypatch, scan_hit=_rec("192.0.2.77", "02:00:5e:10:00:03"))
+    with TestClient(_app(_setup(tmp_path, MICETRO_ON, seed=False))) as client:
+        first = client.get("/api/ddi/resolve?mac=02005e100003").json()
+        second = client.get("/api/ddi/resolve?mac=02005e100003").json()
+    assert first["cached"] is False and second["cached"] is True
+    assert sum(1 for c in fake.calls if c[0] == "scan") == 1
+
+
+def test_resolve_reports_an_unreachable_source_as_502_not_empty(tmp_path, monkeypatch):
+    """Blind must never render as "not in DDI" (§4.5)."""
+    from netmon.collectors.micetro_client import MicetroError
+    _stub(monkeypatch, raise_with=MicetroError("micetro transport error"))
+    with TestClient(_app(_setup(tmp_path, MICETRO_ON))) as client:
+        r = client.get("/api/ddi/resolve?ip=192.0.2.31")
+    assert r.status_code == 502
+    assert "unreachable" in r.json()["detail"]
+
+
+def test_resolve_reports_a_permissions_failure_distinctly(tmp_path, monkeypatch):
+    from netmon.collectors.micetro_client import MicetroForbidden
+    _stub(monkeypatch, raise_with=MicetroForbidden("micetro denied /x — lacks rights"))
+    with TestClient(_app(_setup(tmp_path, MICETRO_ON))) as client:
+        r = client.get("/api/ddi/resolve?ip=192.0.2.31")
+    assert r.status_code == 502
+    assert "lacks rights" in r.json()["detail"]
+
+
+def test_resolve_requires_exactly_one_of_ip_or_mac(tmp_path, monkeypatch):
+    _stub(monkeypatch)
+    with TestClient(_app(_setup(tmp_path, MICETRO_ON, seed=False))) as client:
+        assert client.get("/api/ddi/resolve").status_code == 400
+        assert client.get("/api/ddi/resolve?ip=192.0.2.1&mac=02005e100001").status_code == 400
+
+
+def test_resolve_rejects_a_partial_mac_and_a_non_ip(tmp_path, monkeypatch):
+    _stub(monkeypatch)
+    with TestClient(_app(_setup(tmp_path, MICETRO_ON, seed=False))) as client:
+        assert client.get("/api/ddi/resolve?mac=02005e").status_code == 400
+        assert client.get("/api/ddi/resolve?ip=../dhcpScopes").status_code == 400
+
+
+def test_resolve_is_503_when_micetro_is_not_enabled(tmp_path, monkeypatch):
+    """`enabled` now gates whether NetMon may query Micetro at all."""
+    _stub(monkeypatch)
+    with TestClient(_app(_setup(tmp_path, seed=False))) as client:
+        r = client.get("/api/ddi/resolve?ip=192.0.2.31")
+    assert r.status_code == 503
+    assert "not enabled" in r.json()["detail"]
+
+
+def test_resolve_writes_nothing_to_the_db(tmp_path, monkeypatch):
+    """On-demand means on-demand — no mirror accretes behind the search box."""
+    _stub(monkeypatch, by_ip={"192.0.2.31": _rec("192.0.2.31", "02:00:5e:10:00:01")})
+    conf = _setup(tmp_path, MICETRO_ON, seed=False)
+    with TestClient(_app(conf)) as client:
+        client.get("/api/ddi/resolve?ip=192.0.2.31")
+        engine = client.app.state.engine
+        assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM ddi_addresses")["n"] == 0
+
+
+def test_resolve_requires_auth(tmp_path, monkeypatch):
+    _stub(monkeypatch)
+    conf = _setup(tmp_path, MICETRO_ON, seed=False, dev_bypass=False)
+    with TestClient(_app(conf)) as client:
+        assert client.get("/api/ddi/resolve?ip=192.0.2.31").status_code in (401, 403)

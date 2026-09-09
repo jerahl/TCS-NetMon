@@ -283,7 +283,7 @@ class MicetroCollector(Collector):
 
     def __init__(self, engine: Engine, client: MicetroClient,
                  interval_s: float = 3600.0,
-                 sweep_addresses: bool = True, sweep_scopes: bool = True,
+                 sweep_addresses: bool = False, sweep_scopes: bool = True,
                  max_records: int = 60000, max_ranges: int = 2000,
                  scope_warn_pct: int = 85, scope_crit_pct: int = 95) -> None:
         super().__init__(engine)
@@ -311,7 +311,7 @@ class MicetroCollector(Collector):
         return cls(
             engine, client,
             interval_s=int(s.get("interval_s") or 3600),
-            sweep_addresses=_truthy(s.get("sweep_addresses", "true")),
+            sweep_addresses=_truthy(s.get("sweep_addresses", "false")),
             sweep_scopes=_truthy(s.get("sweep_scopes", "true")),
             max_records=int(s.get("max_records") or 60000),
             max_ranges=int(s.get("max_ranges") or 2000),

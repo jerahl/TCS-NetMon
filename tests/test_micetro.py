@@ -18,7 +18,12 @@ from netmon.collectors.micetro import (
     classify_utilization,
     is_empty_record,
 )
-from netmon.collectors.micetro_client import MicetroClient, MicetroError
+from netmon.collectors.micetro_client import (
+    MicetroClient,
+    MicetroError,
+    MicetroForbidden,
+    MicetroNotFound,
+)
 from netmon.snapshots import read_snapshot
 from tests.conftest import FIXTURES, create_core_tables
 
@@ -62,6 +67,10 @@ def _engine(tmp_path):
 
 
 def _collector(engine, client=None, **kw):
+    # `sweep_addresses` now defaults OFF in production (on-demand lookup
+    # replaced the address mirror — spec 21 §7b), so the tests that exercise
+    # the sweep opt into it explicitly.
+    kw.setdefault("sweep_addresses", True)
     return MicetroCollector(engine, client or FakeMicetro(), **kw)
 
 
@@ -357,6 +366,14 @@ def test_max_ranges_raises(tmp_path):
         asyncio.run(_collector(engine, FakeMicetro(), max_ranges=2).run_once())
 
 
+def test_address_sweep_is_off_by_default_now(tmp_path):
+    """Production default: scopes only. The address mirror is opt-in."""
+    engine = _engine(tmp_path)
+    asyncio.run(MicetroCollector(engine, FakeMicetro()).run_once())
+    assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM ddi_addresses")["n"] == 0
+    assert db.fetch_one(engine, "SELECT COUNT(*) AS n FROM ddi_scopes")["n"] == 4
+
+
 def test_sweeps_are_independently_disableable(tmp_path):
     """Per-step reversibility (§4.3)."""
     engine = _engine(tmp_path)
@@ -528,9 +545,14 @@ def test_ipam_records_requests_the_undoubled_path():
     assert "/ranges/ranges/" not in seen[0]
 
 
-def test_ipam_records_sends_no_filter_param():
-    """A wrong filter returns HTTP 200 + totalResults=0 on this build, so an
-    empty mirror would look like a successful sweep. See ipam_records()."""
+def test_the_bulk_sweep_sends_no_filter_param():
+    """The `--once` sweep wants every record it can keep, so it filters locally.
+
+    Not because filtering is broken — it works (`filter=field=value`, `^` for
+    prefix). An earlier revision claimed otherwise after probing
+    `state=Assigned` against a range that genuinely holds no Assigned
+    addresses, and read the correct answer (0) as a broken parameter.
+    """
     sent = {}
 
     class Spy(MicetroClient):
@@ -541,6 +563,126 @@ def test_ipam_records_sends_no_filter_param():
     client = Spy("https://micetro.example.org", "u", "p")
     asyncio.run(client.ipam_records("ranges/6"))
     assert "filter" not in sent
+
+
+def test_subnet_ranges_are_filtered_server_side():
+    """`filter=subnet=true` returns exactly the subnets — no local sifting."""
+    sent = {}
+
+    class Spy(MicetroClient):
+        async def _get(self, path, params=None):
+            sent.update(params or {})
+            return {"ranges": [{"ref": "ranges/10"}, {"ref": "ranges/11"}],
+                    "totalResults": 2}
+
+    client = Spy("https://micetro.example.org", "u", "p")
+    refs = asyncio.run(client.subnet_range_refs())
+    assert refs == ["ranges/10", "ranges/11"]
+    assert sent["filter"] == "subnet=true"
+
+
+def test_ipam_record_takes_a_literal_ip():
+    """`addrRef` accepts an IP, which is what makes on-demand lookup one GET."""
+    seen = []
+
+    class Spy(MicetroClient):
+        async def _get(self, path, params=None):
+            seen.append(path)
+            return {"ipamRecord": {"address": "192.0.2.31"}}
+
+    client = Spy("https://micetro.example.org", "u", "p")
+    rec = asyncio.run(client.ipam_record("192.0.2.31"))
+    assert seen == ["/ipamRecords/192.0.2.31"]
+    assert rec["address"] == "192.0.2.31"
+
+
+def test_ipam_record_refuses_anything_that_is_not_an_ip():
+    """The value lands in the URL path, so it is constrained to IP characters."""
+    client = MicetroClient("https://micetro.example.org", "u", "p")
+    for bad in ("../dhcpScopes", "192.0.2.1/../../x", "host name", ""):
+        with pytest.raises(MicetroError):
+            asyncio.run(client.ipam_record(bad))
+
+
+def test_not_found_is_its_own_exception_not_a_source_failure():
+    """Micetro answers "no such object" with HTTP 400 + code 2049, never 404.
+
+    Conflating that with a transport error would make an unregistered address
+    read as "Micetro is down".
+    """
+    import httpx
+
+    class Missing(MicetroClient):
+        def _new_client(self):
+            def handler(request):
+                return httpx.Response(400, json={"error": {"code": 2049, "message": "nope"}})
+            return httpx.AsyncClient(base_url="https://micetro.example.org",
+                                     transport=httpx.MockTransport(handler))
+
+    client = Missing("https://micetro.example.org", "u", "p")
+    with pytest.raises(MicetroNotFound):
+        asyncio.run(client.ipam_record("192.0.2.99"))
+
+
+def test_no_access_is_its_own_exception():
+    """`/devices` on this estate answers 400 + code 1028, not 403."""
+    import httpx
+
+    class Denied(MicetroClient):
+        def _new_client(self):
+            def handler(request):
+                return httpx.Response(400, json={
+                    "error": {"code": 1028, "message": "You do not have access"}})
+            return httpx.AsyncClient(base_url="https://micetro.example.org",
+                                     transport=httpx.MockTransport(handler))
+
+    client = Denied("https://micetro.example.org", "u", "p")
+    with pytest.raises(MicetroForbidden):
+        asyncio.run(client.ipam_record("192.0.2.99"))
+
+
+def test_mac_scan_fans_out_and_first_match_wins():
+    """A bare `filter=<mac>` free-text-matches the client identifier."""
+    calls = []
+
+    class Scanner(MicetroClient):
+        async def _get(self, path, params=None):
+            calls.append((path, params.get("filter")))
+            if path == "/ranges/12/ipamRecords":
+                return {"ipamRecords": [{"address": "192.0.2.77"}], "totalResults": 1}
+            return {"ipamRecords": [], "totalResults": 0}
+
+    client = Scanner("https://micetro.example.org", "u", "p")
+    hit = asyncio.run(client.find_by_client_identifier(
+        "02:00:5e:10:00:03", range_refs=["ranges/10", "ranges/11", "ranges/12"],
+        concurrency=1))
+    assert hit["address"] == "192.0.2.77"
+    assert all(f == "02:00:5e:10:00:03" for _, f in calls)
+
+
+def test_mac_scan_returns_none_when_no_range_holds_it():
+    """Absence is an answer, not an error."""
+
+    class Empty(MicetroClient):
+        async def _get(self, path, params=None):
+            return {"ipamRecords": [], "totalResults": 0}
+
+    client = Empty("https://micetro.example.org", "u", "p")
+    assert asyncio.run(client.find_by_client_identifier(
+        "02:00:5e:ff:ff:fe", range_refs=["ranges/10"])) is None
+
+
+def test_mac_scan_propagates_a_mid_scan_failure():
+    """"Not found" after silently skipping ranges would be a lie."""
+
+    class Flaky(MicetroClient):
+        async def _get(self, path, params=None):
+            raise MicetroError("micetro HTTP 500")
+
+    client = Flaky("https://micetro.example.org", "u", "p")
+    with pytest.raises(MicetroError):
+        asyncio.run(client.find_by_client_identifier(
+            "02:00:5e:10:00:03", range_refs=["ranges/10"]))
 
 
 def test_an_empty_sweep_refuses_to_wipe_a_populated_mirror(tmp_path):

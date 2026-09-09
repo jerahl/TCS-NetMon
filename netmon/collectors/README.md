@@ -295,9 +295,26 @@ of them.
   `tests/test_micetro.py::test_client_has_no_non_get_method` parses the module
   AST to keep it that way; adding a write is a reviewable diff needing owner
   sign-off (CLAUDE.md §4.1).
-- **Endpoints:** `GET /ranges` (drained once, feeds both cycles),
-  `GET /ranges/{ref}/ipamRecords` per **subnet** range, `GET /dhcpScopes`.
-  All `offset`/`limit` paged.
+- **NOT SCHEDULED** (owner, 2026-09-09; spec 21 §7b). The only source with no
+  supervised task. Mirroring the address space cost ~2,000 requests per sweep
+  and measured out at **16 MACs** named that PacketFence could not already name
+  (§7a), so lookups moved to search time. `[micetro] enabled` therefore means
+  "NetMon may query Micetro at all", **not** "poll".
+- **On-demand:** `GET /api/ddi/resolve?ip=` is one request (~0.2s — `addrRef`
+  takes a literal IP). `?mac=` has no global equivalent: Micetro stores a MAC
+  as a *client identifier*, so NetMon tries an IP it already knows for that MAC
+  (PF covers ~84% of FDB MACs) and **only trusts it if Micetro confirms the
+  MAC** — a re-leased address holds someone else — then falls back to fanning
+  `filter=<mac>` across all 261 subnets (~5s hit, ~10s to prove absence).
+  `deep=false` declines that and says why. One scan at a time process-wide;
+  60s result cache; writes nothing to the DB.
+- **Filtering works**, contrary to an earlier note here: `field=value` with `^`
+  for prefix, and a bare value is a free-text match. The "broken" claim came
+  from probing `state=Assigned` against a range holding no Assigned addresses
+  and misreading the correct 0.
+- **Endpoints:** `GET /ipamRecords/<ip>` (lookup), `GET /ranges` +
+  `GET /ranges/{ref}/ipamRecords` (the unscheduled `--once` sweep),
+  `GET /dhcpScopes`. All list calls `offset`/`limit` paged.
 - **Writes:** `ddi_addresses` + `ddi_scopes` (migration 031), replace-on-refresh.
   **No `device_state`** — a DHCP scope is not a device and the dimension column
   is an ENUM, so scope utilization is *visible but silent* until that data-model
@@ -318,10 +335,10 @@ of them.
   and the first `--once` run reports the real numbers to raise them to. Any
   fetch error raises before a single row is written, so prior rows stay visibly
   stale. A pager that ignores `offset` trips `MAX_PAGES` and fails loud.
-- **Rate:** one `/ranges` drain plus one per subnet, at `[micetro] interval_s`
-  (default 900s) — a few hundred GETs per quarter hour against an on-prem
-  appliance. **Unvalidated against production** (spec 21 Q1/Q2).
+- **`--once` only, for DHCP scopes.** 261 scopes in 2 requests; fleet-wide
+  capacity has no search-time equivalent (nobody searches for "which pools are
+  full") and it is where the uncontested value was — 2 pools at 100%.
+  `sweep_addresses` defaults **off**; it is the expensive half.
 - **Config:** `[micetro] enabled, url, username, password, verify_ssl,
-  interval_s, page_size, max_records, max_ranges, sweep_addresses,
-  sweep_scopes, scope_warn_pct, scope_crit_pct`. Standalone-runnable
-  (`python -m netmon.collectors.micetro --once`).
+  deep_scan, lookup_concurrency, cache_ttl_s, sweep_addresses, sweep_scopes,
+  page_size, max_records, max_ranges, scope_warn_pct, scope_crit_pct`.

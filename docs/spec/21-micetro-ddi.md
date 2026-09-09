@@ -1,6 +1,8 @@
 # Spec 21 — Micetro DDI federation (DNS / DHCP / IPAM)
 
-**Status:** proposed, built behind `[micetro] enabled = false`
+**Status:** built. **On-demand, not scheduled** (owner, 2026-09-09 — §7b).
+`[micetro] enabled = true` on the deploy box, which now means "may query",
+not "polls".
 **Phase:** 11.x post-parity (a new federated source, not a v1 page-parity item)
 **Owner decisions on this page:** scope = identity enrichment **+** DHCP scope
 utilization (owner, 2026-09-09); sweep bound = all subnet ranges, non-empty
@@ -307,6 +309,89 @@ against this table. Two consequences:
   the cadence.
 - **The fetch is ~98% waste** and cannot currently be fixed. See Q6.
 
+## 7b. On-demand lookup replaces the schedule (owner, 2026-09-09)
+
+§7a killed the case for mirroring: ~2,000 requests per sweep to pre-answer a
+question that, for identity, PacketFence had already answered 95.5% of the
+time. The owner's direction is to **look in Micetro when someone searches**,
+and to drop scheduled polling entirely.
+
+**There is no supervised Micetro task.** `netmon/app.py` deliberately does not
+register one — it is the only source with no scheduled cycle. `[micetro]
+enabled` consequently changes meaning: it no longer means "poll", it means
+**"NetMon may query Micetro at all"**. With it false, `/api/ddi/resolve`
+answers 503 and nothing reaches the appliance.
+
+### Is this a charter breach?
+
+No, and the distinction matters. CLAUDE.md §6 forbids **source-platform calls
+at page render** — dashboards fanning out to sources on every page load. This
+is a *user-initiated* lookup: someone types an address and asks. It sits with
+the rConfig config-diff pane (spec 10 Q5, "on-click read-through") and the
+camera JPEG proxy (spec 11 D7), both of which call a source when a human asks
+and neither of which was treated as a breach. Nothing here runs on a render
+loop, and the endpoint writes nothing to the DB.
+
+It is deliberately **not** wired into `/api/search`. The ⌘K palette fires as
+you type; a 9-second MAC scan behind a keystroke would be indefensible. The
+lookup is its own endpoint, invoked by an explicit affordance.
+
+### `GET /api/ddi/resolve?ip=<ip>` — one request, ~0.2s
+
+`addrRef` accepts a **literal IP**, not only an objRef (`GET
+/ipamRecords/192.0.2.31`). Measured 0.25s end-to-end through the app.
+
+### `GET /api/ddi/resolve?mac=<mac>` — two speeds
+
+Micetro has **no global MAC query**. It stores a MAC as a *client identifier*
+(owner's correction, 2026-09-09), and a bare `filter=<mac>` free-text-matches
+it — but `ipamRecords` is range-scoped, and this estate's account cannot read
+`/devices` (HTTP 400, code 1028 "You do not have access"). So:
+
+1. **Local hop (~0.05–0.07s).** Find an IP NetMon already knows for that MAC —
+   `pf_nodes` first (refreshed every 5 minutes), then the `ddi_addresses`
+   cache — and ask Micetro about *that address*. PacketFence covers **83.9%**
+   of FDB MACs.
+   The answer is accepted **only if Micetro confirms the MAC lives there.** A
+   stale local IP may have been re-leased, and reporting the new tenant as this
+   MAC's identity would be a fabrication, not a stale read.
+2. **Range scan (~5s on a hit, ~10s to prove absence).** Fan `filter=<mac>`
+   across all 261 subnet ranges at concurrency 8, reusing one connection, first
+   match wins. `deep_scan = false` (or `?deep=false`) declines this and says
+   *why* — "no locally-known IP for this MAC, and the range scan was declined"
+   — rather than returning an empty result that reads as "not in DDI".
+
+Guards: one deep scan process-wide at a time (`_SCAN_LOCK`) so three impatient
+clicks cannot put ~800 requests on the appliance for one answer, and a 60s
+result cache so a double-click is not a second scan.
+
+`found: false` is a **200**, not a 404 — "Micetro does not know this" is an
+answer. Only an unreachable or refusing source is a 502, so a blind source can
+never be mistaken for an empty one (§4.5). Micetro reports both "no such
+object" (code 2049) and "no access" (code 1028) as HTTP **400**, so the client
+maps them to distinct exceptions; conflating them would make an unregistered
+address read as an outage.
+
+### What the `--once` collector is still for
+
+`python -m netmon.collectors.micetro --once` survives, unscheduled, for the
+**DHCP scope table** — 261 scopes in 2 requests. Fleet-wide capacity has no
+search-time equivalent, because nobody searches for "which pools are full",
+and it is where the uncontested value turned out to be (2 pools at 100%,
+2 more near 90%). `sweep_addresses` now defaults **off**: that is the
+expensive half, and on-demand lookup replaced it.
+
+### The frozen mirror
+
+`ddi_addresses` currently holds 19,864 rows from the last manual sweep and
+**nothing refreshes them**. They stay useful in two bounded ways — as a
+MAC→IP *hint* for step 1 above (always verified against Micetro before being
+believed) and as the port-pane join, which returns `ddi_updated_at` so the UI
+can badge age honestly. But it is a snapshot that will only get older. Either
+run `--once` with `sweep_addresses = true` occasionally, or truncate it and
+rely purely on on-demand; leaving it to age silently is the one option that
+misleads. **Owner's call** — noted as Q8.
+
 ## 8. Open questions
 
 - **Q1 — live payload shape.** ✅ **Discharged 2026-09-09** (§7a). Every field
@@ -316,18 +401,22 @@ against this table. Two consequences:
   utilization figure — it lives on `Range`.
 - **Q2 — real record count.** ✅ **Discharged 2026-09-09**: 19,656 rows kept,
   comfortably under `max_records = 60000`. The guards were not tripped.
-- **Q6 — the fetch is ~98% waste, and the obvious fix is unsafe.** The sweep
-  pulls every address in every subnet — roughly a million records — to keep
-  19,656. The `filter` parameter exists on `/ranges/{ref}/ipamRecords` and
-  would fix this, but on this build **every expression tried returned HTTP 200
-  with `totalResults = 0`** rather than an error: `state=Assigned`,
-  `state!=Free`, `state == Assigned`, `state:Assigned`, `state eq Assigned`,
-  `Assigned`, `state="Assigned"`, `claimed=true`, `dhcpLeases=*`. A filter that
-  silently matches nothing is the worst available failure — it looks like a
-  successful sweep of an estate that owns no addresses. Needs the real filter
-  grammar from BlueCat support, and any candidate must be proved to return the
-  *same* count as the unfiltered call on a known range before it ships.
-  Mitigation until then is cadence (`interval_s = 3600`), not cleverness.
+- **Q6 — ~~filtering is broken~~ WRONG, and withdrawn 2026-09-09.** An earlier
+  revision of this spec asserted that every `filter` expression returned HTTP
+  200 with `totalResults = 0` and concluded the parameter was unusable. That
+  was a bad experiment, not a bad API: the probe range (`ranges/2`) genuinely
+  contains **0 `Assigned` addresses out of 254**, so `state=Assigned` → 0 was
+  the *correct answer*, misread as a broken parameter. Filtering works, and the
+  grammar is the documented `field=value` with `^` for prefix
+  (`filter=name=^192.168` → 40 ranges; `filter=subnet=true` → exactly 261
+  subnets). A **bare value** is a free-text match across the record, which is
+  how a MAC is found. The moral: verify a negative result against a case known
+  to be positive before concluding a feature is broken. Moot for the sweep now
+  that §7b replaced it, but the corrected grammar is what the on-demand
+  lookups are built on.
+- **Q8 — the frozen mirror** (§7b). `ddi_addresses` holds a snapshot nothing
+  refreshes. Refresh it periodically by hand, or truncate it and rely purely on
+  on-demand lookup. Letting it age unremarked is the only wrong answer.
 - **Q7 — an empty sweep used to wipe the mirror.** Found while probing Q6:
   `db.replace_rows` prunes whatever it did not see, so a source that answers
   "no records" with HTTP 200 would have emptied `ddi_addresses` and reported

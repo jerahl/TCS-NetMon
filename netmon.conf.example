@@ -308,46 +308,55 @@ stale_after_s = 604800
 
 [micetro]
 # Micetro (BlueCat / Men&Mice) DDI — DNS/DHCP/IPAM. See
-# docs/spec/21-micetro-ddi.md. Fills the identity gap that fdb_entries and
-# PacketFence leave: the FDB learns every MAC that forwards a frame, PF only
-# knows the endpoints it authenticated, and Micetro holds the IP<->MAC<->DNS
-# join for the rest (printers, cameras, AV gear, static servers).
+# docs/spec/21-micetro-ddi.md.
 #
-# READ-ONLY, and GET-only in the strict sense: the client authenticates with
-# HTTP Basic on each request and never calls POST /micetro/sessions, so it has
-# no non-GET method at all. HTTPS is enforced in code — Basic auth puts the
-# credential on every request.
+# ON-DEMAND, NOT SCHEDULED (owner, 2026-09-09; spec 21 §7b). There is no
+# supervised task: mirroring the address space cost ~2,000 requests per sweep
+# to pre-answer questions nobody had asked, and measured out at 16 MACs named
+# that PacketFence could not already name. Lookups now happen when someone
+# searches, via GET /api/ddi/resolve?ip=|mac=.
 #
-# The account should be a read-only Micetro user. NetMon cannot enforce that;
-# least privilege is still the right posture.
+# So `enabled` here does NOT mean "poll". It means "NetMon may query Micetro
+# at all". With it false, /api/ddi/resolve answers 503 and nothing reaches the
+# appliance.
+#
+# READ-ONLY, and GET-only by construction: HTTP Basic on each request, never
+# POST /micetro/sessions, so the client has no non-GET method. HTTPS enforced
+# in code — Basic auth puts the credential on every request.
+# Use a READ-ONLY Micetro account.
 enabled = false
 # url = https://micetro.tcs.internal
 # username = netmon-ro
 # password = REPLACE_WITH_MICETRO_PASSWORD
 verify_ssl = true
-# 3600, not 900: the first live run swept 261 subnets in ~2,000 requests over
-# ~4 minutes (spec 21 §7a). At 900s that is a 27% duty cycle on the appliance
-# to refresh DHCP-lease and capacity data that is not real-time in nature.
-interval_s = 3600
-# Rows per API page (offset/limit paging).
+
+# --- on-demand lookup ---------------------------------------------------
+# An IP resolves in one request (~0.2s): Micetro's addrRef accepts a literal
+# IP. A MAC is harder — Micetro has no global MAC query, and it stores the MAC
+# as a *client identifier*, so:
+#   1. NetMon first looks for an IP it already knows for that MAC (PacketFence
+#      covers ~84% of FDB MACs) and asks Micetro about that address — but only
+#      trusts the answer if Micetro confirms the MAC, since a stale IP may have
+#      been re-leased to something else;
+#   2. failing that, it fans `filter=<mac>` across all 261 subnet ranges:
+#      ~5s on a hit, ~9s to prove absence.
+# deep_scan = false declines step 2 and says so rather than answering "unknown".
+deep_scan = true
+lookup_concurrency = 8
+# Short result cache so a double-click is not a second 9s scan.
+cache_ttl_s = 60
+
+# --- deliberate `--once` refresh ----------------------------------------
+# `python -m netmon.collectors.micetro --once` still exists, for the DHCP scope
+# table (261 scopes in 2 requests — fleet-wide capacity has no search-time
+# equivalent, since nobody searches for "which pools are full"). Nothing runs
+# it on a timer. sweep_addresses defaults OFF: that is the expensive half, and
+# on-demand lookup replaced it.
+sweep_addresses = false
+sweep_scopes = true
 page_size = 500
-# Sweep guards. Micetro's address space is not NetMon's device count: one /16
-# container holds 65,534 addresses against a ~3,600 device registry. The sweep
-# keeps only addresses that carry something (a MAC, a DNS name, a lease, a
-# reservation, or a state other than Free), so rows scale with assignments.
-# Exceeding either guard RAISES — it never truncates, because a half-mirror
-# that looks complete is worse than a loud failure. The first `--once` run
-# reports the real counts; raise these to match if the estate is genuinely
-# bigger (spec 21 Q2).
 max_records = 60000
 max_ranges = 2000
-# Either cycle can be disabled independently (§4.3).
-sweep_addresses = true
-sweep_scopes = true
-# DHCP scope fill thresholds. Classified to a severity at write time and shown
-# on /api/ddi/scopes. NOTE: no alert fires for an exhausting scope — a scope is
-# not a device and cannot ride device_state, so this is visible but silent
-# until that data-model question is decided (spec 21 §6 / Q3).
 scope_warn_pct = 85
 scope_crit_pct = 95
 

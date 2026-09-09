@@ -37,8 +37,6 @@ from netmon.engine.engine import AlertEngine
 from netmon.history import HistorySampler
 from netmon.reachability import ReachabilityDeriver
 from netmon.collectors.ess_live import EssLive
-from netmon.collectors.micetro import MicetroCollector
-from netmon.collectors.micetro_client import MicetroError
 from netmon.collectors.milestone import MilestoneCollector, MilestoneError
 from netmon.collectors.packetfence import PfCollector
 from netmon.collectors.pf_client import PfError
@@ -189,16 +187,13 @@ def register_tasks(app: FastAPI, cfg: Config, engine) -> None:
             supervisor.register("rconfig", rc.run_guarded, interval_s=rc.interval_s, timeout_s=rc.timeout_s)
             log.info("rConfig collector enabled: %ss", rc.interval_s)
 
-    if cfg.source_enabled("micetro"):
-        try:
-            mc = MicetroCollector.from_config(engine, cfg)
-        except MicetroError as exc:
-            log.error("Micetro collector not started: %s", exc)
-        else:
-            supervisor.register("micetro", mc.run_guarded,
-                                interval_s=mc.interval_s, timeout_s=mc.timeout_s)
-            log.info("Micetro collector enabled: %ss (addresses=%s, scopes=%s)",
-                     mc.interval_s, mc.sweep_addresses, mc.sweep_scopes)
+    # Micetro is deliberately NOT registered here (owner, 2026-09-09; spec 21
+    # §7b). It is the only source with no scheduled task: mirroring the address
+    # space cost ~2,000 requests per sweep to answer questions nobody had asked
+    # yet, so lookups are now on-demand via /api/ddi/resolve, and the
+    # `MicetroCollector` survives only as a deliberate `--once` refresh for the
+    # DHCP-scope table. `[micetro] enabled` therefore no longer means "poll" —
+    # it means "NetMon may query Micetro at all".
 
     if cfg.engine.enabled:
         alert_engine = AlertEngine(engine, cfg.engine)
