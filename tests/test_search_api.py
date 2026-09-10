@@ -121,3 +121,73 @@ def test_search_requires_auth(tmp_path):
     conf = write_config(tmp_path, dev_bypass=False, db_url=url)
     with TestClient(_app(conf)) as client:
         assert client.get("/api/search?q=Core").status_code == 401
+
+
+# ── the FDB scan that could never match (2026-09-10) ──────────────────────
+#
+# `fdb_entries` holds nothing but MACs. A query carrying any non-hex character
+# cannot match one, so scanning 82,000 rows to prove it was ~40% of the cost of
+# every search for a device or site name — which is what the palette is mostly
+# used for. These pin the skip rather than the timing.
+
+def _count_queries(monkeypatch):
+    """Record every SQL statement the search path issues."""
+    import netmon.api.search as search_mod
+
+    seen = []
+    real = search_mod.db.fetch_all
+
+    def spy(engine, sql, params=None):
+        seen.append(" ".join(sql.split()))
+        return real(engine, sql, params)
+
+    monkeypatch.setattr(search_mod.db, "fetch_all", spy)
+    return seen
+
+
+def _tables(seen):
+    return {t for t in ("devices", "pf_nodes", "fdb_entries")
+            for s in seen if f"FROM {t}" in s or f" {t} " in s}
+
+
+def test_a_name_search_does_not_touch_the_fdb(tmp_path, monkeypatch):
+    url = f"sqlite:///{tmp_path/'s.db'}"
+    _seed(url)
+    with TestClient(_app(write_config(tmp_path, db_url=url))) as client:
+        seen = _count_queries(monkeypatch)
+        body = client.get("/api/search?q=BHS-Core").json()
+    assert body["devices"], "the device hit should still be found"
+    assert body["macs"] == []
+    assert not any("fdb_entries" in s for s in seen), \
+        "scanned the FDB for a query that cannot be a MAC"
+
+
+def test_a_subnet_search_does_not_touch_the_fdb(tmp_path, monkeypatch):
+    """`10.92.18` strips to `109218`, which is hex-shaped — the case that made
+    every subnet search scan every MAC in the estate."""
+    url = f"sqlite:///{tmp_path/'s.db'}"
+    _seed(url)
+    with TestClient(_app(write_config(tmp_path, db_url=url))) as client:
+        seen = _count_queries(monkeypatch)
+        client.get("/api/search?q=10.1.2")
+    assert not any("fdb_entries" in s for s in seen)
+
+
+def test_a_mac_search_still_reaches_the_fdb(tmp_path, monkeypatch):
+    """The skip must not cost the feature: a real MAC still finds its port."""
+    url = f"sqlite:///{tmp_path/'s.db'}"
+    _seed(url)
+    with TestClient(_app(write_config(tmp_path, db_url=url))) as client:
+        seen = _count_queries(monkeypatch)
+        body = client.get("/api/search?q=aabbcc112233").json()
+    assert any("fdb_entries" in s for s in seen)
+    assert [h["title"] for h in body["macs"]] == ["aa:bb:cc:11:22:33"]
+
+
+def test_a_separator_style_mac_still_finds_its_port(tmp_path):
+    url = f"sqlite:///{tmp_path/'s.db'}"
+    _seed(url)
+    with TestClient(_app(write_config(tmp_path, db_url=url))) as client:
+        body = client.get("/api/search?q=AA-BB-CC-11-22-33").json()
+    assert [h["title"] for h in body["macs"]] == ["aa:bb:cc:11:22:33"]
+    assert body["macs"][0]["subtitle"].startswith("on BHS-Core-1")

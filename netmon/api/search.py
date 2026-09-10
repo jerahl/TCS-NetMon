@@ -64,8 +64,9 @@ def _search_endpoints(engine: Engine, like: str, mac_norm: str | None) -> list[S
         # Separator-agnostic MAC match (bcf310be9980 == bc:f3:10:be:99:80).
         conds.append(f"{mac_expr('mac')} LIKE :macq")
         params["macq"] = f"%{mac_norm}%"
-    else:
-        conds.append("mac LIKE :q")
+    # No `else`: a query that is not hex-once-separators-are-stripped cannot
+    # match a MAC, so the clause could only ever add work. Unlike the FDB this
+    # table has other columns worth searching, so the query itself still runs.
     rows = db.fetch_all(
         engine,
         "SELECT mac, computername, ip, owner, dot1x_user, role, reg_status, "
@@ -95,22 +96,26 @@ def _search_endpoints(engine: Engine, like: str, mac_norm: str | None) -> list[S
 
 
 def _search_macs(engine: Engine, like: str, mac_norm: str | None) -> list[SearchHit]:
-    # The FDB is keyed only by MAC, so match the normalised form when the query
-    # looks like a MAC (any separator style) and fall back to a raw substring
-    # otherwise.
-    if mac_norm:
-        where = f"{mac_expr('f.mac')} LIKE :macq"
-        params: dict = {"macq": f"%{mac_norm}%", "lim": _LIMIT}
-    else:
-        where = "f.mac LIKE :q"
-        params = {"q": like, "lim": _LIMIT}
+    """FDB hits — which switch and port a MAC is learned on.
+
+    `fdb_entries` holds nothing but MACs, and a MAC is hex and colons. So a
+    query carrying any other character *cannot* match, and `mac_norm` returning
+    None is exactly that test: it normalises only when the query is hex once
+    separators are stripped. The old code still ran
+    ``mac LIKE '%printer%'`` against 82,000 rows to discover that — a full scan,
+    no index possible, for a provably empty result. It was ~40% of the cost of
+    every search for a device or site name, which is what the palette is mostly
+    used for. Measured 2026-09-10: 35-44 ms of a ~90 ms search.
+    """
+    if not mac_norm:
+        return []
     rows = db.fetch_all(
         engine,
         "SELECT f.device_id, f.mac, f.vlan_id, f.ifindex, d.name AS switch "
         "FROM fdb_entries f JOIN devices d ON d.id = f.device_id "
-        f"WHERE {where} "
+        f"WHERE {mac_expr('f.mac')} LIKE :macq "
         "ORDER BY f.updated_at DESC LIMIT :lim",
-        params,
+        {"macq": f"%{mac_norm}%", "lim": _LIMIT},
     )
     out: list[SearchHit] = []
     for r in rows:
