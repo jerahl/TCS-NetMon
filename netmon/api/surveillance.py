@@ -114,6 +114,17 @@ def _environment(engine: Engine) -> dict:
 _CAMERA_COLS = ("c.device_id, d.name, d.site, c.model, c.resolution, c.fps_target, "
                 "c.codec, c.recording_mode, c.state_msg, c.ip, c.mac, c.enabled, "
                 "c.recording_server_device_id, c.updated_at, "
+                # Firmware and platform are in the LIST, not just the detail
+                # view, because the camera-ops page decides eligibility from
+                # them: "already on <version>" keys on `firmware`, and the
+                # wrong-generation guard keys on `platform`. Without them both
+                # checks silently evaluated `undefined` and every camera looked
+                # eligible — which is why 50 already-flashed cameras kept being
+                # offered the image they were already running (2026-09-09), and
+                # why the firmware column rendered as "—". Two more columns off
+                # a table already joined; the "keep the 2,651-row list narrow"
+                # note below still holds for the rest.
+                "c.firmware, c.platform, "
                 "rs.name AS recording_server, "
                 "st.value AS recording_state, "
                 # What Milestone's Events/State interface says about the camera
@@ -383,13 +394,14 @@ def camera_detail(
 ) -> dict:
     # Columns the detail page needs and the list does not: `hardware_id` to find
     # the other cameras on the same physical device, `http_port` because six
-    # cameras here sit on a non-default port, and the device's own identity
-    # (firmware/serial/vendor, migration 025). Selecting them only here keeps
-    # the 2,651-row list query narrow.
+    # cameras here sit on a non-default port, and serial/vendor (migration 025).
+    # Selecting them only here keeps the 2,651-row list query narrow.
+    # `firmware` moved into _CAMERA_COLS — the camera-ops list needs it to tell
+    # an already-updated camera from one that still needs the image.
     row = db.fetch_one(
         engine,
         f"SELECT {_CAMERA_COLS}, c.hardware_id, c.http_port, c.bitrate_mode, "
-        f"c.firmware, c.serial, c.vendor "
+        f"c.serial, c.vendor "
         f"{_CAMERA_FROM} WHERE c.device_id = :d", {"d": device_id})
     if row is None:
         raise HTTPException(status_code=404, detail="camera not found")

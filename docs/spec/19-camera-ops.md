@@ -870,3 +870,159 @@ Recording is still shown, as a `.rec-pill` — information, not a fault.
 status rendering is checked at build time rather than only in a browser. Three
 API tests cover the filter union, both verdicts reaching the row, and blind
 being counted apart from down.
+
+## Milestone hardware refresh — investigated 2026-09-09, NOT built
+
+The owner signed off on writing to Milestone so it would learn a camera's new
+firmware ("it will need to run an update hardware on the camera in milestone or
+milestone will never see the firmware update" — correct: `hardwareDriverSettings
+.firmwareVersion` is a cache, and it still reported `7.10.0074` for cameras
+flashed to `7.93.0024` hours earlier).
+
+**No such operation was found, so nothing was built.** Recorded here so the
+next attempt starts from evidence rather than repeating the search.
+
+What the live API gateway offers (read-only probes, 2026-09-09):
+
+- Only `/api/rest/v1/` exists — no `/api`, `/api/rest`, `/api/rest/v2`, no
+  `ServerCommandService.svc` through the gateway.
+- `GET /api/rest/v1/hardware/{id}` returns `address, description, displayName,
+  enabled, hardwareDriverPath, id, lastModified, model, name,
+  passwordLastModified, relations, userName`. **No methods, tasks or links.**
+  `?includeMethods=true` is silently ignored.
+- `/hardware/{id}/methods` → 404 "Unknown resource: methods".
+  `/hardware/{id}/tasks` → 400 "No generic business object registered on server
+  with entity name: TaskFolder".
+- `GET /api/rest/v1/tasks` → `{"array": []}`, so a task collection does exist.
+- No OpenAPI/Swagger is published by the gateway.
+
+What the vendor's own sample proves exists — in the **.NET Configuration API**,
+not confirmed in REST (`mipsdk-samples-component/ConfigAPIFirmwareUpdate`):
+
+- `InvokeMethod(systemConfigurationItem, "UploadFileChunk")` with
+  `TransferId`/`ChunkData`/`Offset`/`Size`/`Checksum`, returning `StorageId`.
+- `InvokeMethod(hardwareConfigurationItem, "UpdateFirmwareHardware")` with
+  `StorageId`, returning a task `Path` polled for
+  `State`/`ErrorCode`/`ErrorText`/`NewFirmwareVersion`/`Progress`.
+
+Note what that second call actually is: **Milestone pushing firmware to the
+camera itself**, not a re-read of what Milestone believes. It happens to leave
+Milestone's record correct (hence `NewFirmwareVersion`), but it is a different
+operation from the one wanted, and it is only proven over the .NET API. Whether
+the REST gateway maps `InvokeMethod` at all is unknown, and the only way to
+find out by experiment is POSTing guessed paths at a production VMS — where a
+wrong guess could disable hardware or start an unintended flash. Not done.
+
+### Resolved 2026-09-09 — the mechanism is known, and `UpdateHardware` does not exist here
+
+Two rounds of being wrong, both worth keeping.
+
+**Round 1 — my path form crashed the gateway.** From the owner's shape I built
+``POST /api/rest/v1/recordingServers/{rs}/hardware/{hw}/tasks/UpdateHardware``,
+reasoning that a `GET` returning IIS 500 (where an unknown path returns a JSON
+404) meant "route matched, wrong verb". It did not. The 500 carries
+``Error Code 0x800703e9`` = **ERROR_STACK_OVERFLOW**: the managed handler
+recurses to death on that URL. Every attempt crashes an IIS worker request on
+the customer's Management Server. Fifty were sent before the error page was
+read properly. Read the error body *first*.
+
+**Round 2 — the real mechanism, from the vendor reference.** A task is a
+**query parameter**, never a path segment:
+
+```
+GET  /api/rest/v1/hardware/{id}?tasks          → the tasks this hardware offers
+POST /api/rest/v1/hardware/{id}?task=<TaskId>  → invoke one
+```
+
+Parameters go in the body; a missing one comes back as a 400 naming what is
+required. The prefix is `/api/rest/v1` — `/api/config/v1` does not exist on
+this gateway.
+
+**And the task is not available here.** `GET ?tasks` across 23 hardware records
+spanning 7 driver strings returns the same four every time:
+`ReadPasswordHardware`, `ChangePasswordHardware`, `MoveHardware`,
+`ReplaceHardware`. Neither `UpdateHardware` nor `UpdateFirmwareHardware` is
+advertised anywhere on this estate (XProtect 25.2). The vendor reference lists
+them as examples; this deployment's drivers do not offer them.
+
+So **the feature cannot work here**, and the code says so instead of trying:
+
+- `hardware_tasks()` reads the advertised list; `update_hardware()` refuses
+  with `MilestoneTaskUnavailable` — naming what the device *does* offer —
+  before sending anything. A capability gap is not a fault.
+- The runner checks capability **before** opening an audit row, so a
+  supported-nowhere feature does not write a "failed" row per camera and make a
+  clean roll look half-broken. The warning is logged once per batch.
+- `--refresh-milestone --apply` asks one camera, then stops: "this VMS does not
+  offer UpdateHardware ... Nothing sent." Verified live 2026-09-09.
+- Two tests pin the URL form so the stack-overflow path can never ship again —
+  one against the compiled constants, because the docstring deliberately names
+  the bad form.
+
+What would actually make Milestone's value correct, if it matters: an "Update
+hardware" from the Management Client by hand, or `UpdateFirmwareHardware` if a
+future version/licence exposes it (which would mean letting Milestone own the
+flash — see the redesign note below). NetMon does not depend on either.
+
+### Superseded: the endpoint as first built
+
+The owner gave the path shape:
+``/api/config/v1/recordingServers/<rs>/hardwares/<hw>/tasks/UpdateHardware``.
+Two corrections from probing it live, both now in the code:
+
+- The prefix is **`/api/rest/v1`**, not `/api/config/v1` — the latter 404s at
+  the IIS level on this gateway (`co-milestone`, XProtect 25.2).
+- The resource is **`hardware`** singular; `hardwares` answers a JSON 404
+  "Unknown resource: hardwares".
+
+So the working path is
+``POST /api/rest/v1/recordingServers/{rs}/hardware/{hw}/tasks/UpdateHardware``.
+Evidence it is a real route: `GET` on it returns an IIS **500** where a
+genuinely unknown path returns a JSON 404 — the router matched and the wrong
+verb blew up. The nested read
+`GET /api/rest/v1/recordingServers/{rs}/hardware/{hw}` answers 200.
+
+**Built, and NOT yet executed against the live VMS.** The sandbox refused the
+canary POST, so this ships fixture-tested only, which is also why
+`[camera_ops] milestone_refresh` defaults **off** (§4.2). The first live call
+should be one camera with somebody watching.
+
+Shape of the implementation:
+
+- `MilestoneClient.update_hardware(hardware_id)` — the **only** non-GET in that
+  client besides the OAuth token, guarded by a test that parses the module AST.
+  Hardware ids are GUID-validated because they reach a URL path on the write
+  side. The parent recording server is resolved from `relations.parent` at call
+  time rather than stored: hardware does get moved between servers, and one
+  extra GET is cheaper than a migration plus a staleness bug. Never retried — a
+  task that timed out may still be running.
+- `ACTIONS["milestone_update_hardware"]` — in the same audited registry as the
+  D4 four, so what NetMon sent to a source lands in one table. Excluded from
+  `/api/actions` like `camera_firmware_update`: it is not an operator
+  row-action.
+- The runner calls it after a **verified** flash only, and **best effort**: a
+  failed refresh is audited and logged, never converted into a failed flash,
+  because the camera has already confirmed the new firmware to NetMon's face.
+- `python -m netmon.cameras.runner --refresh-milestone [--apply]` repairs the
+  cameras flashed before this existed. Scoped to devices with a verified flash
+  and sequential on purpose — a re-detect makes the recording server talk to
+  the device, and 50 at once is a load nobody asked for.
+
+### Older analysis — the two ways forward, before the endpoint was known
+
+Two ways forward, both owner decisions:
+
+1. **Confirm the REST mapping** (Milestone support, or watch what Management
+   Client sends). Given a confirmed path, this is a small, gated, audited
+   action in the D4 mould.
+2. **Let Milestone own the flash** (`UploadFileChunk` +
+   `UpdateFirmwareHardware`). This inverts spec 20 S8: NetMon would stop
+   talking to camera hardware and hand the image to the VMS, which then reports
+   the new version itself — no read-back, no platform guessing, and the
+   `[camera_ops]` direct-write risk largely disappears. A real redesign, not a
+   patch, and a much larger change than was asked for.
+
+Until either happens, NetMon does not depend on Milestone being right: the
+runner records the camera's own verified read and the collector no longer
+echoes a stale value over it (PR #28). The residual exposure is that a hardware
+record which ever gets re-asked would learn Milestone's stale value again.

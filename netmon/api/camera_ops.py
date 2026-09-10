@@ -61,6 +61,31 @@ def _actor(user) -> str:
     return getattr(user, "username", None) or "unknown"
 
 
+def _milestone_factory(cfg: Config):
+    """A callable returning a MilestoneClient, or None if Milestone is unusable.
+
+    Returns None rather than raising: the refresh is best-effort, and a batch
+    must not be blocked because the VMS credentials are missing.
+    """
+    from netmon.collectors.milestone_client import MilestoneClient, MilestoneError
+
+    s = (cfg.sources.get("milestone").settings if cfg.sources.get("milestone") else {})
+    try:
+        client = MilestoneClient(
+            host=(s.get("host") or "").strip(),
+            user=(s.get("user") or "").strip(),
+            password=s.get("pass") or "",
+            scheme=(s.get("scheme") or "https").strip(),
+            client_id=(s.get("client_id") or "GrantValidatorClient").strip(),
+            verify_ssl=str(s.get("verify_ssl", "true")).strip().lower()
+            in ("1", "true", "yes", "on"),
+        )
+    except MilestoneError as exc:
+        log.warning("milestone refresh enabled but no client could be built: %s", exc)
+        return None
+    return lambda: client
+
+
 def _refused(message: str) -> HTTPException:
     return HTTPException(status_code=409, detail=message)
 
@@ -329,7 +354,14 @@ async def start_batch(batch_id: int, request: Request,
     if batch_id in running and not running[batch_id]["task"].done():
         raise _refused(f"batch {batch_id} is already running")
 
-    runner = BatchRunner(engine, cfg, batch_id, actor=_actor(user), role="admin")
+    # The Milestone client is injected, and only when the post-flash VMS refresh
+    # is switched on — so a batch cannot reach Milestone by accident, and the
+    # runner never constructs a source client itself.
+    ms_factory = None
+    if getattr(cfg.camera_ops, "milestone_refresh", False):
+        ms_factory = _milestone_factory(cfg)
+    runner = BatchRunner(engine, cfg, batch_id, actor=_actor(user), role="admin",
+                         milestone_client=ms_factory)
     try:
         # Fail fast on the guards — flags, schedule, a missing or altered image —
         # so the caller is told now rather than finding a failed batch later.

@@ -546,3 +546,46 @@ def test_site_context_sums_storage_but_takes_the_longest_retention(tmp_path):
     assert rows["Central"]["storage_total_gb"] == 10000        # 8000 + 2000
     assert rows["Central"]["retention_days"] == 61             # not 91
     assert rows["Central"]["recorder_names"] == "NVR-1, NVR-2"
+
+
+def test_the_camera_list_carries_firmware_and_platform(tmp_path):
+    """The camera-ops page decides eligibility from these two columns.
+
+    `already on <version>` keys on `firmware` and the wrong-generation guard
+    keys on `platform`. While the list omitted them both checks evaluated
+    `undefined` in the browser, so every camera looked eligible and the
+    firmware cell rendered "—" — which is how 50 already-flashed cameras kept
+    being offered the image they were running (2026-09-09).
+    """
+    url = f"sqlite:///{tmp_path/'s.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    db.execute(engine, "UPDATE cameras SET firmware = :f, platform = :p WHERE device_id = 2",
+               {"f": "7.93.0024", "p": "CPP7.3"})
+    engine.dispose()
+
+    with _client(tmp_path, url) as client:
+        cams = client.get("/api/surveillance/cameras").json()
+    hall = [c for c in cams if c["name"] == "CAM-Hall"][0]
+    assert hall["firmware"] == "7.93.0024"
+    assert hall["platform"] == "CPP7.3"
+    # A camera with nothing recorded still returns the keys, as null — the UI
+    # renders "—" for that, which is honest; a missing key is not.
+    gym = [c for c in cams if c["name"] == "CAM-Gym"][0]
+    assert gym["firmware"] is None and gym["platform"] is None
+
+
+def test_camera_detail_still_returns_firmware_once(tmp_path):
+    """`firmware` moved into the shared column list; the detail query must not
+    select it twice (SQLite tolerates it, MariaDB returns an ambiguous column)."""
+    url = f"sqlite:///{tmp_path/'s.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    db.execute(engine, "UPDATE cameras SET firmware = :f WHERE device_id = 2",
+               {"f": "7.93.0024"})
+    engine.dispose()
+
+    with _client(tmp_path, url) as client:
+        row = client.get("/api/surveillance/cameras/2").json()
+    assert row["firmware"] == "7.93.0024"
+    assert row["serial"] is None and "vendor" in row

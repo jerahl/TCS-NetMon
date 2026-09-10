@@ -1193,3 +1193,191 @@ def test_supervisor_timeout_has_headroom_over_the_interval():
     assert col.timeout_s > col.interval_s * 2, "no headroom over the interval"
     # A long interval still scales rather than being capped at the floor.
     assert MilestoneCollector(e, FakeMs(), interval_s=600.0).timeout_s == 1500.0
+
+
+def test_a_stale_echo_cannot_undo_a_verified_flash(tmp_path):
+    """The 2026-09-09 bug: 50 flashed cameras kept their pre-flash version.
+
+    `replace_rows` rewrites the whole camera row from identity captured at the
+    start of the cycle, so echoing `firmware` back silently reverted anything
+    `cameras.runner` had recorded in between. Firmware is now written only when
+    Milestone was actually just asked, so a value NetMon learned from the
+    camera itself survives.
+    """
+    e = _identity_engine(tmp_path, ["C1"])
+    fake = FakeMs()
+    fake.cameras_data = [_cam("C1", "HW1")]
+    fake.hardware_data = [{"id": "HW1"}]
+    fake.settings_data = {"HW1": {"macAddress": "00075FD83950",
+                                  "firmwareVersion": "7.10.0074"}}
+    col = MilestoneCollector(e, fake)
+    asyncio.run(col.run_once())
+    assert db.fetch_one(e, "SELECT firmware FROM cameras")["firmware"] == "7.10.0074"
+
+    # A flash happens: the camera reported the new version and the runner
+    # recorded it. Milestone still believes the old one.
+    from netmon.cameras.runner import record_observed_firmware
+    device_id = db.fetch_one(e, "SELECT device_id FROM cameras")["device_id"]
+    record_observed_firmware(e, int(device_id), "7.93.0024")
+
+    fake.settings_calls.clear()
+    asyncio.run(col.run_once())
+    assert fake.settings_calls == []          # nothing re-asked, so nothing to write
+    assert db.fetch_one(e, "SELECT firmware FROM cameras")["firmware"] == "7.93.0024"
+    # And the MAC is still intact — the fix must not blank the other fields.
+    assert db.fetch_one(e, "SELECT mac FROM cameras")["mac"] == "00:07:5f:d8:39:50"
+
+
+def test_a_replaced_device_still_learns_its_firmware(tmp_path):
+    """Fresh hardware must still get firmware from Milestone.
+
+    Gating the write on "asked this cycle" must not mean "never written".
+    """
+    e = _identity_engine(tmp_path, ["C1"])
+    fake = FakeMs()
+    fake.cameras_data = [_cam("C1", "HW1")]
+    fake.hardware_data = [{"id": "HW1"}]
+    fake.settings_data = {"HW1": {"firmwareVersion": "8.00.0001"}}
+    asyncio.run(MilestoneCollector(e, fake).run_once())
+    assert db.fetch_one(e, "SELECT firmware FROM cameras")["firmware"] == "8.00.0001"
+
+
+# ── the one write: UpdateHardware (owner sign-off 2026-09-09) ──────────────
+
+HW_GUID = "d6b460a4-2f7e-46f1-a3e8-e29110c679cd"
+RS_GUID = "224a7d09-f9c0-44c8-9153-9b56d1eb9262"
+
+
+def _mock_client(handler):
+    """A MilestoneClient whose transport is a fake, with auth pre-satisfied."""
+    import httpx
+
+    from netmon.collectors.milestone_client import MilestoneClient
+
+    class Mocked(MilestoneClient):
+        async def _mkclient(self):
+            return httpx.AsyncClient(base_url="https://ms.example.org",
+                                     transport=httpx.MockTransport(handler))
+
+        async def bearer_token(self):
+            return "tok"
+
+    c = Mocked("ms.example.org", "u", "p")
+    c._token = "tok"
+    return c
+
+
+def _tasks_handler(task_ids, post_status=200, post_body="{}"):
+    """Serves `GET /hardware/{id}?tasks`, then the task POST."""
+    import httpx
+
+    seen = []
+
+    def handler(request):
+        q = request.url.query
+        q = q.decode() if isinstance(q, bytes) else str(q)
+        seen.append((request.method, str(request.url.path), q))
+        if request.method == "GET":
+            return httpx.Response(200, json={
+                "data": {"id": HW_GUID},
+                "tasks": [{"id": t, "displayName": t} for t in task_ids]})
+        return httpx.Response(post_status, text=post_body)
+
+    return handler, seen
+
+
+def test_update_hardware_invokes_the_task_as_a_query_parameter():
+    """Vendor reference: `POST /hardware/{id}?task=<TaskId>`.
+
+    NOT a path segment. The path form
+    /recordingServers/{rs}/hardware/{hw}/tasks/UpdateHardware makes the gateway
+    die with 0x800703e9 (ERROR_STACK_OVERFLOW) — an IIS 500 per request against
+    the customer's Management Server. It was tried live on 2026-09-09; this
+    test exists so it is never shipped again.
+    """
+    handler, seen = _tasks_handler(["UpdateHardware", "MoveHardware"])
+    code, _ = asyncio.run(_mock_client(handler).update_hardware(HW_GUID))
+    assert code == 200
+    assert [(m, path) for m, path, _ in seen] == [
+        ("GET", f"/api/rest/v1/hardware/{HW_GUID}"),
+        ("POST", f"/api/rest/v1/hardware/{HW_GUID}"),
+    ]
+    assert seen[0][2] == "tasks"
+    assert seen[1][2] == "task=UpdateHardware"
+    assert all("recordingServers" not in path for _, path, _ in seen)
+    assert all("/tasks/" not in path for _, path, _ in seen)
+
+
+def test_update_hardware_refuses_when_the_vms_does_not_offer_the_task():
+    """This estate's reality: 23 hardware records across 7 driver strings
+    advertise only ReadPassword/ChangePassword/Move/Replace. Refusing without
+    sending is the honest answer, and it protects the gateway."""
+    from netmon.collectors.milestone_client import MilestoneTaskUnavailable
+
+    handler, seen = _tasks_handler(
+        ["ReadPasswordHardware", "ChangePasswordHardware", "MoveHardware",
+         "ReplaceHardware"])
+    with pytest.raises(MilestoneTaskUnavailable, match="does not offer UpdateHardware"):
+        asyncio.run(_mock_client(handler).update_hardware(HW_GUID))
+    assert [m for m, _, _ in seen] == ["GET"]        # discovery only
+
+
+def test_update_hardware_names_what_the_device_does_offer():
+    """So an operator can see it is a capability gap, not a bug."""
+    from netmon.collectors.milestone_client import MilestoneTaskUnavailable
+
+    handler, _ = _tasks_handler(["MoveHardware", "ReplaceHardware"])
+    with pytest.raises(MilestoneTaskUnavailable, match="MoveHardware"):
+        asyncio.run(_mock_client(handler).update_hardware(HW_GUID))
+
+
+def test_update_hardware_returns_the_status_rather_than_raising():
+    """The caller audits the outcome; a 500 is data, not an exception."""
+    handler, _ = _tasks_handler(["UpdateHardware"], post_status=500, post_body="boom")
+    code, body = asyncio.run(_mock_client(handler).update_hardware(HW_GUID))
+    assert code == 500 and "boom" in body
+
+
+def test_hardware_tasks_lists_what_the_device_advertises():
+    handler, _ = _tasks_handler(["MoveHardware", "ReplaceHardware"])
+    assert asyncio.run(_mock_client(handler).hardware_tasks(HW_GUID)) == [
+        "MoveHardware", "ReplaceHardware"]
+
+
+def test_update_hardware_is_the_only_non_get_in_the_client():
+    """Read-only-first stays structural (CLAUDE.md §4.1).
+
+    The token POST and this one write are the whole list. A new verb appearing
+    here means a write to the VMS that nobody signed off.
+    """
+    import ast
+    import inspect
+
+    from netmon.collectors import milestone_client as mc
+
+    tree = ast.parse(inspect.getsource(mc))
+    posts = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            for inner in ast.walk(node):
+                if (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Attribute)
+                        and inner.func.attr in ("post", "put", "patch", "delete")):
+                    posts.append((node.name, inner.func.attr))
+    assert sorted(posts) == [("_get_token", "post"), ("update_hardware", "post")], posts
+
+
+def test_no_task_is_ever_built_as_a_path_segment():
+    """The URL form that crashed the gateway must not reappear.
+
+    Checked against the compiled constants rather than the source text: the
+    docstring deliberately names the bad form so nobody rediscovers it, and a
+    grep over source could not tell the warning from the mistake.
+    """
+    from netmon.collectors.milestone_client import MilestoneClient
+
+    doc = MilestoneClient.update_hardware.__doc__
+    consts = [c for c in MilestoneClient.update_hardware.__code__.co_consts
+              if isinstance(c, str) and c != doc]
+    joined = " ".join(consts)
+    assert "/tasks/" not in joined
+    assert "recordingServers" not in joined

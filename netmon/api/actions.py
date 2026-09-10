@@ -111,14 +111,15 @@ def list_actions(request: Request, _user=Depends(require_role(Role.viewer))) -> 
     user = getattr(request.state, "user", None)
     out = []
     for spec in ACTIONS.values():
-        if spec.source == "camera":
-            # Camera-hardware writes (S8/D11) share this registry so the audit
-            # trail stays in one table, but they are not operator row-actions:
-            # they are admin-only, batched, and governed by [camera_ops] rather
-            # than [actions]. Advertising one here would put "update firmware"
-            # next to "bounce this port" on a device page, one click from a
-            # truck roll — and `_flag` would read a config key that does not
-            # exist and answer False forever.
+        if spec.source in ("camera", "milestone"):
+            # Camera-hardware writes (S8/D11) and the Milestone hardware
+            # refresh share this registry so the audit trail stays in one
+            # table, but they are not operator row-actions: they are
+            # admin-only, batched, and governed by [camera_ops] rather than
+            # [actions]. Advertising one here would put "update firmware" next
+            # to "bounce this port" on a device page, one click from a truck
+            # roll — and `_flag` would read a config key that does not exist
+            # and answer False forever.
             continue
         enabled = _flag(cfg, spec.key)
         reason = ""
