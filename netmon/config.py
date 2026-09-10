@@ -334,6 +334,11 @@ class CameraOpsConfig:
     #: is deferred (owner, 2026-09-07) so `config_change` has nothing to run yet.
     config_change: bool = False
     firmware_update: bool = False
+    #: Ask Milestone to re-detect a camera after a verified flash, so the VMS
+    #: stops reporting the pre-flash version. NetMon's only write to Milestone,
+    #: so it is off until deliberately enabled (§4.2) — and it has never been
+    #: executed against a live VMS, only fixture-tested (spec 19).
+    milestone_refresh: bool = False
     #: The privileged camera account. Empty until the owner provisions one.
     user: str = ""
     password: str = ""
@@ -639,6 +644,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         dry_run=_ops("dry_run", "true"),
         config_change=_ops("config_change"),
         firmware_update=_ops("firmware_update"),
+        milestone_refresh=_ops("milestone_refresh"),
         user=parser.get("camera_ops", "user", fallback="").strip(),
         password=parser.get("camera_ops", "pass", fallback=""),
         use_snapshot_credentials=_ops("use_snapshot_credentials"),

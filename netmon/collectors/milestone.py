@@ -344,9 +344,21 @@ def build_cameras(cameras: list[dict], reg: dict[str, dict],
             "channel": _num(cam.get("channel")),
             "mac": mac or None,
             # Per-hardware identity from hardwareDriverSettings (migration 025).
-            # Firmware picks the SNMP profile for D10; serial is the only stable
-            # identity for a camera that has been re-addressed.
-            "firmware": (ident.get("firmwareVersion") or None),
+            # Serial is the only stable identity for a camera that has been
+            # re-addressed.
+            #
+            # `firmware` is deliberately NOT here. It is the one identity field
+            # with a second writer — `cameras.runner` records what a camera
+            # itself reported after a flash — and this row is built from
+            # identity captured at the start of the cycle and written by
+            # `replace_rows` at the end. Echoing a value read minutes ago would
+            # silently undo a verified flash that landed in between, which is
+            # exactly what happened on 2026-09-09: 50 updated cameras kept
+            # showing their pre-flash version and stayed on the "needs
+            # updating" list. Firmware is now written only when Milestone was
+            # actually just asked — see `_write_fresh_firmware`. Omitting the
+            # key means `replace_rows` does not touch the column, so a stored
+            # value survives untouched rather than being blanked.
             "serial": (ident.get("serialNumber") or None),
             "vendor": (ident.get("productID") or None),
             # The marker the backfill gates on. Set whenever settings for this
@@ -460,6 +472,9 @@ class MilestoneCollector(Collector):
         # costs nothing. 0 disables the backfill outright (§4.3) — the rest of
         # the cycle is unaffected and MACs already stored are kept.
         self.identity_batch = identity_batch
+        #: Hardware ids Milestone answered for this cycle. Gates the firmware
+        #: write so an echoed value can never undo a verified flash.
+        self._fresh_identity: set[str] = set()
         self.identity_concurrency = max(1, identity_concurrency)
         self.interval_s = interval_s
         # Headroom over the interval, not equal to it. The cycle's own work is
@@ -525,6 +540,40 @@ class MilestoneCollector(Collector):
         if changed:
             log.info("milestone: synced mgmt_ip for %d camera(s)", len(changed))
         return len(changed)
+
+    def _write_fresh_firmware(self, cam_rows: list[dict], identity: dict[str, dict]) -> int:
+        """Write `cameras.firmware`, but only for hardware asked this cycle.
+
+        The bulk row write no longer carries firmware (see `_camera_rows`),
+        because echoing a stale value undid verified flashes. This writes it
+        where Milestone genuinely just answered — a first-time backfill, or a
+        replaced device arriving as new hardware — and stays silent otherwise,
+        leaving whatever the runner recorded in place.
+
+        Cameras sharing one hardware all get the same value, which is right:
+        one device, one NIC, one firmware.
+        """
+        if not self._fresh_identity:
+            return 0
+        written = 0
+        for row in cam_rows:
+            hw_id = row.get("hardware_id")
+            if not hw_id or hw_id not in self._fresh_identity:
+                continue
+            version = (identity.get(hw_id) or {}).get("firmwareVersion")
+            version = str(version).strip() if version else ""
+            if not version:
+                continue
+            written += db.execute(
+                self.engine,
+                "UPDATE cameras SET firmware = :f WHERE device_id = :d "
+                "AND (firmware IS NULL OR firmware <> :f)",
+                {"f": version, "d": int(row["device_id"])},
+            )
+        if written:
+            log.info("milestone identity: firmware written for %d camera(s) "
+                     "freshly read this cycle", written)
+        return written
 
     def _known_identity(self) -> tuple[dict[str, dict], set[str]]:
         """Identity already stored, and which hardware has been asked.
@@ -617,6 +666,9 @@ class MilestoneCollector(Collector):
         batch = pending[:self.identity_batch]
         sem = asyncio.Semaphore(self.identity_concurrency)
         failures = 0
+        # Which hardware Milestone answered for *this cycle*. Only these may
+        # write `cameras.firmware`; see `_camera_rows`.
+        fresh: set[str] = set()
 
         async def one(hw_id: str) -> None:
             nonlocal failures
@@ -630,8 +682,10 @@ class MilestoneCollector(Collector):
             # of the marker is that this hardware has been asked. The empty dict
             # would be falsy, so mark it explicitly.
             known[hw_id] = settings or {"__asked": True}
+            fresh.add(hw_id)
 
         await asyncio.gather(*(one(h) for h in batch))
+        self._fresh_identity = fresh
         if failures:
             degraded.append("identity")
         log.info("milestone identity backfill: %d fetched, %d failed, "
@@ -917,6 +971,7 @@ class MilestoneCollector(Collector):
         cam_rows = build_cameras(cameras, registry, hw_by_id, rs_devid, now, identity)
         written += db.replace_rows(self.engine, "recording_servers", ["device_id"], rs_rows)
         written += db.replace_rows(self.engine, "cameras", ["device_id"], cam_rows)
+        written += self._write_fresh_firmware(cam_rows, identity)
         written += self._sync_camera_addresses(cam_rows)
 
         # The Smart Client organisational tree (migration 026) — how the

@@ -216,7 +216,20 @@ export function SchoolPicker({ schools, site, onSite }) {
 }
 
 export function CameraPicker({ image, cameras, selected, onToggle, onBulk, maxBatch,
-                               site = "", onSite = () => {} }) {
+                               site = "", onSite = () => {},
+                               // Initial state of the "ruled out" toggle. A prop
+                               // only so the render checks can assert the reason
+                               // text; nothing in the app passes it.
+                               showRuledOut = false }) {
+  // Ruled-out cameras are hidden by default. Leaving them in was the
+  // complaint that started this: after a roll, 50 already-updated cameras
+  // still filled the firmware tab, and "already on 7.93.0024" in the last
+  // column is not the same as being off the list. They also crowd out the
+  // 200-row cap, so the cameras that DO need the image get pushed off the
+  // bottom by the ones that do not.
+  const [showBlocked, setShowBlocked] = React.useState(showRuledOut);
+  // Declared before the early return below: a hook after a conditional return
+  // is a different hook order on the next render.
   if (!image) {
     return (
       <div className="msg">
@@ -270,7 +283,15 @@ export function CameraPicker({ image, cameras, selected, onToggle, onBulk, maxBa
       <div className="msg" style={{ fontSize: 11, margin: "10px 0 8px" }}>
         {inSite.length.toLocaleString()} camera(s) at {label} match this image's models
         {" · "}<b>{eligible.length.toLocaleString()}</b> eligible now
-        {blocked.length > 0 && <> · {blocked.length.toLocaleString()} ruled out</>}
+        {blocked.length > 0 && (
+          <> · <button type="button" className="btn sm"
+                       onClick={() => setShowBlocked((v) => !v)}
+                       title={showBlocked
+                         ? "hide the cameras this image cannot go to"
+                         : "show why these cameras are not eligible"}>
+            {blocked.length.toLocaleString()} ruled out{showBlocked ? " (hide)" : " (show)"}
+          </button></>
+        )}
         {" · "}batches are capped at {maxBatch}
         {eligible.length > maxBatch && (
           <> — {Math.ceil(eligible.length / maxBatch)} batches to finish {label}</>
@@ -288,13 +309,20 @@ export function CameraPicker({ image, cameras, selected, onToggle, onBulk, maxBa
           </button>
         </div>
       )}
+      {eligible.length === 0 && !showBlocked && (
+        <div className="msg" style={{ margin: "8px 0" }}>
+          Nothing at {label} needs {image.version}
+          {blocked.length > 0 && <> — all {blocked.length.toLocaleString()} matching
+            camera(s) are ruled out, most commonly because they already run it</>}.
+        </div>
+      )}
       <table className="link-tbl">
         <thead>
           <tr><th style={{ width: 22 }}></th><th>Camera</th><th>Site</th><th>Model</th>
               <th>Firmware</th><th>Platform</th><th>Why not</th></tr>
         </thead>
         <tbody>
-          {inSite.slice(0, 200).map((c) => {
+          {(showBlocked ? inSite : eligible).slice(0, 200).map((c) => {
             const reason = why(c);
             const on = selected.includes(c.device_id);
             return (
