@@ -306,6 +306,60 @@ interval_s = 600
 # Backups older than this are 'stale' (default 7 days).
 stale_after_s = 604800
 
+[micetro]
+# Micetro (BlueCat / Men&Mice) DDI — DNS/DHCP/IPAM. See
+# docs/spec/21-micetro-ddi.md.
+#
+# ON-DEMAND, NOT SCHEDULED (owner, 2026-09-09; spec 21 §7b). There is no
+# supervised task: mirroring the address space cost ~2,000 requests per sweep
+# to pre-answer questions nobody had asked, and measured out at 16 MACs named
+# that PacketFence could not already name. Lookups now happen when someone
+# searches, via GET /api/ddi/resolve?ip=|mac=.
+#
+# So `enabled` here does NOT mean "poll". It means "NetMon may query Micetro
+# at all". With it false, /api/ddi/resolve answers 503 and nothing reaches the
+# appliance.
+#
+# READ-ONLY, and GET-only by construction: HTTP Basic on each request, never
+# POST /micetro/sessions, so the client has no non-GET method. HTTPS enforced
+# in code — Basic auth puts the credential on every request.
+# Use a READ-ONLY Micetro account.
+enabled = false
+# url = https://micetro.tcs.internal
+# username = netmon-ro
+# password = REPLACE_WITH_MICETRO_PASSWORD
+verify_ssl = true
+
+# --- on-demand lookup ---------------------------------------------------
+# An IP resolves in one request (~0.2s): Micetro's addrRef accepts a literal
+# IP. A MAC is harder — Micetro has no global MAC query, and it stores the MAC
+# as a *client identifier*, so:
+#   1. NetMon first looks for an IP it already knows for that MAC (PacketFence
+#      covers ~84% of FDB MACs) and asks Micetro about that address — but only
+#      trusts the answer if Micetro confirms the MAC, since a stale IP may have
+#      been re-leased to something else;
+#   2. failing that, it fans `filter=<mac>` across all 261 subnet ranges:
+#      ~5s on a hit, ~9s to prove absence.
+# deep_scan = false declines step 2 and says so rather than answering "unknown".
+deep_scan = true
+lookup_concurrency = 8
+# Short result cache so a double-click is not a second 9s scan.
+cache_ttl_s = 60
+
+# --- deliberate `--once` refresh ----------------------------------------
+# `python -m netmon.collectors.micetro --once` still exists, for the DHCP scope
+# table (261 scopes in 2 requests — fleet-wide capacity has no search-time
+# equivalent, since nobody searches for "which pools are full"). Nothing runs
+# it on a timer. sweep_addresses defaults OFF: that is the expensive half, and
+# on-demand lookup replaced it.
+sweep_addresses = false
+sweep_scopes = true
+page_size = 500
+max_records = 60000
+max_ranges = 2000
+scope_warn_pct = 85
+scope_crit_pct = 95
+
 [engine]
 # Alert engine (Phase 6). Evaluates alert_rules against device_state.
 # Disabled by default (per-step reversibility). Ships in SHADOW mode: logs

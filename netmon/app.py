@@ -28,7 +28,7 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 from netmon import __version__, db, migrate
 from netmon import settings as settings_engine
 from netmon.api import (
-    actions, alerts, auth_routes, camera_ops, devices, events, health,
+    actions, alerts, auth_routes, camera_ops, ddi, devices, events, health,
     history as history_api, nac, registry, search, settings, sites, status, summary,
     surveillance, switches, voip, wireless,
 )
@@ -187,6 +187,14 @@ def register_tasks(app: FastAPI, cfg: Config, engine) -> None:
             supervisor.register("rconfig", rc.run_guarded, interval_s=rc.interval_s, timeout_s=rc.timeout_s)
             log.info("rConfig collector enabled: %ss", rc.interval_s)
 
+    # Micetro is deliberately NOT registered here (owner, 2026-09-09; spec 21
+    # §7b). It is the only source with no scheduled task: mirroring the address
+    # space cost ~2,000 requests per sweep to answer questions nobody had asked
+    # yet, so lookups are now on-demand via /api/ddi/resolve, and the
+    # `MicetroCollector` survives only as a deliberate `--once` refresh for the
+    # DHCP-scope table. `[micetro] enabled` therefore no longer means "poll" —
+    # it means "NetMon may query Micetro at all".
+
     if cfg.engine.enabled:
         alert_engine = AlertEngine(engine, cfg.engine)
         supervisor.register("engine", alert_engine.run_guarded,
@@ -302,6 +310,7 @@ def create_app(
     app.include_router(voip.router)
     app.include_router(registry.router)
     app.include_router(nac.router)
+    app.include_router(ddi.router)
     app.include_router(alerts.router)
     app.include_router(settings.router)
     app.include_router(actions.router)

@@ -272,3 +272,73 @@ Ported from `reference/lib/RConfigClient.php`.
   stale_after_s`.
 
 Both are standalone-runnable (`python -m netmon.collectors.threecx|rconfig`).
+
+## Micetro (`micetro.py`, `micetro_client.py`) — DDI: DNS / DHCP / IPAM
+
+New in spec 21 (`docs/spec/21-micetro-ddi.md`) — no ZCD ancestor; this is a
+source Zabbix never federated.
+
+**What gap it closes.** `fdb_entries` learns every MAC that forwards a frame;
+`pf_nodes` only knows the endpoints PacketFence authenticated. So the
+port-detail identity pane showed a card for the Chromebooks and a bare hex
+string for the printers, cameras, AV gear and static servers — exactly the
+population an operator opened the pane to identify. Micetro is the district's
+DDI system of record and holds the missing join, IP ↔ MAC ↔ DNS name, for all
+of them.
+
+- **Auth:** HTTP **Basic** on every request; **HTTPS enforced in code** (the
+  credential rides every call). Base path `/mmws/api/v2`.
+- **Read-only, structurally.** The API docs steer you to
+  `POST /micetro/sessions` for a Bearer token, but Basic auth makes that
+  unnecessary ("the Login command becomes unnecessary, and the session ID is
+  not used" — vendor docs), so the client **has no non-GET method at all**.
+  `tests/test_micetro.py::test_client_has_no_non_get_method` parses the module
+  AST to keep it that way; adding a write is a reviewable diff needing owner
+  sign-off (CLAUDE.md §4.1).
+- **NOT SCHEDULED** (owner, 2026-09-09; spec 21 §7b). The only source with no
+  supervised task. Mirroring the address space cost ~2,000 requests per sweep
+  and measured out at **16 MACs** named that PacketFence could not already name
+  (§7a), so lookups moved to search time. `[micetro] enabled` therefore means
+  "NetMon may query Micetro at all", **not** "poll".
+- **On-demand:** `GET /api/ddi/resolve?ip=` is one request (~0.2s — `addrRef`
+  takes a literal IP). `?mac=` has no global equivalent: Micetro stores a MAC
+  as a *client identifier*, so NetMon tries an IP it already knows for that MAC
+  (PF covers ~84% of FDB MACs) and **only trusts it if Micetro confirms the
+  MAC** — a re-leased address holds someone else — then falls back to fanning
+  `filter=<mac>` across all 261 subnets (~5s hit, ~10s to prove absence).
+  `deep=false` declines that and says why. One scan at a time process-wide;
+  60s result cache; writes nothing to the DB.
+- **Filtering works**, contrary to an earlier note here: `field=value` with `^`
+  for prefix, and a bare value is a free-text match. The "broken" claim came
+  from probing `state=Assigned` against a range holding no Assigned addresses
+  and misreading the correct 0.
+- **Endpoints:** `GET /ipamRecords/<ip>` (lookup), `GET /ranges` +
+  `GET /ranges/{ref}/ipamRecords` (the unscheduled `--once` sweep),
+  `GET /dhcpScopes`. All list calls `offset`/`limit` paged.
+- **Writes:** `ddi_addresses` + `ddi_scopes` (migration 031), replace-on-refresh.
+  **No `device_state`** — a DHCP scope is not a device and the dimension column
+  is an ENUM, so scope utilization is *visible but silent* until that data-model
+  question is answered (spec 21 §6 / Q3). Snapshot keys `micetro.addresses` and
+  `micetro.dhcp` carry per-run coverage counts.
+- **MAC precedence:** lease → reservation → ARP discovery, with the winner's
+  origin stored in `mac_origin`. A lease means the DHCP server handed that
+  address to that MAC; discovery can be a scan interval stale. DHCPv6 leases
+  carry `duid`/`iaid` rather than a MAC, so v6-only addresses identify by name
+  alone (spec 21 Q5).
+- **Scale.** Micetro's address space is not NetMon's device count — one `/16`
+  container holds 65,534 addresses against a ~3,600 device registry. Only
+  `subnet = true` ranges are walked, and a record is kept only if it carries a
+  MAC, a DNS name, a lease, a reservation, or a non-`Free` state. Rows therefore
+  scale with *assignments*.
+- **Failure modes.** `max_records` / `max_ranges` **raise** rather than
+  truncate — a half-mirror that looks complete is the fabrication §4.5 forbids,
+  and the first `--once` run reports the real numbers to raise them to. Any
+  fetch error raises before a single row is written, so prior rows stay visibly
+  stale. A pager that ignores `offset` trips `MAX_PAGES` and fails loud.
+- **`--once` only, for DHCP scopes.** 261 scopes in 2 requests; fleet-wide
+  capacity has no search-time equivalent (nobody searches for "which pools are
+  full") and it is where the uncontested value was — 2 pools at 100%.
+  `sweep_addresses` defaults **off**; it is the expensive half.
+- **Config:** `[micetro] enabled, url, username, password, verify_ssl,
+  deep_scan, lookup_concurrency, cache_ttl_s, sweep_addresses, sweep_scopes,
+  page_size, max_records, max_ranges, scope_warn_pct, scope_crit_pct`.

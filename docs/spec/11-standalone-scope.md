@@ -124,6 +124,21 @@ conventions / the standing new-dependency & charter checkpoints).
 | D11 | **Bulk camera operations** (spec 20 §3 S8, owner-requested 2026-09-07): bulk *configuration change* from a closed setting catalogue and bulk *firmware update* from a NetMon-managed image store, both **direct HTTP writes to the cameras** (Bosch RCP+/upload first, vendor-profile-extensible) — the first writes outside D4's four platform-mediated calls, and the first to hardware | Approve with D4's conditions raised for a hardware write: **admin** role, audit chokepoint, `[camera_ops]` flags default-off with **dry-run default**, batches with **canary → rings → abort threshold**, pre-flight refusal (reachability + source up, model allow-list, credentials), verification by **read-back** not return code, off-hours default, no Milestone write. Build after S1–S6 and after D7 has proven the camera HTTP path live; firmware after config-change has run clean | ✅ **approved in principle 2026-09-07** (owner: "add the ability to bulk change and bulk update firmware on the cameras"). Design questions answered the same day: setting catalogue **deferred** (so bulk config-change is not designed yet and the batch runner is built op-agnostic); firmware images **uploaded through NetMon by an admin**, SHA-256 + model allow-list on upload; XProtect's own firmware push is **not in use**, but the owner asked whether NetMon could drive it instead of talking to cameras directly — recorded as a read-only investigation in spec 20 S8, and **it would be a write to Milestone, which needs its own sign-off separate from D11** (D11 covers writes to cameras, not to the VMS). Deferring the catalogue inverts the planned risk order — firmware, the irreversible half, would ship first — so spec 20 S8 records two ways to keep the proving-ground margin |
 | D10 | **Direct camera monitoring** (spec 13): read-only SNMP (`snmpget`/`snmpbulkwalk`, no new dependency — same net-snmp path as D6) against the cameras Milestone already gives us, for host health Milestone can't supply — CPU, kernel-uptime reboot, filesystem, interface up/down + bandwidth, encoder bitrate, VCA motion. Bosch profile first (owner's Zabbix template, `reference/zabbix/milestone/template_milestone_camera_bosch.yaml`), vendor-extensible; alerts shadow-first; `[camera_snmp]` default-off | Approve as **post-parity 11.x**, gated + default-disabled — beyond ZCD parity and a direct-re-poll charter point, so plan now / build after cutover-critical work. Depends on the (approved) D6 SNMP amendment | ✅ **approved 2026-07-28** — build in **11.x**, `[camera_snmp]` default-off, alerts shadow-first. Two prerequisites recorded 2026-07-28: cameras have **no `mgmt_ip`/`snmp_capable`** today, and ~2,659 SNMP targets is ~17× the switch fleet, so it needs a load assessment and the contested-address guard (`netmon.state.native_trustworthy`) |
 
+**D12 — Micetro DDI federation** (owner-directed 2026-09-09; spec 21). A
+*sixth* federated source, and the first one Zabbix never supplied: Micetro
+(BlueCat / Men&Mice) DNS/DHCP/IPAM, read via `GET /mmws/api/v2` with HTTP Basic
+auth. It closes an identity gap parity work left open — `fdb_entries` learns
+every MAC that forwards a frame while `pf_nodes` only knows what PacketFence
+authenticated, so the port-detail pane named the Chromebooks and left the
+printers, cameras, AV gear and static servers as bare hex. Scope, chosen by the
+owner: identity enrichment **plus** DHCP scope utilization; DNS/DHCP *server*
+health declined (servers stay in Zabbix, §2). **No new charter exception** —
+the client is GET-only by construction (Basic auth removes the login POST the
+API docs steer you to), so §4.1 holds unamended. `[micetro] enabled = false`
+on merge. Utilization is visible but **cannot alert**: a DHCP scope is not a
+device and `device_state.dimension` is an ENUM, which is spec 21 Q3 and needs
+an owner decision before anyone is promised an exhaustion email.
+
 ## 7. Revised phase plan
 
 Phases 0–9 stand as delivered (0–4, 6, 9 landed; 5/7 collectors landed at
@@ -139,7 +154,7 @@ with amendments:
 | **10.4 Surveillance + VoIP** | Cameras/RS/storage persistence + `milestone.overview`; **ESS WebSocket wiring (✅ D5)**; **camera snapshot proxy (✅ D7)**; trunks/extensions persistence + wire the existing dead `system_status()` | + D5, + D7 explicit |
 | **10.5 Global + Search + polish** | `/api/summary`, `/api/sites` cards, `/api/search` + ⌘K, Global page, staleness badging everywhere | unchanged |
 | **10.6 History ring buffer (✅ D3)** | `state_samples` (24h, pruned) + writers (port rates, fleet counts, VoIP calls) + chart slots across pages | new; can interleave after 10.1 |
-| **11.x Post-parity** | FortiGate collector + page (D1); operator write actions with audit log (✅ D4); **direct camera SNMP monitoring (✅ D10 — spec 13)**; EAPS/SFP-DOM switch extras | new bucket |
+| **11.x Post-parity** | FortiGate collector + page (D1); operator write actions with audit log (✅ D4); **direct camera SNMP monitoring (✅ D10 — spec 13)**; **Micetro DDI federation (spec 21 — D12, owner-directed 2026-09-09)**; EAPS/SFP-DOM switch extras | new bucket |
 | **8 (unchanged)** | Parallel run & cutover — shadow-vs-Zabbix diff, owner flips `shadow=false`, Zabbix hosts for these domains disabled | after 10.4 |
 
 Ordering: 10.0 → 10.1 first — 10.1 unblocks the FDB joins that 10.2 (client

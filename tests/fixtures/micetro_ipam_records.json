@@ -1,0 +1,157 @@
+{
+  "_comment": [
+    "Sanitized Micetro IPAM records, shaped from the published 26.1.0 OpenAPI",
+    "schema (IPAMRecord / DHCPLease / DHCPReservation / DNSHost). No production",
+    "payload was available from the build host — see docs/spec/21-micetro-ddi.md",
+    "Q1: this must be re-checked against the real appliance before enabling.",
+    "Addresses use the RFC 5737 documentation range and MACs a locally",
+    "administered prefix; hostnames are invented."
+  ],
+  "ipamRecords": [
+    {
+      "_case": "DHCP client: lease carries the MAC, DNS host carries the name",
+      "addrRef": "IPAMRecords/1001",
+      "address": "192.0.2.31",
+      "claimed": false,
+      "state": "Assigned",
+      "discoveryType": "Lease",
+      "lastSeenDate": "2026-09-09T07:15:00Z",
+      "lastKnownClientIdentifier": "02-00-5e-10-00-01",
+      "dnsHosts": [
+        {
+          "dnsRecord": {
+            "ref": "DNSRecords/5001",
+            "name": "bhs-lib-chrome14.tcs.internal",
+            "type": "A",
+            "data": "192.0.2.31"
+          },
+          "ptrStatus": "OK"
+        }
+      ],
+      "dhcpLeases": [
+        {
+          "name": "bhs-lib-chrome14",
+          "type": "dynamic",
+          "mac": "02:00:5e:10:00:01",
+          "address": "192.0.2.31",
+          "lease": "2026-09-09T19:15:00Z",
+          "state": "active",
+          "clientIdentifierType": "hardware"
+        }
+      ],
+      "dhcpReservations": []
+    },
+    {
+      "_case": "static printer: reservation MAC, separator style differs, extra DNS names",
+      "addrRef": "IPAMRecords/1002",
+      "address": "192.0.2.60",
+      "state": "Assigned",
+      "discoveryType": "ARP",
+      "lastSeenDate": "2026-09-09T06:50:00Z",
+      "dnsHosts": [
+        {
+          "dnsRecord": {
+            "ref": "DNSRecords/5002",
+            "name": "bhs-lib-printer3.tcs.internal",
+            "type": "A"
+          }
+        },
+        {
+          "dnsRecord": {
+            "ref": "DNSRecords/5003",
+            "name": "print-lib.tcs.internal",
+            "type": "A"
+          }
+        }
+      ],
+      "dhcpLeases": [],
+      "dhcpReservations": [
+        {
+          "ref": "DHCPReservations/7001",
+          "name": "bhs-lib-printer3",
+          "clientIdentifier": "02-00-5E-10-00-02",
+          "addresses": ["192.0.2.60"],
+          "type": "hardware"
+        }
+      ]
+    },
+    {
+      "_case": "discovery only: ARP saw a MAC, nothing else knows it. The population PF misses.",
+      "addrRef": "IPAMRecords/1003",
+      "address": "192.0.2.77",
+      "state": "Claimed",
+      "discoveryType": "ARP",
+      "lastSeenDate": "2026-09-08T22:03:00Z",
+      "lastKnownClientIdentifier": "0200.5e10.0003",
+      "device": "av-projector-b12",
+      "interface": "eth0",
+      "dnsHosts": [],
+      "dhcpLeases": [],
+      "dhcpReservations": []
+    },
+    {
+      "_case": "DNS name but no MAC anywhere — still worth a row",
+      "addrRef": "IPAMRecords/1004",
+      "address": "192.0.2.90",
+      "state": "Assigned",
+      "discoveryType": "None",
+      "dnsHosts": [
+        {
+          "dnsRecord": {"ref": "DNSRecords/5004", "name": "ntp1.tcs.internal", "type": "A"}
+        }
+      ],
+      "dhcpLeases": [],
+      "dhcpReservations": []
+    },
+    {
+      "_case": "DROPPED: free and empty. The bulk of any range; must never reach the DB.",
+      "addrRef": "IPAMRecords/1005",
+      "address": "192.0.2.150",
+      "state": "Free",
+      "discoveryType": "None",
+      "dnsHosts": [],
+      "dhcpLeases": [],
+      "dhcpReservations": []
+    },
+    {
+      "_case": "DROPPED: Free with no evidence at all and no state string",
+      "addrRef": "IPAMRecords/1006",
+      "address": "192.0.2.151",
+      "dnsHosts": [],
+      "dhcpLeases": [],
+      "dhcpReservations": []
+    },
+    {
+      "_case": "KEPT despite being empty: Held is not Free, so it is not available",
+      "addrRef": "IPAMRecords/1007",
+      "address": "192.0.2.160",
+      "state": "Held",
+      "discoveryType": "None",
+      "dnsHosts": [],
+      "dhcpLeases": [],
+      "dhcpReservations": []
+    },
+    {
+      "_case": "IPv6: DHCPv6 lease carries duid/iaid, not a MAC (spec 21 Q5)",
+      "addrRef": "IPAMRecords/1008",
+      "address": "2001:db8::31",
+      "state": "Assigned",
+      "discoveryType": "Lease",
+      "dnsHosts": [
+        {
+          "dnsRecord": {"ref": "DNSRecords/5005", "name": "bhs-lib-chrome14.tcs.internal", "type": "AAAA"}
+        }
+      ],
+      "dhcpLeases": [
+        {
+          "name": "bhs-lib-chrome14",
+          "duid": "00:01:00:01:2c:1a:ff:ee:02:00:5e:10:00:01",
+          "address": "2001:db8::31",
+          "state": "active"
+        }
+      ],
+      "dhcpReservations": []
+    }
+  ],
+  "totalResults": 8
+}

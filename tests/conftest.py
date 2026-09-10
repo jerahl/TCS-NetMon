@@ -374,6 +374,44 @@ CREATE TABLE wireless_clients (
 )
 """
 
+DDI_ADDRESSES_DDL_SQLITE = """
+CREATE TABLE ddi_addresses (
+    ip TEXT PRIMARY KEY,
+    mac TEXT,
+    mac_origin TEXT,
+    dns_name TEXT,
+    dns_extra INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL DEFAULT 'unknown',
+    discovery_type TEXT,
+    last_seen TIMESTAMP,
+    lease_state TEXT,
+    lease_expires TIMESTAMP,
+    reservation TEXT,
+    device_name TEXT,
+    interface_name TEXT,
+    range_cidr TEXT,
+    addr_ref TEXT,
+    updated_at TIMESTAMP
+)
+"""
+
+DDI_SCOPES_DDL_SQLITE = """
+CREATE TABLE ddi_scopes (
+    scope_ref TEXT PRIMARY KEY,
+    name TEXT,
+    range_cidr TEXT,
+    from_addr TEXT,
+    to_addr TEXT,
+    server TEXT,
+    superscope TEXT,
+    enabled INTEGER,
+    available INTEGER,
+    utilization_pct REAL,
+    severity TEXT NOT NULL DEFAULT 'unknown',
+    updated_at TIMESTAMP
+)
+"""
+
 PF_NODES_DDL_SQLITE = """
 CREATE TABLE pf_nodes (
     mac TEXT PRIMARY KEY,
@@ -625,6 +663,8 @@ def create_core_tables(engine) -> None:
             WIRELESS_CLIENTS_DDL_SQLITE,
             SSIDS_DDL_SQLITE,
             PF_NODES_DDL_SQLITE,
+            DDI_ADDRESSES_DDL_SQLITE,
+            DDI_SCOPES_DDL_SQLITE,
             RECORDING_SERVERS_DDL_SQLITE,
             CAMERAS_DDL_SQLITE,
             CAMERA_GROUPS_DDL_SQLITE,
