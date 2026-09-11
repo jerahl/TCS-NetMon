@@ -208,6 +208,35 @@ def register_tasks(app: FastAPI, cfg: Config, engine) -> None:
         log.info("history sampler enabled: %ss, retain %dh",
                  cfg.history.interval_s, cfg.history.retention_hours)
 
+    if cfg.automation.enabled:
+        from netmon.automation.portmemory import PortMemory
+        from netmon.automation.runner import WorkflowRunner
+
+        # The sampler runs whenever the engine does, and is the reason the
+        # engine can act at all: it records each powered device's access port
+        # while the device is healthy, because a device that has gone down has
+        # already aged out of the switch forwarding tables (spec 22 §2b).
+        port_memory = PortMemory(engine, interval_s=cfg.automation.port_memory_interval_s)
+        supervisor.register("port_memory", port_memory.run_guarded,
+                            interval_s=port_memory.interval_s,
+                            timeout_s=port_memory.timeout_s)
+
+        def _action_enabled(key: str) -> bool:
+            """G10, delegated to the same flags the operator-facing actions use.
+
+            Deliberately not reimplemented inside the guards: an action that
+            reads as disabled in Settings must not fire from a workflow.
+            """
+            if key in ("camera_reboot", "camera_firmware_update"):
+                return bool(cfg.camera_ops.enabled)
+            return bool(cfg.actions.enabled and getattr(cfg.actions, key, False))
+
+        workflows = WorkflowRunner(engine, cfg.automation, action_enabled=_action_enabled)
+        supervisor.register("automation", workflows.run_guarded,
+                            interval_s=workflows.interval_s, timeout_s=workflows.timeout_s)
+        log.info("automation engine enabled: %ss (per-workflow enabled/shadow flags "
+                 "still apply)", cfg.automation.interval_s)
+
     # Derives the reachability tier from source_status + ping. Pure DB, no
     # source calls, so it is always on: it cannot fail an integration and its
     # absence would leave the tier rules matching nothing at all.

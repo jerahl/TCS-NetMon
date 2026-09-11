@@ -211,3 +211,32 @@ def test_migrate_cli_friendly_error_on_unopenable_db(tmp_path, capsys):
     assert rc == 2
     err = capsys.readouterr().err
     assert "cannot open the database" in err
+
+
+def test_032_creates_automation_tables():
+    migs = {m.version: m for m in discover_migrations()}
+    assert "032" in migs, "expected 032 automation migration"
+    sql = migs["032"].path.read_text()
+    for table in ("workflows", "workflow_runs", "workflow_run_steps",
+                  "action_proposals", "device_port_memory"):
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in sql, f"missing table {table}"
+
+
+def test_032_seeds_workflows_off_and_in_shadow():
+    """Spec 22 W3: a seeded workflow must be inert until the owner says
+    otherwise twice. A default of 1 on either column would put an unattended
+    remediation engine on the fleet at migration time."""
+    sql = {m.version: m for m in discover_migrations()}["032"].path.read_text()
+    assert "enabled      TINYINT(1)   NOT NULL DEFAULT 0" in sql
+    assert "shadow       TINYINT(1)   NOT NULL DEFAULT 1" in sql
+
+
+def test_032_device_ids_match_the_devices_table():
+    """`devices.id` is BIGINT (001) and `action_audit.id` is BIGINT UNSIGNED
+    (020). An INT here would silently truncate the joins these tables exist
+    for."""
+    import re
+    sql = {m.version: m for m in discover_migrations()}["032"].path.read_text()
+    assert re.search(r"(?m)^\s+device_id\s+INT\b", sql) is None
+    assert re.search(r"(?m)^\s+switch_device_id\s+INT\b", sql) is None
+    assert re.search(r"(?m)^\s+action_audit_id\s+BIGINT\s+NULL", sql) is None

@@ -634,6 +634,86 @@ CREATE TABLE state_samples (
 """
 
 
+# Automation workflow engine (spec 22, migration 032).
+AUTOMATION_DDL_SQLITE = (
+    """
+    CREATE TABLE workflows (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        title TEXT,
+        description TEXT,
+        graph TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 0,
+        shadow INTEGER NOT NULL DEFAULT 1,
+        version INTEGER NOT NULL DEFAULT 1,
+        created_by TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE workflow_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workflow_id INTEGER NOT NULL,
+        workflow_version INTEGER NOT NULL DEFAULT 1,
+        device_id INTEGER,
+        trigger_reason TEXT,
+        status TEXT NOT NULL DEFAULT 'running',
+        shadow INTEGER NOT NULL DEFAULT 1,
+        message TEXT,
+        started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        finished_at TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE workflow_run_steps (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id INTEGER NOT NULL,
+        seq INTEGER NOT NULL,
+        node_id TEXT NOT NULL,
+        node_kind TEXT NOT NULL,
+        label TEXT,
+        decision TEXT NOT NULL,
+        detail TEXT,
+        action_audit_id INTEGER,
+        at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE action_proposals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id INTEGER,
+        workflow_id INTEGER,
+        device_id INTEGER,
+        action TEXT NOT NULL,
+        target TEXT,
+        params TEXT,
+        rationale TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        expires_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        decided_by TEXT,
+        decided_at TIMESTAMP,
+        action_audit_id INTEGER
+    )
+    """,
+    """
+    CREATE TABLE device_port_memory (
+        device_id INTEGER PRIMARY KEY,
+        switch_device_id INTEGER NOT NULL,
+        ifindex INTEGER,
+        port TEXT,
+        poe_cycle_safe INTEGER NOT NULL DEFAULT 0,
+        why TEXT,
+        macs_on_port INTEGER,
+        mac TEXT,
+        confirmed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+)
+
+
 def create_core_tables(engine) -> None:
     """Create the tables the poller / collectors / engine / API touch (SQLite)."""
     from sqlalchemy import text
@@ -676,6 +756,7 @@ def create_core_tables(engine) -> None:
             STATE_SAMPLES_DDL_SQLITE,
             ACTION_AUDIT_DDL_SQLITE,
             *CAMERA_OPS_DDL_SQLITE,
+            *AUTOMATION_DDL_SQLITE,
         ):
             conn.execute(text(ddl))
 
