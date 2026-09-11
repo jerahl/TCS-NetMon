@@ -1,6 +1,6 @@
 # Spec 22 — Automation workflow engine
 
-**Status:** 22.1 built 2026-09-11 (shadow, default off); 22.2–22.4 open
+**Status:** 22.1–22.3 built 2026-09-11 (shadow, default off); 22.4–22.5 open
 **Owner ask (2026-09-11):** "start on an automation workflow engine… Start with the
 cameras, for example. if a camera goes down ping in if ping is up connect to camera
 and restart, if ping is down cycle poe on the camera port. I'd like to have a visual
@@ -93,6 +93,8 @@ the single guard most likely to fire in production on day one.
 | **W7** | **`camera_reboot` is approved** as a new `ACTIONS` entry: an RCP+ write to Bosch camera hardware, `disruptive = True`, behind `[camera_ops]`, default off. | 2026-09-11 (owner, CLAUDE.md §4.1) | The ping-up branch needs it as a *fallback*. It is a real hardware write and gets the same treatment as firmware: registry entry, config flag, audit row, approval queue. |
 | **W8** | **The ping-up branch tries Milestone first.** `milestone_update_hardware` (non-disruptive, approved 2026-09-09) runs automatically; `camera_reboot` is only proposed if the camera is still down after it. | 2026-09-11 (owner) | If the camera answers ICMP, the broken thing is usually the VMS connection, not the camera. Cheapest correct fix first, and it is the one that needs no approval. |
 | **W9** | **A run acts on one device at a time and is idempotent per (workflow, device).** A device with an open run or a pending proposal is not re-triggered. | 2026-09-11 | Without this, a 5-minute evaluation loop queues 12 proposals an hour for one broken camera. |
+| **W10** | **G3's contradiction test applies only to actions that assume the device is offline** (`guards.ASSUMES_OFFLINE`, today just `poe_cycle`). The contested-IP refusal stays unconditional for every action. | 2026-09-11 | Found building 22.2. The alert engine's version of this check refuses to *open an alert* on an uncorroborated source claim. For remediation the disagreement is often the fault itself: a camera answering ICMP while Milestone cannot see it is not recording. And `camera_reboot` needs the camera reachable to receive the RCP+ write at all — ping-up is its precondition, not a contradiction. Applied bluntly, G3 made the entire ping-up arm unreachable. |
+| **W11** | **A capability the source does not offer is `skipped`, not `failed`, and the run continues.** | 2026-09-11 | This estate advertises `UpdateHardware` on no hardware at all, so W8's cheap first step never fires here. Treating that as a failure would stop the run at a step that was never going to work and strand the fallback that exists for exactly this case. Detected before an audit row is opened, as `cameras/runner.py` already does. |
 
 ## 4. Data model (migration `032`)
 
@@ -160,8 +162,8 @@ is only consulted *after* Milestone has independently said the device is down.
 | Phase | Deliverable | State |
 |---|---|---|
 | 22.1 | Spec, migration `032`, `device_port_memory` + sampler, guards, runner, node registry, seeded camera workflow — all shadow, default off | ✅ built 2026-09-11 |
-| 22.2 | `/api/automation` — workflows CRUD, runs/steps, shadow report, proposal approve/dismiss | |
-| 22.3 | React Flow editor + Automation page + proposal queue in the UI | |
+| 22.2 | `/api/automation` — workflows CRUD, runs/steps, shadow report, proposal approve/dismiss; run resumption (migration `033`); `_execute` wired | ✅ built 2026-09-11 |
+| 22.3 | React Flow editor + Automation page + proposal queue in the UI | ✅ built 2026-09-11 |
 | 22.4 | `camera_reboot` RCP+ implementation (W7) behind `[camera_ops]` | |
 | 22.5 | Owner reviews the shadow trail, flips `shadow = false` per workflow | owner-gated |
 
@@ -173,19 +175,29 @@ wiring for the `automation` and `port_memory` tasks, `camera_reboot` registered
 in `ACTIONS` (W7), 30 tests in `tests/test_automation.py` + 3 in
 `tests/test_migrations.py`. Full suite green.
 
-**Start 22.2 with:**
+**Built in 22.2:** migration `033` (`resume_at`/`resume_node`/status `waiting`),
+run resumption + abandonment, proposal expiry sweep, `_execute` wired for
+`milestone_update_hardware` with the W11 capability gap, guard fixes W10 and the
+`still_down` predicate, `netmon/api/automation.py` + 18 tests in
+`tests/test_automation_api.py`.
 
-- `WorkflowRunner._execute` is a deliberate stub. It refuses loudly rather than
-  reporting success it did not have, so `milestone_update_hardware` is not
-  actually callable from a workflow yet. Wire it through `AuditedAction` the
-  way `api/actions.py` does, and record the `action_audit_id` on the step.
-- `wait` nodes end the evaluation and mark the run `done` with a "resumes on a
-  later cycle" message, but nothing resumes them yet — the run has no cursor.
-  22.2 needs either a `resume_at`/`resume_node` pair on `workflow_runs` or a
-  re-trigger that picks the run up where it stopped. As shipped, the ping-up
-  arm reaches `milestone_update_hardware` and then stops at `settle`; the
-  `camera_reboot` fallback is unreachable until this lands.
-- Proposal expiry is stored (`expires_at`) but nothing sweeps it.
+**Built in 22.3:** `frontend/src/pages/automation.jsx` — React Flow canvas with
+per-kind node renderers, an inspector driven entirely by `/api/automation/meta`
+(so the palette cannot offer something the engine will not run), a read-only
+guard panel, the branch-arm editor, the approval queue and the run trail with
+the shadow report. Route `#/automation`, nav entry, 3 render-checks including a
+graph round-trip.
+
+**Start 22.4 with:**
+
+- `camera_reboot` is registered, audited, proposable and approvable, but
+  approving it returns 409 — there is no RCP+ write behind it yet. That is the
+  next piece of real work, and it is the one the ping-up arm actually reaches on
+  this estate (W11).
+- `_execute` refuses every other non-disruptive action by name. `reevaluate_access`
+  is non-disruptive and would be easy to wire; nobody has asked for it.
+- The editor cannot create a new workflow (the API can). One canvas is enough
+  while there is one workflow.
 
 **Open questions:**
 
@@ -193,6 +205,9 @@ in `ACTIONS` (W7), 30 tests in `tests/test_automation.py` + 3 in
   collector's real cadence once the shadow trail has a week of runs.
 - Should an expired proposal raise an alert, or die silently? Leaning alert —
   a proposal nobody looked at is itself a finding.
-- The shadow report (22.2) should surface "runs that refused, grouped by guard
-  code". If G4 dominates for a week, the fleet is telling us the site limit is
+- The shadow report groups refusals by guard code, as intended. Read it that
+  way: if G4 dominates for a week, the fleet is telling us the site limit is
   wrong, not that the engine is working.
+- Bundle cost of React Flow measured at +190 KB of `app.js` (559 → 753 KB) and
+  +15 KB of `app.css`. Acceptable, but worth revisiting if a second heavy
+  dependency is ever proposed.

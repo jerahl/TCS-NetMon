@@ -26,6 +26,7 @@ const NAV = {
   map: "#/map",
   netmonStatus: "#/netmon-status",
   registry: "#/registry",
+  automation: "#/automation",
   settings: "#/settings",
 };
 
@@ -162,6 +163,7 @@ export function Nav({ active, collapsed = false, onToggle }) {
       {role === "admin" && (
         <div className="nav-section">
           <div className="nav-label">Administration</div>
+          {item("automation", NAV.automation, "gear", "Automation")}
           {item("registry", NAV.registry, "ethernet", "Registry")}
           {item("settings", NAV.settings, "gear", "Settings")}
         </div>

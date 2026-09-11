@@ -20,6 +20,7 @@ import { CamerasPage } from "./pages/cameras.jsx";
 import { XiqPage } from "./pages/xiq.jsx";
 import { SettingsPage } from "./pages/settings.jsx";
 import { RegistryPage } from "./pages/registry.jsx";
+import AutomationPage from "./pages/automation.jsx";
 
 // Hash router — one index.html serves every route (deep links never 404, no
 // server-side per-page routing, no external navigation).
@@ -48,6 +49,7 @@ function parseRoute() {
   if (parts[0] === "wireless") return { name: "wireless", id: parts[1] || null, query };
   if (parts[0] === "settings") return { name: "settings", query };
   if (parts[0] === "registry") return { name: "registry", query };
+  if (parts[0] === "automation") return { name: "automation", query };
   if (parts[0] === "ap" && parts[1]) return { name: "ap", id: parts[1], query };
   return { name: "global", query };
 }
@@ -69,6 +71,7 @@ const CRUMBS = {
   wireless: "Wireless APs", surveillance: "Surveillance", voip: "VoIP · 3CX",
   nac: "NAC", events: "Events", problems: "Problems", map: "Site Map",
   "netmon-status": "NetMon Status", registry: "Registry", settings: "Settings",
+  automation: "Automation",
   ap: "AP Detail",
   cameras: "Cameras",
   camera: "Camera Detail",
@@ -132,6 +135,7 @@ function App() {
   else if (route.name === "wireless") { page = <WirelessPage id={route.id} />; active = "wireless"; }
   else if (route.name === "settings") { page = <SettingsPage />; active = "settings"; }
   else if (route.name === "registry") { page = <RegistryPage />; active = "registry"; }
+  else if (route.name === "automation") { page = <AutomationPage />; active = "automation"; }
   else if (route.name === "ap") { page = <ApDetailPage id={route.id} />; active = "wireless"; }
   else if (route.name === "cameras") { page = <CamerasPage id={route.id} query={route.query} />; active = "cameras"; }
   else if (route.name === "camera") { page = <CameraDetailPage id={route.id} />; active = "cameras"; }

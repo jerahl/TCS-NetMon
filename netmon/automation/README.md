@@ -75,8 +75,34 @@ reconnect rather than a power cycle.
   reason. "Nothing happened" is always explainable from the table.
 * **A crash mid-run** leaves the steps already decided, because steps are
   written as they are decided rather than batched at the end.
-* **`_execute` is not yet wired** (phase 22.2). It refuses loudly rather than
-  reporting a success it did not have.
+* **A parked run whose node was deleted, or whose workflow was disabled while
+  it waited,** is abandoned with the reason on the run. Resuming at a "nearby"
+  node would run a workflow the owner did not write.
+* **A capability the source does not offer** is recorded `skipped` and the run
+  *continues* to whatever is wired after it. This is not hypothetical: this
+  estate advertises Milestone's `UpdateHardware` on no hardware at all, so the
+  cheap first step of the camera workflow never fires here and the run falls
+  through to the reboot proposal. The check happens before an audit row is
+  opened, so a supported-nowhere task does not fill the trail with failures.
+* **`camera_reboot` has no implementation yet** (phase 22.4). It is registered,
+  audited and proposable; approving one returns 409 rather than reporting an
+  execution that never happened.
+
+## The editor
+
+`frontend/src/pages/automation.jsx`, route `#/automation`. The palette comes
+from `/api/automation/meta` — served from the code registries — so a node kind
+or action the engine cannot run can never appear in it. Two absences are
+deliberate:
+
+* there is **no guard node**, and the guard panel is read-only. The ten guards
+  apply to every action step regardless of the canvas (W4);
+* there is **no free-text target**. A node picks an action key; the engine
+  resolves what it points at (W5).
+
+A disruptive action is flagged on the node itself, because the single most
+important thing an author can misunderstand is that such a step does *not* run
+when the workflow runs — it queues.
 
 ## Running standalone
 

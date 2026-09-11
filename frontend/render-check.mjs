@@ -13,6 +13,7 @@ export * as netmonStatus from "./src/pages/netmon_status.jsx";
 export * as cameraOps from "./src/pages/camera_ops.jsx";
 export * as cameraSnapshot from "./src/pages/camera_snapshot.jsx";
 export * as primitives from "./src/primitives.jsx";
+export * as automation from "./src/pages/automation.jsx";
 export { default as React } from "react";
 export { renderToString } from "react-dom/server";
 `;
@@ -20,12 +21,17 @@ const res = await build({
   stdin: { contents: entry, resolveDir: process.cwd(), loader: "jsx" },
   bundle: true, write: false, format: "cjs", platform: "node",
   jsx: "automatic", logLevel: "silent",
+  // This build has no output path, so a stylesheet import has nowhere to go.
+  // The harness only exercises JS scope and render output, and a page's CSS
+  // cannot cause the "identifier is not defined" class of bug it exists to
+  // catch — so discard it rather than teach this build about assets.
+  loader: { ".css": "empty" },
 });
 const require = createRequire(import.meta.url);
 const mod = { exports: {} };
 new Function("module", "exports", "require", res.outputFiles[0].text)(mod, mod.exports, require);
 const { surveillance: S, cameraDetail: D, cameras: C, cameraSnapshot: SNAP,
-        netmonStatus: NS, cameraOps: OPS, primitives: P, React,
+        netmonStatus: NS, cameraOps: OPS, automation: AUTO, primitives: P, React,
         renderToString } = mod.exports;
 
 const CAM = (over) => ({ device_id: 1, name: "chs-cam-1", site: "Central High",
@@ -827,6 +833,27 @@ const cases = [
   ["ServerMini · no metrics at all", S.ServerMini, {
     s: { device_id: 3, name: "TRAN-BCD-DVR", site: null, role: null, version: null,
          chans_total: null, storage_total_gb: null, retention_days: null, status: "blind" } }],
+  // Automation (spec 22). The canvas itself needs a DOM, but importing the
+  // module evaluates it — which is what this harness is for — and the guard
+  // panel is the part an operator reads before trusting the engine.
+  ["GuardPanel · thresholds come from config", AUTO.GuardPanel, {
+    guards: { max_state_age_s: 1800, site_cluster_max: 3, switch_cluster_max: 2,
+              require_port_confirmed_within_s: 86400, per_device_cooldown_s: 21600,
+              fleet_rate_limit: 6 } },
+   (html) => {
+     if (!html.includes("G4")) throw new Error("the blast-radius guard is not listed");
+     if (!html.includes("3 / site")) throw new Error("the site limit is not shown");
+     if (!html.includes("24h")) throw new Error("the port-confidence window is not shown");
+   }],
+
+  ["GuardPanel · config not loaded yet", AUTO.GuardPanel, { guards: null },
+   (html) => {
+     // All ten must still be named: an operator asking "what will stop this?"
+     // gets an answer even before /meta lands.
+     for (const g of ["G1", "G5", "G10"]) {
+       if (!html.includes(g)) throw new Error(`${g} missing without config`);
+     }
+   }],
 ];
 
 let failed = 0;
@@ -842,4 +869,46 @@ for (const [name, Comp, props, assert] of cases) {
     console.log(`  FAIL  ${name}\n        ${e.message}`);
   }
 }
+// ── round-trip: the stored document must survive a lap through the canvas ──
+// A bug here does not throw; it silently saves a different workflow than the
+// one on screen.
+const DOC = {
+  nodes: [
+    { id: "t", kind: "trigger", label: "Camera down",
+      position: { x: 0, y: 200 },
+      config: { dimension: "source_status", value: "down", device_type: "camera",
+                min_duration_s: 900 } },
+    { id: "b", kind: "branch", label: "Ping?", position: { x: 240, y: 200 },
+      config: { predicate: "ping_up" } },
+    { id: "a", kind: "action", label: "Cycle PoE", position: { x: 500, y: 300 },
+      config: { action: "poe_cycle" } },
+  ],
+  edges: [
+    { source: "t", target: "b" },
+    { source: "b", target: "a", when: "false" },
+  ],
+};
+try {
+  const meta = { predicates: [{ key: "ping_up", question: "does it answer ping?" }],
+                 actions: [{ key: "poe_cycle", label: "Cycle PoE", disruptive: true }] };
+  const flow = AUTO.toFlow(DOC, meta);
+  const back = AUTO.fromFlow(flow.nodes, flow.edges);
+  const same = JSON.stringify(back) === JSON.stringify(DOC);
+  if (!same) {
+    throw new Error(`round-trip changed the document:\n  in  ${JSON.stringify(DOC)}\n  out ${JSON.stringify(back)}`);
+  }
+  // The branch arm must survive, or the engine routes down the wrong path.
+  if (flow.edges.find((e) => e.source === "b").data.when !== "false") {
+    throw new Error("branch arm lost in translation");
+  }
+  // A disruptive action must be flagged on the node itself.
+  if (!flow.nodes.find((n) => n.id === "a").data.warn) {
+    throw new Error("a disruptive action is not flagged on the canvas");
+  }
+  console.log("  ok    graph round-trip · stored doc survives the canvas");
+} catch (e) {
+  failed++;
+  console.log(`  FAIL  graph round-trip\n        ${e.message}`);
+}
+
 process.exit(failed ? 1 : 0);
