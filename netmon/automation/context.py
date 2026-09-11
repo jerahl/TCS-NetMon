@@ -46,6 +46,9 @@ class Context:
     device_id: int
     now: datetime
     trigger_dimension: str
+    #: The value the trigger matched. `still_down` re-reads the dimension and
+    #: compares against this, rather than asking a different question.
+    trigger_value: str = "down"
     #: The action the guards are currently being asked about. Set by the runner
     #: before each action step, because G5 and G10 are action-specific.
     action_key: str = ""
@@ -68,13 +71,13 @@ class Context:
 
     @classmethod
     def build(cls, engine: Engine, cfg: Any, *, workflow_id: int, workflow_name: str,
-              device_id: int, trigger_dimension: str,
+              device_id: int, trigger_dimension: str, trigger_value: str = "down",
               now: datetime | None = None) -> "Context":
         ctx = cls(
             engine=engine, cfg=cfg, workflow_id=workflow_id,
             workflow_name=workflow_name, device_id=device_id,
             now=now or datetime.now(timezone.utc),
-            trigger_dimension=trigger_dimension,
+            trigger_dimension=trigger_dimension, trigger_value=trigger_value,
         )
         row = db.fetch_one(engine, _FLAGS_ONE_SQL, {"id": device_id})
         ctx.device = dict(row) if row else {}
@@ -108,6 +111,16 @@ class Context:
 
     def state_value(self, dimension: str) -> str | None:
         row = self.states().get(dimension)
+        return None if row is None else str(row.get("value"))
+
+    def reread_state_value(self, dimension: str) -> str | None:
+        """Bypass the cached snapshot. Used after a `wait`, where the whole
+        point is that something may have changed."""
+        row = db.fetch_one(
+            self.engine,
+            "SELECT value FROM device_state WHERE device_id = :d AND dimension = :dim",
+            {"d": self.device_id, "dim": dimension},
+        )
         return None if row is None else str(row.get("value"))
 
     def state_updated_at(self, dimension: str) -> Any:

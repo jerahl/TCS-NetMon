@@ -28,8 +28,8 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 from netmon import __version__, db, migrate
 from netmon import settings as settings_engine
 from netmon.api import (
-    actions, alerts, auth_routes, camera_ops, ddi, devices, events, health,
-    history as history_api, nac, registry, search, settings, sites, status, summary,
+    actions, alerts, auth_routes, automation, camera_ops, ddi, devices, events,
+    health, history as history_api, nac, registry, search, settings, sites, status, summary,
     surveillance, switches, voip, wireless,
 )
 from netmon.auth.sessions import DbSessionStore, SessionStore
@@ -231,7 +231,11 @@ def register_tasks(app: FastAPI, cfg: Config, engine) -> None:
                 return bool(cfg.camera_ops.enabled)
             return bool(cfg.actions.enabled and getattr(cfg.actions, key, False))
 
-        workflows = WorkflowRunner(engine, cfg.automation, action_enabled=_action_enabled)
+        from netmon.api.camera_ops import _milestone_factory
+
+        workflows = WorkflowRunner(engine, cfg.automation,
+                                   action_enabled=_action_enabled,
+                                   milestone_factory=_milestone_factory(cfg))
         supervisor.register("automation", workflows.run_guarded,
                             interval_s=workflows.interval_s, timeout_s=workflows.timeout_s)
         log.info("automation engine enabled: %ss (per-workflow enabled/shadow flags "
@@ -343,6 +347,7 @@ def create_app(
     app.include_router(alerts.router)
     app.include_router(settings.router)
     app.include_router(actions.router)
+    app.include_router(automation.router)
     # Camera-hardware writes (spec 20 S8 / D11): admin-only, dry-run by default,
     # and refused outright unless [camera_ops] says otherwise. Registered after
     # surveillance so its /api/surveillance/* paths sit beside the read ones.

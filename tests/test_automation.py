@@ -413,3 +413,232 @@ def test_seed_install_is_idempotent(engine):
     # Seeded off and in shadow (W3): two flags stand between it and the fleet.
     assert row["enabled"] == 0
     assert row["shadow"] == 1
+
+
+# ───────────────────────── 22.2: resumption and the VMS arm ─────────────────────────
+
+class FakeMilestone:
+    """Stands in for MilestoneClient. `tasks` is what the VMS advertises."""
+
+    def __init__(self, tasks=("UpdateHardware",), status=200):
+        self.tasks = list(tasks)
+        self.status = status
+        self.updated = []
+
+    async def hardware_tasks(self, hardware_id):
+        return list(self.tasks)
+
+    async def update_hardware(self, hardware_id):
+        self.updated.append(hardware_id)
+        return self.status, "ok"
+
+
+def a_pingable_camera(engine, name="cam-pingable", hardware_id="hw-1"):
+    dev = add_device(engine, name)
+    set_state(engine, dev, "source_status", "down", age_s=1200)
+    set_state(engine, dev, "ping", "up", age_s=1200)
+    if hardware_id:
+        db.execute(engine, "INSERT INTO cameras (device_id, hardware_id) "
+                           "VALUES (:d, :h)", {"d": dev, "h": hardware_id})
+    return dev
+
+
+def runner_for(engine, vms=None):
+    return WorkflowRunner(engine, AutomationConfig(), action_enabled=lambda k: True,
+                          milestone_factory=(lambda: vms) if vms else None)
+
+
+def steps(engine, run_id=None):
+    sql = "SELECT seq, node_id, decision, detail FROM workflow_run_steps"
+    if run_id:
+        sql += f" WHERE run_id = {int(run_id)}"
+    return db.fetch_all(engine, sql + " ORDER BY seq")
+
+
+def test_a_wait_parks_the_run_with_a_cursor(engine):
+    install_workflow(engine, shadow=1)
+    a_pingable_camera(engine)
+    asyncio.run(runner_for(engine, FakeMilestone()).run_once())
+
+    run = db.fetch_one(engine, "SELECT status, resume_node, resume_at, finished_at "
+                               "FROM workflow_runs")
+    assert run["status"] == "waiting"
+    assert run["resume_node"] == "recheck"
+    assert run["resume_at"] is not None
+    # A parked run has not finished.
+    assert run["finished_at"] is None
+
+
+def test_a_parked_run_is_not_retriggered(engine):
+    """W9 must treat 'waiting' as live, or the trigger scan starts a second run
+    for a camera that is already mid-remediation."""
+    install_workflow(engine, shadow=1)
+    a_pingable_camera(engine)
+    r = runner_for(engine, FakeMilestone())
+    asyncio.run(r.run_once())
+    asyncio.run(r.run_once())
+    assert len(db.fetch_all(engine, "SELECT id FROM workflow_runs")) == 1
+
+
+def test_the_run_resumes_and_reaches_the_reboot_fallback(engine):
+    """The arm 22.1 could not reach: wait -> recheck -> propose camera_reboot."""
+    install_workflow(engine, shadow=0)
+    dev = a_pingable_camera(engine)
+    r = runner_for(engine, FakeMilestone())
+    asyncio.run(r.run_once())
+
+    # Make the wait elapse.
+    db.execute(engine, "UPDATE workflow_runs SET resume_at = :t",
+               {"t": NOW - timedelta(minutes=1)})
+    asyncio.run(r.run_once())
+
+    visited = [s["node_id"] for s in steps(engine)]
+    assert "recheck" in visited, "the parked run never resumed"
+    assert "reboot" in visited, "the reboot fallback is still unreachable"
+    proposal = db.fetch_one(engine, "SELECT action, status FROM action_proposals")
+    assert proposal["action"] == "camera_reboot"
+    assert proposal["status"] == "pending"
+
+
+def test_a_recovered_camera_stops_instead_of_rebooting(engine):
+    install_workflow(engine, shadow=0)
+    dev = a_pingable_camera(engine)
+    r = runner_for(engine, FakeMilestone())
+    asyncio.run(r.run_once())
+
+    # The camera came back while we waited.
+    db.execute(engine, "UPDATE device_state SET value = 'up' "
+                       "WHERE device_id = :d AND dimension = 'source_status'", {"d": dev})
+    db.execute(engine, "UPDATE workflow_runs SET resume_at = :t",
+               {"t": NOW - timedelta(minutes=1)})
+    asyncio.run(r.run_once())
+
+    visited = [s["node_id"] for s in steps(engine)]
+    assert "recovered" in visited
+    assert "reboot" not in visited
+    assert db.fetch_all(engine, "SELECT id FROM action_proposals") == []
+
+
+def test_an_unsupported_vms_task_is_skipped_not_failed(engine):
+    """`UpdateHardware` is advertised nowhere on this estate. That is a
+    capability gap, and stopping the run on it would strand the fallback that
+    exists precisely for this case."""
+    install_workflow(engine, shadow=0)
+    a_pingable_camera(engine)
+    vms = FakeMilestone(tasks=[])          # advertises nothing
+    asyncio.run(runner_for(engine, vms).run_once())
+
+    step = [s for s in steps(engine) if s["node_id"] == "vms_refresh"][0]
+    assert step["decision"] == "skipped"
+    assert "does not offer" in step["detail"]
+    assert vms.updated == []               # nothing was sent
+    # It continued rather than stopping: the run is parked at the wait.
+    assert db.fetch_one(engine, "SELECT status FROM workflow_runs")["status"] == "waiting"
+    # And no audit row was opened for a task that was never going to run.
+    assert db.fetch_all(engine, "SELECT id FROM action_audit") == []
+
+
+def test_a_live_vms_refresh_is_audited(engine):
+    install_workflow(engine, shadow=0)
+    a_pingable_camera(engine)
+    vms = FakeMilestone(tasks=["UpdateHardware"])
+    asyncio.run(runner_for(engine, vms).run_once())
+
+    assert vms.updated == ["hw-1"]
+    audit = db.fetch_one(engine, "SELECT actor, actor_role, action, outcome "
+                                 "FROM action_audit")
+    assert audit["action"] == "milestone_update_hardware"
+    assert audit["outcome"] == "ok"
+    # The trail names the workflow, not a person (W1).
+    assert audit["actor"] == "automation:camera_down_remediation"
+    step = [s for s in steps(engine) if s["node_id"] == "vms_refresh"][0]
+    assert step["decision"] == "taken"
+
+
+def test_shadow_never_touches_the_vms(engine):
+    install_workflow(engine, shadow=1)
+    a_pingable_camera(engine)
+    vms = FakeMilestone(tasks=["UpdateHardware"])
+    asyncio.run(runner_for(engine, vms).run_once())
+
+    assert vms.updated == []
+    assert db.fetch_all(engine, "SELECT id FROM action_audit") == []
+    step = [s for s in steps(engine) if s["node_id"] == "vms_refresh"][0]
+    assert step["decision"] == "would_run"
+
+
+def test_a_workflow_disabled_mid_wait_does_not_wake_up(engine):
+    install_workflow(engine, shadow=0)
+    a_pingable_camera(engine)
+    r = runner_for(engine, FakeMilestone())
+    asyncio.run(r.run_once())
+
+    db.execute(engine, "UPDATE workflows SET enabled = 0")
+    db.execute(engine, "UPDATE workflow_runs SET resume_at = :t",
+               {"t": NOW - timedelta(minutes=1)})
+    asyncio.run(r.run_once())
+
+    run = db.fetch_one(engine, "SELECT status, message FROM workflow_runs")
+    assert run["status"] == "done"
+    assert "disabled" in run["message"]
+    assert "reboot" not in [s["node_id"] for s in steps(engine)]
+
+
+def test_a_parked_run_whose_node_vanished_is_abandoned(engine):
+    """The graph was edited under the run. Resuming at a 'nearby' node would
+    run a workflow the owner did not write."""
+    install_workflow(engine, shadow=0)
+    a_pingable_camera(engine)
+    r = runner_for(engine, FakeMilestone())
+    asyncio.run(r.run_once())
+
+    trimmed = json.loads(json.dumps(seed.CAMERA_WORKFLOW))
+    trimmed["nodes"] = [n for n in trimmed["nodes"] if n["id"] != "recheck"]
+    trimmed["edges"] = [e for e in trimmed["edges"]
+                        if "recheck" not in (e["source"], e["target"])]
+    db.execute(engine, "UPDATE workflows SET graph = :g", {"g": json.dumps(trimmed)})
+    db.execute(engine, "UPDATE workflow_runs SET resume_at = :t",
+               {"t": NOW - timedelta(minutes=1)})
+    asyncio.run(r.run_once())
+
+    run = db.fetch_one(engine, "SELECT status, message FROM workflow_runs")
+    assert run["status"] == "done"
+    assert "no longer exists" in run["message"]
+
+
+def test_unactioned_proposals_expire(engine):
+    install_workflow(engine, shadow=0)
+    dev = a_broken_camera(engine)
+    sw = add_device(engine, "sw-1", device_type="switch")
+    set_state(engine, sw, "ping", "up")
+    remember_port(engine, dev, sw, age_s=3600)
+    r = runner_for(engine)
+    asyncio.run(r.run_once())
+
+    db.execute(engine, "UPDATE action_proposals SET expires_at = :t",
+               {"t": NOW - timedelta(minutes=1)})
+    asyncio.run(r.run_once())
+
+    p = db.fetch_one(engine, "SELECT status FROM action_proposals")
+    # Expired, not deleted: a remediation nobody looked at is itself a finding.
+    assert p["status"] == "expired"
+
+
+def test_an_unimplemented_non_disruptive_action_refuses_loudly(engine):
+    """A newly registered non-disruptive action must not start firing from a
+    workflow before someone wires and reviews it."""
+    doc = {"nodes": [{"id": "t", "kind": "trigger",
+                      "config": {"dimension": "source_status", "value": "down",
+                                 "device_type": "camera"}},
+                     {"id": "a", "kind": "action",
+                      "config": {"action": "reevaluate_access"}}],
+           "edges": [{"source": "t", "target": "a"}]}
+    install_workflow(engine, shadow=0, doc=doc)
+    add_device(engine, "cam-x")
+    set_state(engine, 1, "source_status", "down", age_s=1200)
+    set_state(engine, 1, "ping", "down", age_s=1200)
+    asyncio.run(runner_for(engine).run_once())
+
+    step = [s for s in steps(engine) if s["node_id"] == "a"][0]
+    assert step["decision"] == "failed"
+    assert "no automated implementation" in step["detail"]

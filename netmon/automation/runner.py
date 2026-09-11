@@ -31,7 +31,7 @@ from typing import Any, Callable
 from sqlalchemy.engine import Engine
 
 from netmon import db, health
-from netmon.actions import ACTIONS, ActionSpec, action_or_refuse
+from netmon.actions import ACTIONS, ActionSpec, AuditedAction, action_or_refuse
 from netmon.automation import graph as gr
 from netmon.automation.context import Context
 from netmon.automation.guards import Refusal, check_all
@@ -65,16 +65,17 @@ _PREDICATES: dict[str, Predicate] = {
     "switch_up": lambda ctx: (
         None if not (ctx.port_memory() or {}).get("switch_device_id")
         else not ctx.device_is_down(int(ctx.port_memory()["switch_device_id"]))),
-    # Re-reads state from the database rather than the cached snapshot: the
-    # whole point of a `wait` node is that something may have changed.
-    "still_down": lambda ctx: device_down(_reread_flags(ctx)),
+    # "Is the thing we triggered on still true?" — re-read from the database,
+    # because the whole point of the `wait` before it is that something may
+    # have changed.
+    #
+    # Deliberately *not* `device_down()`. The tiebreaker answers a different
+    # question, and answers it wrongly here: a camera that answers ICMP while
+    # Milestone still cannot see it reads as "not down", so a run that had just
+    # failed to fix anything would route to "recovered" and close.
+    "still_down": lambda ctx: (
+        ctx.reread_state_value(ctx.trigger_dimension) == ctx.trigger_value),
 }
-
-
-def _reread_flags(ctx: Context) -> dict[str, Any]:
-    from netmon.automation.context import _FLAGS_ONE_SQL
-    row = db.fetch_one(ctx.engine, _FLAGS_ONE_SQL, {"id": ctx.device_id})
-    return dict(row) if row else {}
 
 
 class WorkflowRunner:
@@ -83,7 +84,8 @@ class WorkflowRunner:
     name = "automation"
 
     def __init__(self, engine: Engine, cfg: Any,
-                 action_enabled: Callable[[str], bool] | None = None) -> None:
+                 action_enabled: Callable[[str], bool] | None = None,
+                 milestone_factory: Callable[[], Any] | None = None) -> None:
         self.engine = engine
         self.cfg = cfg
         self.interval_s = float(getattr(cfg, "interval_s", 300))
@@ -91,6 +93,10 @@ class WorkflowRunner:
         # Injected so the guards never have to know the shape of `[actions]`
         # or `[camera_ops]` (G10).
         self.action_enabled = action_enabled or (lambda key: False)
+        #: Returns a MilestoneClient, or None when the VMS is unusable. Injected
+        #: so this module never parses `[milestone]` itself, and so tests can
+        #: drive it with a fake.
+        self.milestone_factory = milestone_factory
 
     # --- workflow selection --------------------------------------------------
 
@@ -143,7 +149,7 @@ class WorkflowRunner:
             self.engine,
             "SELECT 1 AS x FROM workflow_runs "
             "WHERE workflow_id = :w AND device_id = :d "
-            "AND status IN ('running', 'awaiting_approval') LIMIT 1",
+            "AND status IN ('running', 'waiting', 'awaiting_approval') LIMIT 1",
             {"w": workflow_id, "d": device_id},
         )
         if row:
@@ -159,7 +165,10 @@ class WorkflowRunner:
     # --- the cycle -----------------------------------------------------------
 
     async def run_once(self) -> int:
-        runs = 0
+        # Parked runs first: a device mid-remediation must be finished before
+        # the trigger scan considers starting another run for it (W9).
+        runs = await self._resume_due()
+        self._expire_proposals()
         for wf in self._workflows():
             try:
                 graph = gr.parse(wf["graph"])
@@ -178,20 +187,118 @@ class WorkflowRunner:
                 if self._has_live_run(int(wf["id"]), int(dev["device_id"])):
                     continue
                 try:
-                    self._run_one(wf, graph, int(dev["device_id"]))
+                    await self._run_one(wf, graph, int(dev["device_id"]))
                     runs += 1
                 except Exception:
                     log.exception("workflow %s failed on device %s",
                                   wf["name"], dev["device_id"])
         return runs
 
-    def _run_one(self, wf: dict[str, Any], graph: gr.Graph, device_id: int) -> None:
+    async def _resume_due(self) -> int:
+        """Continue runs whose wait has elapsed.
+
+        A run is resumed at most once per cycle and only when its workflow is
+        still enabled and its graph still validates — an owner who disables a
+        workflow while a run is parked should not have it wake up later.
+        """
+        now = datetime.now(timezone.utc)
+        due = db.fetch_all(
+            self.engine,
+            "SELECT r.id, r.workflow_id, r.device_id, r.resume_node, r.shadow, "
+            "       w.name, w.graph, w.enabled, w.version "
+            "FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id "
+            "WHERE r.status = 'waiting' AND r.resume_at IS NOT NULL "
+            "AND r.resume_at <= :now",
+            {"now": now},
+        )
+        resumed = 0
+        for row in due:
+            if not row["enabled"]:
+                self._abandon(int(row["id"]),
+                              "the workflow was disabled while this run was waiting")
+                continue
+            try:
+                graph = gr.parse(row["graph"])
+            except gr.GraphError as exc:
+                self._abandon(int(row["id"]),
+                              f"the workflow graph no longer validates: {exc}")
+                continue
+            node_id = str(row["resume_node"] or "")
+            if node_id not in graph.nodes:
+                # The graph was edited under the parked run and the node it was
+                # coming back to is gone. Abandoning is the honest outcome:
+                # picking a "nearby" node would resume a workflow the owner did
+                # not write.
+                self._abandon(int(row["id"]),
+                              f"node '{node_id}' no longer exists in the workflow")
+                continue
+            try:
+                await self._continue(row, graph, node_id)
+                resumed += 1
+            except Exception:
+                log.exception("workflow %s failed resuming run %s", row["name"], row["id"])
+        return resumed
+
+    def _abandon(self, run_id: int, why: str) -> None:
+        db.execute(
+            self.engine,
+            "UPDATE workflow_runs SET status = 'done', message = :m, "
+            "resume_at = NULL, resume_node = NULL, finished_at = :now WHERE id = :id",
+            {"m": why[:500], "now": datetime.now(timezone.utc), "id": run_id},
+        )
+        log.info("workflow run %s abandoned: %s", run_id, why)
+
+    async def _continue(self, row: dict[str, Any], graph: gr.Graph, node_id: str) -> None:
+        """Resume a parked run from `node_id`, reusing its run and step sequence."""
+        ctx = Context.build(
+            self.engine, self.cfg, workflow_id=int(row["workflow_id"]),
+            workflow_name=str(row["name"]), device_id=int(row["device_id"]),
+            trigger_dimension=str(graph.trigger.config["dimension"]),
+            trigger_value=str(graph.trigger.config["value"]),
+        )
+        ctx.run_id = int(row["id"])
+        ctx.action_enabled = self.action_enabled
+        state = _RunState(run_id=int(row["id"]), shadow=bool(row["shadow"]))
+        state.seq = self._last_seq(int(row["id"]))
+        db.execute(self.engine,
+                   "UPDATE workflow_runs SET status = 'running', resume_at = NULL, "
+                   "resume_node = NULL WHERE id = :id", {"id": row["id"]})
+        cursor: str | None = node_id
+        while cursor is not None:
+            cursor = await self._visit(ctx, graph, state, graph.nodes[cursor])
+        self._close_run(int(row["id"]), state)
+
+    def _last_seq(self, run_id: int) -> int:
+        row = db.fetch_one(self.engine,
+                           "SELECT MAX(seq) AS s FROM workflow_run_steps WHERE run_id = :r",
+                           {"r": run_id})
+        return int((row or {}).get("s") or 0)
+
+    def _expire_proposals(self) -> int:
+        """Age out proposals nobody acted on.
+
+        An expired proposal is left visible with `status = 'expired'` rather
+        than deleted: a remediation nobody looked at for a day is itself a
+        finding, and the row is the evidence.
+        """
+        n = db.execute(
+            self.engine,
+            "UPDATE action_proposals SET status = 'expired' "
+            "WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at <= :now",
+            {"now": datetime.now(timezone.utc)},
+        )
+        if n:
+            log.info("automation: expired %d unactioned proposal(s)", n)
+        return int(n or 0)
+
+    async def _run_one(self, wf: dict[str, Any], graph: gr.Graph, device_id: int) -> None:
         shadow = bool(wf["shadow"])
         trigger = graph.trigger
         ctx = Context.build(
             self.engine, self.cfg, workflow_id=int(wf["id"]),
             workflow_name=str(wf["name"]), device_id=device_id,
             trigger_dimension=str(trigger.config["dimension"]),
+            trigger_value=str(trigger.config["value"]),
         )
         ctx.action_enabled = self.action_enabled
         reason = (f"{trigger.config['dimension']}={trigger.config['value']} "
@@ -204,11 +311,11 @@ class WorkflowRunner:
         node_id: str | None = _first(graph.next_ids(trigger.id))
         while node_id is not None:
             node = graph.nodes[node_id]
-            node_id = self._visit(ctx, graph, state, node)
+            node_id = await self._visit(ctx, graph, state, node)
         self._close_run(run_id, state)
 
-    def _visit(self, ctx: Context, graph: gr.Graph, state: "_RunState",
-               node: gr.Node) -> str | None:
+    async def _visit(self, ctx: Context, graph: gr.Graph, state: "_RunState",
+                     node: gr.Node) -> str | None:
         """Execute one node; return the next node id, or None to stop."""
         if node.kind == "stop":
             self._step(state, node, "taken", "workflow ends here")
@@ -230,15 +337,23 @@ class WorkflowRunner:
             return _first(graph.next_ids(node.id, when="true" if answer else "false"))
 
         if node.kind == "wait":
-            # The runner does not sleep. A `wait` ends this evaluation and the
-            # run resumes on a later cycle — a task that blocked for five
-            # minutes would hold its supervisor slot and stall every other
-            # workflow behind it.
+            # The runner does not sleep. A `wait` parks the run with a cursor —
+            # a task that blocked for five minutes would hold its supervisor
+            # slot and stall every other workflow behind it. `_resume_due()`
+            # picks it up on a later cycle and continues from `resume_node`.
             seconds = int(node.config.get("seconds") or 300)
+            resume_node = _first(graph.next_ids(node.id))
+            if resume_node is None:
+                self._step(state, node, "skipped",
+                           "nothing is wired after this wait, so there is nothing to "
+                           "come back for")
+                return None
             self._step(state, node, "skipped",
-                       f"waiting {seconds // 60}m before re-checking; the run resumes "
-                       "on a later cycle")
+                       f"waiting {seconds // 60}m before re-checking, then continuing "
+                       f"at '{resume_node}'")
             state.paused = True
+            state.resume_at = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+            state.resume_node = resume_node
             return None
 
         if node.kind == "alert":
@@ -249,13 +364,13 @@ class WorkflowRunner:
             return _first(graph.next_ids(node.id))
 
         if node.kind == "action":
-            return self._action(ctx, graph, state, node)
+            return await self._action(ctx, graph, state, node)
 
         self._step(state, node, "skipped", f"nothing to do for a {node.kind} node")
         return _first(graph.next_ids(node.id))
 
-    def _action(self, ctx: Context, graph: gr.Graph, state: "_RunState",
-                node: gr.Node) -> str | None:
+    async def _action(self, ctx: Context, graph: gr.Graph, state: "_RunState",
+                      node: gr.Node) -> str | None:
         key = str(node.config["action"])
         ctx.action_key = key
         try:
@@ -292,11 +407,14 @@ class WorkflowRunner:
                        f"would run {spec.label} on {target} ({spec.effect})")
             return _first(graph.next_ids(node.id))
 
-        audit_id, ok, message = self._execute(ctx, spec, target, params)
-        self._step(state, node, "taken" if ok else "failed",
-                   f"{spec.label} on {target}: {message}", action_audit_id=audit_id)
-        if not ok:
+        audit_id, outcome, message = await self._execute(ctx, spec, target, params)
+        decision = {"ok": "taken", "unsupported": "skipped"}.get(outcome, "failed")
+        self._step(state, node, decision, f"{spec.label} on {target}: {message}",
+                   action_audit_id=audit_id)
+        if outcome == "failed":
             return None
+        # `unsupported` continues: the point of the fallback wired after this
+        # node is to cover exactly the case where the cheap fix is unavailable.
         return _first(graph.next_ids(node.id))
 
     # --- action plumbing -----------------------------------------------------
@@ -342,18 +460,75 @@ class WorkflowRunner:
              "why": rationale, "exp": expires, "now": ctx.now},
         )
 
-    def _execute(self, ctx: Context, spec: ActionSpec, target: str,
-                 params: dict[str, Any]) -> tuple[int | None, bool, str]:
-        """Non-disruptive actions only — see `_action`.
+    async def _execute(self, ctx: Context, spec: ActionSpec, target: str,
+                       params: dict[str, Any]) -> tuple[int | None, str, str]:
+        """Carry out a **non-disruptive** action. Never reached for a disruptive
+        one — see `_action`.
 
-        Not yet wired to the source clients: phase 22.2 connects
-        `milestone_update_hardware` here through the same `AuditedAction`
-        chokepoint `api/actions.py` uses. Until then this refuses loudly rather
-        than pretending, so nothing can quietly report success it did not have
-        (CLAUDE.md §4.5).
+        Returns ``(audit_id, outcome, message)`` where outcome is ``ok``,
+        ``failed`` or ``unsupported``. The third is not a failure: a VMS that
+        does not offer a task is a capability gap, and treating it as a failure
+        would stop the run at a step that was never going to work, stranding the
+        fallback behind it.
         """
-        return None, False, ("not wired yet — phase 22.2 connects this through "
-                             "AuditedAction; nothing was sent")
+        if spec.key != "milestone_update_hardware":
+            # Nothing else registered is non-disruptive today. Refusing by
+            # default means a newly registered action cannot start firing from a
+            # workflow before anyone wires and reviews it here.
+            return None, "failed", (f"{spec.key} has no automated implementation; "
+                                    "nothing was sent")
+        return await self._milestone_refresh(ctx, spec, target)
+
+    async def _milestone_refresh(self, ctx: Context, spec: ActionSpec,
+                                 target: str) -> tuple[int | None, str, str]:
+        """Ask Milestone to re-detect a camera it already manages.
+
+        **This estate does not currently offer the task.** `UpdateHardware` is
+        advertised per-hardware, and on this VMS no hardware advertises it at
+        all, so the capability is checked *before* an audit row is opened — the
+        same order `cameras/runner.py` uses, and for the same reason: a
+        supported-nowhere feature must not write a "failed" audit row per camera
+        and make the trail look like an outage.
+        """
+        from netmon.collectors.milestone_client import TASK_UPDATE_HARDWARE
+
+        row = db.fetch_one(
+            self.engine,
+            "SELECT c.hardware_id FROM cameras c WHERE c.device_id = :d",
+            {"d": ctx.device_id},
+        )
+        hardware_id = str((row or {}).get("hardware_id") or "").strip()
+        if not hardware_id:
+            return None, "unsupported", ("NetMon holds no Milestone hardware id for this "
+                                         "camera, so the VMS cannot be asked to re-detect it")
+        factory = self.milestone_factory
+        client = factory() if factory else None
+        if client is None:
+            return None, "unsupported", "no Milestone client is configured"
+
+        try:
+            available = await client.hardware_tasks(hardware_id)
+        except Exception as exc:  # noqa: BLE001 — a read failure is not a fault here
+            return None, "unsupported", f"could not read the VMS task list: {exc!r}"
+        if TASK_UPDATE_HARDWARE not in available:
+            return None, "unsupported", (
+                f"this VMS does not offer {TASK_UPDATE_HARDWARE} for the camera "
+                f"(it advertises {', '.join(available) or 'nothing'})")
+
+        with AuditedAction(self.engine, spec, actor=f"automation:{ctx.workflow_name}",
+                           role="automation", device_id=ctx.device_id, target=target,
+                           params={"hardware_id": hardware_id}) as audit:
+            try:
+                status_code, body = await client.update_hardware(hardware_id)
+            except Exception as exc:  # noqa: BLE001
+                audit.failed(f"UpdateHardware failed: {exc!r}")
+                return audit.audit_id, "failed", f"UpdateHardware failed: {exc!r}"
+            if status_code >= 400:
+                audit.failed(f"UpdateHardware answered HTTP {status_code}: {body[:200]}",
+                             http_status=status_code)
+                return audit.audit_id, "failed", f"the VMS answered HTTP {status_code}"
+            audit.ok("Milestone asked to re-detect the camera", http_status=status_code)
+            return audit.audit_id, "ok", "Milestone asked to re-detect the camera"
 
     # --- run bookkeeping -----------------------------------------------------
 
@@ -398,14 +573,20 @@ class WorkflowRunner:
             status = "refused"
             message = f"[{state.refused.code}] {state.refused.reason}"
         elif state.paused:
-            status, message = "done", "paused at a wait node; resumes on a later cycle"
+            status = "waiting"
+            message = f"waiting until {state.resume_at:%H:%M} to continue at '{state.resume_node}'"
         else:
             status, message = "done", "completed"
+        # A parked run has not finished, so it keeps a NULL `finished_at` and
+        # carries the cursor instead.
         db.execute(
             self.engine,
-            "UPDATE workflow_runs SET status = :s, message = :m, finished_at = :now "
-            "WHERE id = :id",
-            {"s": status, "m": message[:500], "now": datetime.now(timezone.utc),
+            "UPDATE workflow_runs SET status = :s, message = :m, finished_at = :fin, "
+            "resume_at = :rat, resume_node = :rnode WHERE id = :id",
+            {"s": status, "m": message[:500],
+             "fin": None if status == "waiting" else datetime.now(timezone.utc),
+             "rat": state.resume_at if status == "waiting" else None,
+             "rnode": state.resume_node if status == "waiting" else None,
              "id": run_id},
         )
 
@@ -433,6 +614,8 @@ class _RunState:
         self.refused: Refusal | None = None
         self.awaiting = False
         self.paused = False
+        self.resume_at: datetime | None = None
+        self.resume_node: str | None = None
 
 
 def _first(ids: list[str]) -> str | None:

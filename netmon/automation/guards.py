@@ -79,21 +79,44 @@ def g2_state_fresh(ctx: "Context") -> Refusal | None:
     return None
 
 
-def g3_native_agrees(ctx: "Context") -> Refusal | None:
-    """The native poller is the tiebreaker (CLAUDE.md §1).
+#: Actions that only make sense if the device really is off the network. For
+#: these, a native probe that still reaches the device contradicts the premise
+#: and G3 refuses.
+#:
+#: Nothing else belongs here, and that is the point. `poe_cycle` cuts power on
+#: the assumption the device is gone; `camera_reboot` is the opposite — an RCP+
+#: write cannot reach a camera that answers nothing, so ping-up is its
+#: *precondition*. And `milestone_update_hardware` exists precisely to resolve
+#: the ping-up/source-down disagreement, so refusing it for having one would
+#: make it unreachable.
+ASSUMES_OFFLINE = ("poe_cycle",)
 
-    The same check `engine.py` applies before opening an alert: a federated
-    source claiming `down` for a device that answers ICMP or SNMP is making a
-    claim, not stating a fact. Also refuses when the address is contested —
-    `native_trustworthy` false means the probe cannot say which device answered,
-    which is not a basis for cutting power to one of them.
+
+def g3_native_agrees(ctx: "Context") -> Refusal | None:
+    """The native poller is the tiebreaker (CLAUDE.md §1) — applied per action.
+
+    Two different refusals live here.
+
+    The first is unconditional: on a contested management IP `native_trustworthy`
+    is false, meaning no probe can say *which* device answered. That is not a
+    basis for acting on any of them, whatever the action.
+
+    The second is narrower than the alert engine's version of the same check,
+    and deliberately so. `engine.py` refuses to *open an alert* when a source
+    says down and a native probe disagrees, because the disagreement means the
+    claim is uncorroborated. For remediation the disagreement is often the
+    fault itself: a camera that answers ICMP while Milestone cannot talk to it
+    is not recording, which is a real problem with a real fix. So the refusal
+    applies only to actions in `ASSUMES_OFFLINE`, which act on the belief that
+    the device is gone.
     """
     if not native_trustworthy(ctx.flags):
         return Refusal("G3", "more than one device claims this management IP, so no "
                              "probe can say which one answered")
-    if not device_down(ctx.flags):
-        return Refusal("G3", "the native poller still reaches this device, so the "
-                             "source's down report is not corroborated")
+    if ctx.action_key in ASSUMES_OFFLINE and not device_down(ctx.flags):
+        return Refusal("G3", "the native poller still reaches this device, so cutting "
+                             "its power is not warranted — the source's down report "
+                             "is not corroborated")
     return None
 
 

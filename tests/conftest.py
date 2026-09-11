@@ -662,7 +662,9 @@ AUTOMATION_DDL_SQLITE = (
         shadow INTEGER NOT NULL DEFAULT 1,
         message TEXT,
         started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        finished_at TIMESTAMP
+        finished_at TIMESTAMP,
+        resume_at TIMESTAMP,
+        resume_node TEXT
     )
     """,
     """
