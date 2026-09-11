@@ -842,7 +842,51 @@ function WorkflowSwitch({ wf, role, onChanged }) {
   );
 }
 
-export default function AutomationPage() {
+export default function EmptyState({ role, onSeeded }) {
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState(null);
+  const seed = async () => {
+    setBusy(true); setError(null);
+    try {
+      await postJSON("/api/automation/seed", {});
+      onSeeded();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card title="No workflows yet" tight>
+      <div style={{ fontSize: 12, lineHeight: 1.6, color: "var(--fg-2)", maxWidth: 640 }}>
+        NetMon ships one workflow: <b>camera down — remediation</b>. It triggers on
+        Milestone reporting a camera down for 15 minutes, then asks whether the camera
+        still answers ping. If it does, the VMS connection is the likely fault. If it
+        answers nothing, it proposes a PoE cycle — but only on a port that was confirmed
+        safe while the camera was healthy, and only when that port's switch is up.
+        <div style={{ marginTop: 10, color: "var(--muted)" }}>
+          It installs disabled and in shadow. Nothing happens until you enable it, and
+          even then anything that cuts power or reboots hardware queues for your approval.
+        </div>
+      </div>
+      {error && <div style={{ marginTop: 10 }}><ErrorMsg error={error} /></div>}
+      {role === "admin" ? (
+        <button type="button" onClick={seed} disabled={busy}
+                style={{ ...INPUT, width: "auto", cursor: "pointer", marginTop: 12,
+                         background: "var(--accent)", color: "#fff",
+                         borderColor: "transparent" }}>
+          {busy ? "Installing…" : "Install the camera workflow"}
+        </button>
+      ) : (
+        <div style={{ marginTop: 12, fontSize: 11, color: "var(--muted)" }}>
+          An admin can install it from here.
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function AutomationPage() {
   const [meta, setMeta] = React.useState(null);
   const [list, setList] = React.useState(null);
   const [current, setCurrent] = React.useState(null);
@@ -933,9 +977,13 @@ export default function AutomationPage() {
       ]} active={tab} onChange={setTab} />
 
       <div style={{ marginTop: 12 }}>
-        {tab === "editor" && (detail
-          ? <Editor workflow={detail} meta={meta} role={role} onSaved={bump} />
-          : <Loading what="workflow" />)}
+        {/* An empty list is a real state on a fresh install, not a load in
+            progress — sitting on a spinner forever is how it used to read. */}
+        {tab === "editor" && (list.length === 0
+          ? <EmptyState role={role} onSeeded={bump} />
+          : detail
+            ? <Editor workflow={detail} meta={meta} role={role} onSaved={bump} />
+            : <Loading what="workflow" />)}
         {tab === "proposals" && <Proposals role={role} />}
         {tab === "runs" && <Runs />}
       </div>
