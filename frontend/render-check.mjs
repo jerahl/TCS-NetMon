@@ -869,6 +869,24 @@ for (const [name, Comp, props, assert] of cases) {
     console.log(`  FAIL  ${name}\n        ${e.message}`);
   }
 }
+// ── the default export must be the page, not a helper ──────────────────────
+// main.jsx imports the default. A patch that moved `export default` onto a
+// neighbouring helper made the whole Automation route render a props-less
+// empty-state card: no header, no tabs, and role undefined, so an admin was
+// told an admin could do it. Nothing threw, and the named-export render checks
+// above all passed, so only this assertion catches it.
+try {
+  const Page = AUTO.default;
+  if (typeof Page !== "function") throw new Error("no default export");
+  if (Page.name !== "AutomationPage") {
+    throw new Error(`default export is ${Page.name}, expected AutomationPage`);
+  }
+  console.log("  ok    automation · default export is the page");
+} catch (e) {
+  failed++;
+  console.log(`  FAIL  automation default export\n        ${e.message}`);
+}
+
 // ── round-trip: the stored document must survive a lap through the canvas ──
 // A bug here does not throw; it silently saves a different workflow than the
 // one on screen.

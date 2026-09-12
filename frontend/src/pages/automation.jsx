@@ -842,7 +842,7 @@ function WorkflowSwitch({ wf, role, onChanged }) {
   );
 }
 
-export default function EmptyState({ role, onSeeded }) {
+function EmptyState({ role, onSeeded }) {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState(null);
   const seed = async () => {
@@ -886,7 +886,7 @@ export default function EmptyState({ role, onSeeded }) {
   );
 }
 
-function AutomationPage() {
+export default function AutomationPage() {
   const [meta, setMeta] = React.useState(null);
   const [list, setList] = React.useState(null);
   const [current, setCurrent] = React.useState(null);
