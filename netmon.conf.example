@@ -423,6 +423,53 @@ poe_snippet_id = 4
 # role must never be able to reboot an AP.
 min_role = operator
 
+[automation]
+# Automation workflow engine (spec 22). Watches NetMon's own state and drives
+# the SAME audited action chokepoint the operator buttons use — it has no write
+# path of its own. This is the first thing in NetMon that can act without a
+# human clicking, so it sits behind three separate gates:
+#
+#   1. this `enabled` flag (the task is not even registered when false);
+#   2. per-workflow `workflows.enabled` (seeded 0);
+#   3. per-workflow `workflows.shadow` (seeded 1 — evaluates everything,
+#      sends nothing, writes a full "would have" trail you can read first).
+#
+# Even fully live, nothing marked `disruptive` in the action registry ever
+# fires unattended: PoE cycles and camera reboots become an approval queue
+# entry (spec 22 W2).
+enabled = false
+interval_s = 300
+
+# --- the guards (spec 22 §5). None of these can be overridden from a workflow
+# --- graph; the editor composes intent, these keep the invariants.
+
+# G2: refuse to act on state older than this. A collector that died an hour ago
+# leaves its last verdict looking exactly like a fresh one.
+max_state_age_s = 1800
+
+# G4, blast radius — the guard most likely to fire here on day one. Measured
+# 2026-09-11: the 82 down cameras sat 11 at MLK, 10 at University Place, 7 at
+# Southview. Eleven cameras in one building is a closet or an uplink, not
+# eleven camera faults, and remediating each one issues eleven PoE cycles
+# chasing a single upstream problem.
+site_cluster_max = 3
+switch_cluster_max = 2
+
+# G5: a remembered access port older than this is too stale to power-cycle on.
+# Ports are recorded while a device is healthy because a dead one has already
+# aged out of the FDB (79% of down cameras had no FDB entry at all).
+require_port_confirmed_within_s = 86400
+
+# G7/G8: one attempt per device per 6h, and at most 6 actions an hour fleet-wide.
+per_device_cooldown_s = 21600
+fleet_rate_limit = 6
+
+# How long an unapproved proposal stays actionable before it expires.
+proposal_ttl_s = 86400
+
+# Cadence of the port-memory sampler.
+port_memory_interval_s = 3600
+
 [camera_ops]
 # Bulk camera operations — firmware update and (later) configuration change.
 # Spec 20 S8, gate D11. THE MOST DANGEROUS THING NETMON CAN DO: a wrong image
