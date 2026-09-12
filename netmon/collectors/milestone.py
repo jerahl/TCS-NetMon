@@ -1,7 +1,9 @@
 """Milestone collector — recording-server + camera state and inventory.
 
-State (device_state, unchanged): recording servers → ``source_status``,
-cameras → ``recording``. Blind on unreachable.
+State (device_state): recording servers → ``source_status``; cameras →
+``source_status`` from ESS Communication, and ``recording`` = **unknown**,
+because nothing NetMon can reach measures whether a camera is actually
+recording (see the note at the write site). Blind on unreachable.
 
 Inventory (Phase 10.4, spec 10 §3/§5): the same Config API responses —
 previously discarded — persist to ``recording_servers`` / ``cameras`` +
@@ -873,10 +875,28 @@ class MilestoneCollector(Collector):
             if r is None:
                 continue
             linked_cameras += 1
-            recording = _truthy(cam.get("recordingEnabled"), cam.get("recording"), cam.get("enabled"))
-            cam_states.append((int(r["id"]), "recording",
-                               "up" if recording else "down",
-                               "ok" if recording else "crit", "milestone"))
+            # `recording` is NOT measured, and must not claim to be.
+            #
+            # It used to be derived from `recordingEnabled`/`enabled`, which are
+            # *configuration* — "is this camera set up to record" — so it read
+            # `up`/`ok` for all 2,659 devices on this estate and never moved.
+            # On 2026-09-11 at 19:49:14 all 234 cameras behind NHS-BCD-DVR
+            # stopped recording when the recorder filled up; this dimension went
+            # on reporting `recording = up, severity = ok` for every one of
+            # them, which is precisely the fabricated-health failure §4.5 exists
+            # to forbid.
+            #
+            # Nothing available measures the real thing. ESS publishes Recording
+            # events, but recording here is motion-triggered, so
+            # `RecordingStopped` is the ordinary resting state (owner,
+            # 2026-09-04) and consumed disk space needs WinRM, which NetMon does
+            # not have (OpenProject #111). So the honest value is `unknown`.
+            #
+            # The configuration flag itself is not lost: `build_cameras` already
+            # persists it as `cameras.enabled` from the same fields, where it
+            # reads as the inventory fact it is.
+            cam_states.append((int(r["id"]), "recording", "unknown", "unknown",
+                               "milestone"))
             if ess_status is not None:
                 # A camera absent from the snapshot has no Communication state
                 # published, which is not the same as being down.
