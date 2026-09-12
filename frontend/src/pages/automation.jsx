@@ -886,6 +886,14 @@ function EmptyState({ role, onSeeded }) {
   );
 }
 
+//: Exported so the render-check can assert every descriptor carries the `id`
+//: the Tabs primitive actually reads.
+export const TABS = [
+  { id: "editor", label: "Workflow" },
+  { id: "proposals", label: "Approvals" },
+  { id: "runs", label: "Runs" },
+];
+
 export default function AutomationPage() {
   const [meta, setMeta] = React.useState(null);
   const [list, setList] = React.useState(null);
@@ -970,11 +978,10 @@ export default function AutomationPage() {
         </div>
       )}
 
-      <Tabs tabs={[
-        { key: "editor", label: "Workflow" },
-        { key: "proposals", label: "Approvals" },
-        { key: "runs", label: "Runs" },
-      ]} active={tab} onChange={setTab} />
+      {/* `id`, not `key`: the Tabs primitive reads t.id, so a descriptor keyed
+          `key` made every click call onChange(undefined) and no tab body
+          matched — the content area silently rendered nothing. */}
+      <Tabs tabs={TABS} active={tab} onChange={setTab} />
 
       <div style={{ marginTop: 12 }}>
         {/* An empty list is a real state on a fresh install, not a load in

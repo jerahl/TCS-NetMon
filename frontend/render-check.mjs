@@ -887,6 +887,27 @@ try {
   console.log(`  FAIL  automation default export\n        ${e.message}`);
 }
 
+// ── tab descriptors must match what the Tabs primitive reads ───────────────
+// The primitive keys on `t.id`. Descriptors written with `key` instead render
+// fine and highlight nothing, and every click calls onChange(undefined) — so
+// no tab body matches and the content area goes blank. Nothing throws, which
+// is why this is asserted on the rendered output rather than the shape alone.
+try {
+  const html = renderToString(
+    React.createElement(P.Tabs, { tabs: AUTO.TABS, active: "editor", onChange: () => {} }));
+  if (!html.includes("tab active")) {
+    throw new Error("no tab rendered as active — descriptors likely use `key` not `id`");
+  }
+  for (const t of AUTO.TABS) {
+    if (typeof t.id !== "string") throw new Error(`tab ${t.label} has no string id`);
+    if (!html.includes(t.label)) throw new Error(`tab ${t.label} did not render`);
+  }
+  console.log("  ok    automation · tabs render active and carry ids");
+} catch (e) {
+  failed++;
+  console.log(`  FAIL  automation tabs\n        ${e.message}`);
+}
+
 // ── round-trip: the stored document must survive a lap through the canvas ──
 // A bug here does not throw; it silently saves a different workflow than the
 // one on screen.
