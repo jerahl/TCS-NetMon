@@ -80,7 +80,13 @@ const cases = [
      // React SSR puts <!-- --> between adjacent text nodes, so match on the
      // text as a reader sees it rather than on the raw markup.
      const text = html.replace(/<!-- -->/g, "");
-     if (!text.includes("11 camera(s) down")) throw new Error("footer did not add up");
+     // The footer names the two failure shapes separately now ("not recording"
+     // is reachable-but-nothing-on-disk; "unreachable" is a dead camera).
+     // Still the string-concat guard too: "0"+"0" shows 00, 0+"11" shows 011.
+     if (!text.includes("11 unreachable")) throw new Error("footer did not add up");
+     if (text.includes("00 not recording") || text.includes("011 unreachable")) {
+       throw new Error("string counts concatenated instead of adding");
+     }
      if (text.includes("110")) throw new Error("counts concatenated instead of adding");
      if (!text.includes("✓")) throw new Error("a site with nothing wrong scored as a failure");
    }],
@@ -496,7 +502,10 @@ const cases = [
     ] },
    (html) => {
      const text = html.replace(/<!-- -->/g, "");
-     if (!text.includes("7 down · 4 Milestone-down · 13 no ICMP")) {
+     // "Milestone-down" was jargon for the state that matters most here: the
+     // camera answers the network, but nothing is reaching disk. Three shapes
+     // must still be three numbers, whatever they are called.
+     if (!text.includes("7 down · 4 not recording · 13 no ICMP")) {
        throw new Error("failure shapes collapsed into one number");
      }
      if (!text.includes("all clear")) throw new Error("a clean school did not say so");
@@ -853,6 +862,29 @@ const cases = [
      for (const g of ["G1", "G5", "G10"]) {
        if (!html.includes(g)) throw new Error(`${g} missing without config`);
      }
+   }],
+
+  // Cameras do not fail simultaneously; a tight cluster is the thing they
+  // share. This card is what turns "237 down cameras" into "look at the
+  // recorder" (2026-09-11, NHS-BCD-DVR).
+  ["CommonCause · a recorder-wide drop reads as one fault", S.CommonCause, {
+    clusters: [{ at: "2026-09-11T19:49:14", new_value: "down", cameras: 234,
+                 span_s: 0, site: "Northridge High",
+                 recording_server: "NHS-BCD-DVR.tcs.tusc.k12.al.us",
+                 reading: "234 cameras went down in the same second, all behind "
+                          + "NHS-BCD-DVR.tcs.tusc.k12.al.us \u2014 that is one fault, not 234." }] },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (!text.includes("NHS-BCD-DVR")) throw new Error("the recorder is not named");
+     if (!text.includes("one fault, not 234")) throw new Error("the reading is missing");
+     if (!text.includes("same second")) throw new Error("the simultaneity is not shown");
+   }],
+
+  // The normal case: nothing clustered. It must draw nothing at all, rather
+  // than an empty card that implies a finding.
+  ["CommonCause · nothing changed together", S.CommonCause, { clusters: [] },
+   (html) => {
+     if (html !== "") throw new Error("an empty cluster list still drew a card");
    }],
 ];
 
