@@ -109,7 +109,31 @@ def test_milestone_writes_recording_and_source_status(tmp_path):
     src = _state(engine, "source_status")
     rec = _state(engine, "recording")
     assert src["RS1"]["value"] == "up" and src["RS1"]["severity"] == "ok"
-    assert rec["CAM1"]["value"] == "down" and rec["CAM1"]["severity"] == "crit"
+    # `recording` is unknown and must stay unknown whatever the config says.
+    assert rec["CAM1"]["value"] == "unknown" and rec["CAM1"]["severity"] == "unknown"
+
+
+def test_recording_never_claims_health_from_a_config_flag(tmp_path):
+    """`recordingEnabled` is configuration, not observation.
+
+    Reading it as state is what let 234 cameras behind a full recorder report
+    `recording = up, severity = ok` on 2026-09-11 while none of them wrote a
+    frame. Both spellings of the flag must produce `unknown`, because NetMon
+    measures neither.
+    """
+    for flag in (True, False):
+        sub = tmp_path / f"rec-{flag}"
+        sub.mkdir()
+        engine = _engine(sub)
+        fake = FakeMs()
+        fake.servers = [{"id": "RS1", "running": True}]
+        fake.cameras_data = [{"id": "CAM1", "recordingEnabled": flag,
+                              "enabled": flag}]
+        ms = MilestoneCollector(engine, fake, ess_enabled=False)
+        asyncio.run(ms.run_once())
+        rec = _state(engine, "recording")["CAM1"]
+        assert rec["value"] == "unknown", f"recordingEnabled={flag} leaked into state"
+        assert rec["severity"] == "unknown"
 
 
 def test_milestone_blind_on_unreachable(tmp_path):

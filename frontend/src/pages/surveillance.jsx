@@ -74,6 +74,7 @@ export function SurveillancePage({ query = {} }) {
   const [sites, setSites] = React.useState(null);
   const [context, setContext] = React.useState(null);
   const [servers, setServers] = React.useState(null);
+  const [clusters, setClusters] = React.useState(null);
   const [alarms, setAlarms] = React.useState(null);
   const [meta, setMeta] = React.useState(null);
   const [error, setError] = React.useState(null);
@@ -115,6 +116,10 @@ export function SurveillancePage({ query = {} }) {
       getJSON("/api/surveillance/site-context")
         .then((r) => live && setContext(r)).catch(() => live && setContext([]));
       getJSON("/api/surveillance/servers").then((r) => live && setServers(r)).catch(() => live && setServers([]));
+      // Mass state changes, grouped by what the cameras share. Empty is the
+      // normal case and renders nothing.
+      getJSON("/api/surveillance/common-cause")
+        .then((r) => live && setClusters(r)).catch(() => live && setClusters([]));
       getJSON("/api/alerts" + qs({ device_type: ALARM_SCOPE, limit: 200 }))
         .then((r) => live && setAlarms(r)).catch(() => live && setAlarms([]));
     };
@@ -208,7 +213,7 @@ export function SurveillancePage({ query = {} }) {
                     severity={camsDown > 0 ? "crit" : undefined}
                     sub={camsDown || cs.down_network_only || cs.blind
                       ? [num(cs.down_confirmed) ? `${cs.down_confirmed} down` : null,
-                         num(cs.down_source_only) ? `${cs.down_source_only} Milestone-down` : null,
+                         num(cs.down_source_only) ? `${cs.down_source_only} not recording` : null,
                          num(cs.down_network_only) ? `${cs.down_network_only} no ICMP` : null,
                          num(cs.blind) ? `${cs.blind} blind` : null].filter(Boolean).join(" · ")
                       : "every camera reachable"}
@@ -227,11 +232,20 @@ export function SurveillancePage({ query = {} }) {
                       : [alarmCrit ? `${alarmCrit} critical` : null,
                          alarmWarn ? `${alarmWarn} warning` : null].filter(Boolean).join(" · ")}
                     subTone={alarmCrit > 0 ? "err" : alarms && alarms.length ? "warn" : "ok"} />
-          {/* Recording is motion-triggered on this estate, so "stopped" is the
-              resting state — a count shown as information, never as a fault. */}
+          {/* Nothing NetMon can reach measures whether a camera is actually
+              writing to disk: ESS recording events are motion-triggered, and
+              consumed disk space needs WinRM. This used to read a Milestone
+              *config* flag and report 2,651 recording — including 234 behind a
+              full recorder. An honest gap beats a confident wrong number. */}
           <StatCell label="Recording now" source="milestone"
-                    value={fmtN(summary.cameras_recording)} unit={`/ ${fmtN(summary.cameras_total)}`}
-                    sub="motion-triggered — stopped is normal" />
+                    value={summary.cameras_recording_known
+                      ? fmtN(summary.cameras_recording) : null}
+                    unit={summary.cameras_recording_known
+                      ? `/ ${fmtN(summary.cameras_total)}` : undefined}
+                    sub={summary.cameras_recording_known
+                      ? "motion-triggered — stopped is normal"
+                      : "not measured — see the camera state above"}
+                    subTone={summary.cameras_recording_known ? undefined : "warn"} />
         </div>
       </Card>
 
@@ -239,7 +253,7 @@ export function SurveillancePage({ query = {} }) {
 
       {tab === "overview" && (
         <OverviewTab summary={summary} storagePct={storagePct} sites={sites}
-                     servers={servers} alarms={alarms} meta={meta}
+                     servers={servers} alarms={alarms} meta={meta} clusters={clusters}
                      onPickSite={(s) => {
                        // The camera fleet lives on its own page now, so a
                        // school tile navigates there pre-filtered rather than
@@ -353,7 +367,7 @@ export function SiteTiles({ rows, filter, onFilter, onPick }) {
         <span className="legend-item">
           <span className="legend-sw" style={{ borderColor: sevColor("crit") + "66",
                                                background: sevColor("crit") + "22" }} />
-          down / Milestone-down
+          unreachable / not recording
         </span>
         <span className="legend-item">
           <span className="legend-sw" style={{ borderColor: sevColor("warn") + "66",
@@ -366,15 +380,55 @@ export function SiteTiles({ rows, filter, onFilter, onPick }) {
           all up
         </span>
         <span className="legend-foot">
-          {scored.reduce((n2, r) => n2 + r.down_confirmed + r.down_source_only, 0)} camera(s) down
-          across {scored.length} school(s)
+          {scored.reduce((n2, r) => n2 + r.down_source_only, 0)} not recording ·{" "}
+          {scored.reduce((n2, r) => n2 + r.down_confirmed, 0)} unreachable across{" "}
+          {scored.length} school(s)
         </span>
       </div>
     </Card>
   );
 }
 
-export function OverviewTab({ summary, storagePct, sites, servers, alarms, meta, onPickSite }) {
+// Cameras do not fail simultaneously. When a couple of hundred change state in
+// the same second they share something — the recorder, its storage, its uplink
+// — and showing that as N camera outages sends an operator to the cameras.
+//
+// This is the card that would have said, on 2026-09-11, "234 cameras went down
+// in the same second, all behind NHS-BCD-DVR — that is one fault, not 234",
+// instead of "237 down cameras" while every one of them answered ICMP.
+export function CommonCause({ clusters }) {
+  if (!clusters || clusters.length === 0) return null;
+  return (
+    <Card title="Changed together" kicker="one fault, not many" tight>
+      <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.5,
+                    marginBottom: 8 }}>
+        Cameras that changed state within seconds of each other, grouped by what
+        they share. Look at the recorder before the cameras.
+      </div>
+      {clusters.map((c, i) => (
+        <div key={i} style={{ display: "flex", gap: 10, alignItems: "baseline",
+                              padding: "7px 0", borderTop: "1px solid var(--line)" }}>
+          <span style={{ fontFamily: "var(--mono)", fontSize: 16,
+                         color: sevColor(c.new_value === "down" ? "crit" : "warn"),
+                         minWidth: 46, textAlign: "right" }}>
+            {c.cameras}
+          </span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 12, lineHeight: 1.45 }}>{c.reading}</div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+              {String(c.at).replace("T", " ").slice(0, 19)}
+              {c.site ? ` · ${c.site}` : ""}
+              {c.span_s > 0 ? ` · spread over ${c.span_s}s` : " · same second"}
+            </div>
+          </div>
+        </div>
+      ))}
+    </Card>
+  );
+}
+
+export function OverviewTab({ summary, storagePct, sites, servers, alarms, meta,
+                             clusters, onPickSite }) {
   const usedKnown = usedIsKnown(summary);
   // Retention is per recorder and cumulative from the moment of recording
   // (spec 19 §8) — so the estate figure is a range, not a single number, and
@@ -387,7 +441,10 @@ export function OverviewTab({ summary, storagePct, sites, servers, alarms, meta,
 
   return (
     <React.Fragment>
-      {/* First, because "which school has a problem" is the question this page
+      {/* Above everything: if two hundred cameras changed together, that fact
+          reframes every number below it. */}
+      <CommonCause clusters={clusters} />
+      {/* Then, because "which school has a problem" is the question this page
           gets opened for. The environment roll-up below is context, not the
           lede. */}
       <SitesCard rows={sites} onPick={onPickSite} />
@@ -424,7 +481,9 @@ export function OverviewTab({ summary, storagePct, sites, servers, alarms, meta,
                         {summary.servers_total} online</td></tr>
                 <tr><td>Cameras</td>
                     <td>{fmtN(summary.cameras_total)} registered ·{" "}
-                        {fmtN(summary.cameras_recording)} recording now</td></tr>
+                        {summary.cameras_recording_known
+                          ? `${fmtN(summary.cameras_recording)} recording now`
+                          : <span className="dim">recording not measured</span>}</td></tr>
                 <tr><td>Retention</td>
                     <td>{retLabel || <span className="dim">—</span>}
                       {retLabel && <span className="dim"> · cumulative, incl. archive</span>}</td></tr>
@@ -522,8 +581,8 @@ export function CameraTrend() {
 
   const LINES = [
     ["surveillance.cameras_up", "Up", "ok"],
-    ["surveillance.down_confirmed", "Down", "crit"],
-    ["surveillance.down_source_only", "Milestone down", "crit"],
+    ["surveillance.down_confirmed", "Unreachable", "crit"],
+    ["surveillance.down_source_only", "Not recording", "crit"],
     ["surveillance.down_network_only", "No ICMP", "warn"],
     ["surveillance.blind", "Blind", "warn"],
   ];
@@ -709,7 +768,7 @@ export function SitesTab({ sites, context }) {
                     ) : (
                       <span className={"state-pill " + (down ? "err" : "warn")}>
                         {[num(r.down_confirmed) ? `${r.down_confirmed} down` : null,
-                          num(r.down_source_only) ? `${r.down_source_only} Milestone-down` : null,
+                          num(r.down_source_only) ? `${r.down_source_only} not recording` : null,
                           num(r.down_network_only) ? `${r.down_network_only} no ICMP` : null,
                           num(r.blind) ? `${r.blind} blind` : null].filter(Boolean).join(" · ")}
                       </span>

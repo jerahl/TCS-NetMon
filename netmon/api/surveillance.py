@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -63,8 +64,15 @@ def summary(engine: Engine = Depends(get_engine), _user=Depends(require_role(Rol
                 "WHERE d.dimension = 'source_status' GROUP BY value")}
     return {
         "cameras_total": cam.get("total") or 0,
-        "cameras_recording": rec.get("up", 0),
-        "cameras_not_recording": rec.get("down", 0),
+        # Whether a camera is *actually* recording is not something NetMon can
+        # measure (see the note in collectors/milestone.py). These stay None
+        # rather than 0 for the same reason `storage_used_gb` does: a confident
+        # zero reads as an estate-wide outage, and a confident 2,651 read as
+        # health nobody had checked — which is how 234 cameras behind a full
+        # recorder showed as "recording now" for a day.
+        "cameras_recording": rec.get("up") if rec.get("up") else None,
+        "cameras_not_recording": rec.get("down") if rec.get("down") else None,
+        "cameras_recording_known": bool(rec.get("up") or rec.get("down")),
         "cameras_blind": rec.get("blind", 0),
         "servers_total": srv.get("total") or 0,
         "servers_up": srv_up.get("up", 0),
@@ -165,6 +173,102 @@ def _camera_status_counts(engine: Engine) -> dict:
     out["down"] = sum(out.get(k, 0) for k in
                       ("down_confirmed", "down_source_only", "down_network_only"))
     return out
+
+
+@router.get("/common-cause")
+def common_cause(hours: int = 48, min_cameras: int = 5, window_s: int = 120,
+                 engine: Engine = Depends(get_engine),
+                 _user=Depends(require_role(Role.viewer))) -> list[dict]:
+    """Cameras that changed state together — i.e. one fault, not N faults.
+
+    On 2026-09-11 at 19:49:14 all 234 cameras behind NHS-BCD-DVR went
+    `source_status = down` **in the same second**, because the recorder had
+    filled up. Every page showed that as 234 down cameras, which sends an
+    operator to the cameras; the cameras were answering ICMP the whole time.
+
+    Cameras do not fail simultaneously. A cluster this tight is the shared
+    thing behind them — the recorder, its storage, or its uplink — so this
+    endpoint reports the *cluster*, attributed to the recording server where
+    NetMon knows it and to the site otherwise.
+
+    Read-only over `state_events`, which is append-only, so this is history
+    rather than a new judgement: it says what happened together, and leaves
+    naming the cause to the operator looking at the recorder it points to.
+    """
+    hours = max(1, min(int(hours), 24 * 30))
+    min_cameras = max(2, min(int(min_cameras), 500))
+    window_s = max(1, min(int(window_s), 3600))
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    rows = db.fetch_all(
+        engine,
+        "SELECT ev.occurred_at AS at, ev.new_value AS new_value, "
+        "       ev.device_id AS device_id, d.site AS site, "
+        "       c.recording_server_device_id AS rs_id, rs.name AS rs_name "
+        "FROM state_events ev "
+        "JOIN devices d ON d.id = ev.device_id "
+        "JOIN cameras c ON c.device_id = ev.device_id "
+        "LEFT JOIN devices rs ON rs.id = c.recording_server_device_id "
+        "WHERE ev.dimension = 'source_status' AND ev.occurred_at >= :since "
+        "  AND ev.new_value IN ('down', 'blind') "
+        "ORDER BY ev.occurred_at",
+        {"since": since},
+    )
+
+    # Group by (recorder-or-site, new_value), then split into time windows.
+    # Done in Python rather than SQL because the bucketing is a sliding window,
+    # not a fixed one: a fixed DATE_FORMAT bucket splits a cluster that happens
+    # to straddle a minute boundary, which is exactly the case worth catching.
+    buckets: dict[tuple, list[dict]] = {}
+    for row in rows:
+        key = (row["rs_id"] or f"site:{row['site']}", row["new_value"])
+        buckets.setdefault(key, []).append(row)
+
+    out: list[dict] = []
+    for (_key, new_value), events in buckets.items():
+        run: list[dict] = []
+        for ev in events + [None]:
+            if run and (ev is None
+                        or (_as_dt(ev["at"]) - _as_dt(run[0]["at"])).total_seconds() > window_s):
+                if len({r["device_id"] for r in run}) >= min_cameras:
+                    out.append(_cluster(run, new_value, window_s))
+                run = []
+            if ev is not None:
+                run.append(ev)
+    out.sort(key=lambda c: (c["cameras"], c["at"]), reverse=True)
+    return out[:50]
+
+
+def _cluster(run: list[dict], new_value: str, window_s: int) -> dict:
+    first, last = _as_dt(run[0]["at"]), _as_dt(run[-1]["at"])
+    span = (last - first).total_seconds()
+    return {
+        "at": run[0]["at"],
+        "new_value": new_value,
+        "cameras": len({r["device_id"] for r in run}),
+        "span_s": round(span, 1),
+        "site": run[0]["site"],
+        "recording_server_device_id": run[0]["rs_id"],
+        "recording_server": run[0]["rs_name"],
+        # The sentence an operator should read before opening anything. A
+        # sub-second span is the strongest form of the signal: nothing that
+        # happens to 200 separate devices happens to them in the same second.
+        "reading": (
+            f"{len({r['device_id'] for r in run})} cameras went {new_value} "
+            + ("in the same second" if span < 1 else f"within {round(span)}s")
+            + (f", all behind {run[0]['rs_name']}" if run[0]["rs_name"]
+               else f", all at {run[0]['site']}")
+            + " — that is one fault, not "
+            + f"{len({r['device_id'] for r in run})}."
+        ),
+    }
+
+
+def _as_dt(value):
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    dt = datetime.fromisoformat(str(value))
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 @router.get("/sites")
