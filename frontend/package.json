@@ -2,7 +2,7 @@
   "name": "netmon-frontend",
   "version": "0.1.0",
   "private": true,
-  "description": "TCS NetMon React UI (esbuild \u2192 static, served by FastAPI).",
+  "description": "TCS NetMon React UI (esbuild → static, served by FastAPI).",
   "type": "module",
   "scripts": {
     "build": "node build.mjs && node render-check.mjs",
@@ -10,6 +10,7 @@
     "render-check": "node render-check.mjs"
   },
   "dependencies": {
+    "@xyflow/react": "12.3.6",
     "leaflet": "1.9.4",
     "react": "18.3.1",
     "react-dom": "18.3.1"

@@ -372,6 +372,43 @@ class CameraOpsConfig:
 
 
 @dataclass(frozen=True)
+class AutomationConfig:
+    """Automation workflow engine (spec 22).
+
+    Every default here is the cautious one, and two of them are load-bearing:
+
+    * ``enabled`` false — the runner is not registered at all. Per-workflow
+      ``workflows.enabled``/``shadow`` columns are the second and third gates
+      (spec 22 W3, CLAUDE.md §4.2/§4.3).
+    * the cluster limits. Measured on this fleet on 2026-09-11, the 82 down
+      cameras sat 11 at MLK and 10 at University Place — so
+      ``site_cluster_max = 3`` is the guard most likely to fire on day one, and
+      that is the intended behaviour: eleven cameras in one building is an
+      upstream fault, not eleven camera faults.
+    """
+
+    enabled: bool = False
+    interval_s: int = 300
+    #: G2. Refuse to act on state older than this — a dead collector leaves its
+    #: last verdict looking exactly like a fresh one.
+    max_state_age_s: int = 1800
+    #: G4. More than this many peers down at one site (or behind one switch)
+    #: means the fault is upstream.
+    site_cluster_max: int = 3
+    switch_cluster_max: int = 2
+    #: G5. A remembered access port older than this is too stale to power-cycle
+    #: on — cabling moves.
+    require_port_confirmed_within_s: int = 86400
+    #: G7/G8.
+    per_device_cooldown_s: int = 21600
+    fleet_rate_limit: int = 6
+    #: How long an unapproved proposal stays actionable.
+    proposal_ttl_s: int = 86400
+    #: Cadence of the port-memory sampler (spec 22 §2b).
+    port_memory_interval_s: int = 3600
+
+
+@dataclass(frozen=True)
 class Config:
     db: DBConfig
     web: WebConfig
@@ -384,6 +421,7 @@ class Config:
     actions: ActionsConfig
     camera_snapshot: CameraSnapshotConfig
     camera_ops: CameraOpsConfig
+    automation: AutomationConfig
     sources: dict[str, SourceToggle]
     path: str
 
@@ -614,6 +652,33 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         # config typo turn the ring buffer into long-term series storage.
         raise ConfigError("[history] retention_hours must be between 1 and 24")
 
+    # --- [automation] workflow engine (spec 22) ---
+    def _aint(key: str, default: int) -> int:
+        return parser.getint("automation", key, fallback=default)
+
+    automation = AutomationConfig(
+        enabled=_as_bool(parser.get("automation", "enabled", fallback="false")),
+        interval_s=_aint("interval_s", 300),
+        max_state_age_s=_aint("max_state_age_s", 1800),
+        site_cluster_max=_aint("site_cluster_max", 3),
+        switch_cluster_max=_aint("switch_cluster_max", 2),
+        require_port_confirmed_within_s=_aint("require_port_confirmed_within_s", 86400),
+        per_device_cooldown_s=_aint("per_device_cooldown_s", 21600),
+        fleet_rate_limit=_aint("fleet_rate_limit", 6),
+        proposal_ttl_s=_aint("proposal_ttl_s", 86400),
+        port_memory_interval_s=_aint("port_memory_interval_s", 3600),
+    )
+    if automation.enabled and automation.interval_s < 60:
+        raise ConfigError("[automation] interval_s must be >= 60")
+    if automation.site_cluster_max < 1 or automation.switch_cluster_max < 1:
+        # 0 would refuse everything, which reads as "safe" but actually means
+        # the engine silently never acts — a disabled engine should say so via
+        # `enabled`, not via a limit nobody can satisfy.
+        raise ConfigError("[automation] site_cluster_max and switch_cluster_max "
+                          "must be >= 1; use enabled = false to switch the engine off")
+    if automation.fleet_rate_limit < 1:
+        raise ConfigError("[automation] fleet_rate_limit must be >= 1")
+
     # --- [actions] operator write actions (spec 11 D4) ---
     def _abool(key: str, default: bool = True) -> bool:
         return _as_bool(parser.get("actions", key, fallback="true" if default else "false"))
@@ -718,5 +783,5 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
 
     return Config(db=db, web=web, auth=auth, security=security, poller=poller,
                   snmp_inventory=snmp_inventory, engine=engine, history=history,
-                  actions=actions, camera_snapshot=camera_snapshot,
+                  actions=actions, automation=automation, camera_snapshot=camera_snapshot,
                   camera_ops=camera_ops, sources=sources, path=conf_path)

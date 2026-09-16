@@ -103,6 +103,19 @@ ACTIONS: dict[str, ActionSpec] = {
                "briefly drop and re-establish the device connection.",
         disruptive=False,
     ),
+    # Spec 22 W7, owner sign-off 2026-09-11. The fallback arm of the camera
+    # remediation workflow: when a camera answers ICMP but Milestone still
+    # cannot talk to it, and asking the VMS to re-detect it (above) did not
+    # help, the camera itself is wedged. An RCP+ write to camera hardware, so
+    # it lands here like every other thing that leaves the building — behind
+    # `[camera_ops]`, admin-gated, and `disruptive`, which under W2 means the
+    # automation engine may only ever *propose* it, never fire it unattended.
+    "camera_reboot": ActionSpec(
+        key="camera_reboot", source="camera", label="Reboot camera",
+        effect="Restarts the camera itself; it stops recording for roughly a minute "
+               "and comes back with the same configuration.",
+        disruptive=True,
+    ),
     "ap_reboot": ActionSpec(
         key="ap_reboot", source="xiq", label="Reboot AP",
         effect="ExtremeCloud IQ reboots this access point; every client on it is disconnected for ~2 minutes.",
