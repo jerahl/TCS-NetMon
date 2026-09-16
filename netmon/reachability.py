@@ -24,6 +24,7 @@ Pure derivation: reads `device_state`, writes `device_state`. No source calls.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -127,6 +128,10 @@ class ReachabilityDeriver(Collector):
     timeout_s = 30.0
 
     async def run_once(self) -> int:
-        n = recompute(self.engine)
+        # `recompute` is ~3.6k sequential write_state round trips against
+        # MariaDB with no await in it. Run on the event loop it stalls the
+        # single uvicorn worker for its whole duration, so nginx cannot get a
+        # response and returns 502/504. Off the loop, like the history sampler.
+        n = await asyncio.to_thread(recompute, self.engine)
         log.info("reachability: %d device(s) classified", n)
         return n

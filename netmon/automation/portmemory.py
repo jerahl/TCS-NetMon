@@ -35,6 +35,7 @@ What it deliberately does not do:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone
@@ -83,7 +84,10 @@ class PortMemory:
         self.timeout_s = max(600.0, interval_s)
 
     async def run_once(self) -> int:
-        return self.refresh()
+        # `refresh` runs one FDB-join query per candidate device (~3.4k of
+        # them, ~156s in production) entirely synchronously. Keep it off the
+        # event loop or it blocks every HTTP request for that whole window.
+        return await asyncio.to_thread(self.refresh)
 
     def refresh(self) -> int:
         rows = db.fetch_all(self.engine, _CANDIDATES_SQL)
