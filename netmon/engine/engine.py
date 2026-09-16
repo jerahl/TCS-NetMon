@@ -7,6 +7,7 @@ is done with explicit open-alert lookups, not the MariaDB-only generated
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone
@@ -130,6 +131,11 @@ class AlertEngine:
     # --- cycle ---------------------------------------------------------------
 
     async def run_once(self) -> int:
+        # The whole cycle is synchronous DB work (no await below); run it in a
+        # worker thread so the event loop stays free to serve HTTP.
+        return await asyncio.to_thread(self._run_cycle)
+
+    def _run_cycle(self) -> int:
         now = datetime.now(timezone.utc)
         notified = 0
         flags = self._reachability_flags()
