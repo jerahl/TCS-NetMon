@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from netmon import secretbox, settings as reg
+from netmon.collectors.milestone import MilestoneCollector
 from netmon.config import load_config
 from tests.conftest import write_config
 
@@ -166,3 +167,26 @@ def test_file_value_reads_conf_then_default(tmp_path):
     # Absent from the file → registry default.
     assert reg.file_value(base, reg.BY_KEY["xiq.status_interval_s"]) == 180
     assert reg.file_value(base, reg.BY_KEY["engine.smtp_port"]) == 25
+
+
+def test_ess_open_timeout_is_overlay_editable_and_reaches_the_collector(tmp_path):
+    """The handshake ceiling has to be reachable from the Settings page.
+
+    The registry, not the database, decides what is editable: an app_settings
+    row for an unregistered key is skipped as a stale override and the API
+    answers 404. Without this entry the setting would exist in the file only,
+    on a box where the file is not how config is changed.
+    """
+    d = reg.BY_KEY["milestone.ess_open_timeout"]
+    assert d.kind == "int" and d.default == 30
+    assert not d.restart, "picked up by Apply; a restart must not be required"
+
+    base = _base_cfg(tmp_path)
+    values, errors = reg.resolve_overrides(
+        {"milestone.ess_open_timeout": "75",
+         "milestone.host": "vms.example.invalid"}, base.security.settings_key)
+    assert not errors
+    cfg = reg.apply_overrides(base, values)
+    # Source sections carry raw strings; the collector parses them.
+    assert cfg.sources["milestone"].settings["ess_open_timeout"] == "75"
+    assert MilestoneCollector.from_config(None, cfg).ess_open_timeout == 75.0

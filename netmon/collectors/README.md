@@ -164,6 +164,8 @@ Ported from `reference/zabbix/milestone/*`.
     than reachability or auth. Restarting the service did not reliably clear it.
     The setting is the knob to reach for when that warning is in the log; the
     structural fix is `ess_live`, which makes one handshake instead of 720 a day.
+    Registered in the settings overlay, so it is editable from `#/settings` and
+    takes effect on Apply — no restart, no edit to `netmon.conf`.
 - **Live Events/State subscription** (`ess_live.py`, spec 20 S7) — **default
   off**, `[milestone] ess_live = true` to enable. Holds the same subscription
   open and applies camera `source_status` as events arrive, instead of once a
