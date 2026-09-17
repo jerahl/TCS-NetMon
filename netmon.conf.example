@@ -286,6 +286,21 @@ ess_live_flush_s = 5
 # purpose: overnight the motion traffic that dominates the stream stops, and a
 # 60s watchdog would force a needless 4 MB resync every minute until dawn.
 ess_live_watchdog_s = 180
+# How long the ESS WebSocket upgrade may take before the connect is abandoned,
+# seconds. Applies to the 120s snapshot and to `ess_live` alike — it is the same
+# handshake against the same gateway.
+#
+# The `websockets` default is 10s, which this gateway does not always meet: in
+# the week to 2026-09-17 the snapshot logged 1,230 `timed out during opening
+# handshake` failures (6% of cycles rising to 73%, plus a ~25h near-total outage
+# on 09-15/16) while the Config API on the same host answered every cycle. Each
+# one costs a cycle of live camera status estate-wide and raises the degraded
+# banner on the Surveillance page.
+#
+# Raise this if that warning is in the log and the gateway is otherwise healthy;
+# it buys latency, never a fabricated value — a connect that never completes
+# still degrades honestly.
+ess_open_timeout = 30
 
 [threecx]
 # 3CX v20 REST API (voice). Read-only. OAuth2 client-credentials.

@@ -1405,3 +1405,52 @@ def test_no_task_is_ever_built_as_a_path_segment():
     joined = " ".join(consts)
     assert "/tasks/" not in joined
     assert "recordingServers" not in joined
+
+
+def test_a_causeless_ess_warning_still_names_its_cause(tmp_path, caplog):
+    """`%s` on a bare TimeoutError is the empty string.
+
+    212 of the 1,444 ESS failures in the week to 2026-09-17 logged exactly that:
+    "...rather than guessed:" and nothing after the colon. A warning that names
+    no cause cannot be triaged, which is the same silence §4.5 forbids — so the
+    type name stands in when the message is empty.
+    """
+    engine = _engine(tmp_path)
+    col = MilestoneCollector(engine, FakeMs(), ess_enabled=True)
+
+    class Boom:
+        def __init__(self, *a, **kw):
+            raise TimeoutError()               # str() == ""
+
+    import netmon.collectors.milestone as mod
+    original, mod.MilestoneEss = mod.MilestoneEss, Boom
+    try:
+        with caplog.at_level("WARNING", logger="netmon.collectors.milestone"):
+            assert asyncio.run(col._ess_state()) is None
+    finally:
+        mod.MilestoneEss = original
+
+    warning = next(r.getMessage() for r in caplog.records
+                   if "ESS state unavailable" in r.getMessage())
+    assert warning.rstrip().endswith("TimeoutError")
+
+
+def test_ess_open_timeout_reaches_the_socket(tmp_path):
+    """The ceiling is only useful if the connect actually carries it."""
+    engine = _engine(tmp_path)
+    col = MilestoneCollector(engine, FakeMs(), ess_enabled=True, ess_open_timeout=75.0)
+    seen = {}
+
+    class Spy:
+        def __init__(self, client, **kw):
+            seen.update(kw)
+            raise TimeoutError()
+
+    import netmon.collectors.milestone as mod
+    original, mod.MilestoneEss = mod.MilestoneEss, Spy
+    try:
+        asyncio.run(col._ess_state())
+    finally:
+        mod.MilestoneEss = original
+
+    assert seen["open_timeout"] == 75.0

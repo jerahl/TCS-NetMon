@@ -206,6 +206,12 @@ REGISTRY: list[SettingDef] = [
     _d("milestone.client_id", "str", "GrantValidatorClient", "OAuth client id"),
     _d("milestone.verify_ssl", "bool", True, "Verify TLS certificate"),
     _d("milestone.interval_s", "int", 120, "Poll interval (s)", min=30),
+    _d("milestone.ess_open_timeout", "int", 30, "ESS handshake timeout (s)",
+       "How long the Events/State WebSocket upgrade may take before the connect "
+       "is abandoned. The websockets default of 10s is not always enough on this "
+       "gateway — raise it when 'timed out during opening handshake' is in the "
+       "log and the Config API is answering normally. Costs latency on a dead "
+       "socket, never a fabricated value.", min=5, max=120),
 
     _d("threecx.enabled", "bool", False, "Enable 3CX collector"),
     _d("threecx.url", "str", "", "Base URL"),
