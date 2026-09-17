@@ -206,3 +206,62 @@ def test_frame_limit_is_raised_above_the_websockets_default():
     the socket with 1009 above it, which presents as a dropped connection."""
     ess = MilestoneEss(FakeClient())
     assert ess.max_frame_bytes >= 4 * 1024 * 1024
+
+
+def test_open_timeout_is_raised_above_the_websockets_default(monkeypatch):
+    """The library default is 10s and this gateway does not always answer in it.
+
+    In the week to 2026-09-17 the 120s snapshot logged 1,230 `timed out during
+    opening handshake` failures — 6% of cycles rising to 73% — while the Config
+    API on the same host answered every one. Each timeout costs a cycle of live
+    camera status for the whole estate, so the ceiling is a deliberate value and
+    it must actually reach the library, not merely sit on the object.
+    """
+    seen: dict = {}
+
+    class FakeCM:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *exc):
+            return False
+
+    def fake_connect(url, **kwargs):
+        seen.update(kwargs)
+        return FakeCM()
+
+    monkeypatch.setattr("netmon.collectors.ws_milestone._ws_connect", fake_connect)
+    ess = MilestoneEss(FakeClient())
+
+    async def drive():
+        async with ess.connect():
+            pass
+
+    asyncio.run(drive())
+    assert ess.open_timeout >= 30.0
+    assert seen["open_timeout"] == ess.open_timeout
+
+
+def test_open_timeout_is_tunable_without_a_deploy(monkeypatch):
+    """Handshake latency is a property of the VMS, so the ceiling is config."""
+    seen: dict = {}
+
+    class FakeCM:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(
+        "netmon.collectors.ws_milestone._ws_connect",
+        lambda url, **kwargs: (seen.update(kwargs), FakeCM())[1],
+    )
+    ess = MilestoneEss(FakeClient(), open_timeout=90.0)
+
+    async def drive():
+        async with ess.connect():
+            pass
+
+    asyncio.run(drive())
+    assert seen["open_timeout"] == 90.0

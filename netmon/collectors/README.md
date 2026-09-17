@@ -152,6 +152,18 @@ Ported from `reference/zabbix/milestone/*`.
   → getState` over the ESS WebSocket, ~16,500 states out of one ~4 MB reply.
   Gives per-camera `source_status` (the Config API has no such field) and the
   four recording-server state columns. Runs every `interval_s`.
+  - *Failure mode:* soft. A failed connect or handshake returns `None`, adds
+    `ess` to the overview's `degraded` list and leaves every camera's prior
+    status untouched — the Surveillance page then says so in a banner rather
+    than showing stale figures as current.
+  - *Handshake ceiling:* `ess_open_timeout` (default 30s), because the
+    `websockets` default of 10s is not always enough here. Week to 2026-09-17:
+    1,230 `timed out during opening handshake` failures, 6% of cycles rising to
+    73%, with a ~25h near-total outage on 09-15/16 — while the Config API on the
+    same gateway answered every cycle, so the fault is the ESS upgrade rather
+    than reachability or auth. Restarting the service did not reliably clear it.
+    The setting is the knob to reach for when that warning is in the log; the
+    structural fix is `ess_live`, which makes one handshake instead of 720 a day.
 - **Live Events/State subscription** (`ess_live.py`, spec 20 S7) — **default
   off**, `[milestone] ess_live = true` to enable. Holds the same subscription
   open and applies camera `source_status` as events arrive, instead of once a
@@ -201,7 +213,7 @@ Ported from `reference/zabbix/milestone/*`.
     an unexpectedly empty array as a malformed request, not an empty fleet.
 - **Config:** `[milestone] enabled, host, user, pass, scheme, client_id,
   verify_ssl, interval_s, identity_batch, identity_concurrency, ess_live,
-  ess_live_flush_s, ess_live_watchdog_s`.
+  ess_live_flush_s, ess_live_watchdog_s, ess_open_timeout`.
 
 Both collectors are standalone-runnable
 (`python -m netmon.collectors.packetfence|milestone --once|--loop`).

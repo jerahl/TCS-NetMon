@@ -126,12 +126,25 @@ class MilestoneEss:
     def __init__(self, client: MilestoneClient, *, ws_path: str = DEFAULT_WS_PATH,
                  resource_types: tuple[str, ...] = DEFAULT_RESOURCE_TYPES,
                  command_timeout: float = 20.0,
+                 open_timeout: float = 30.0,
                  max_frame_bytes: int = 32 * 1024 * 1024) -> None:
         self.client = client
         self.ws_path = ws_path
         self.resource_types = resource_types
         self.initial_state: dict | None = None
         self.command_timeout = command_timeout
+        # How long the HTTP upgrade may take before the connect is abandoned.
+        # websockets defaults to 10s, and this gateway does not always answer
+        # inside it: between 2026-09-10 and 2026-09-17 the 120s snapshot logged
+        # 1,230 `timed out during opening handshake` failures, rising from 6% of
+        # cycles to 73%, with a ~25h near-total outage on 2026-09-15/16 — while
+        # the Config API on the same host answered every cycle. A handshake that
+        # is merely slow must not read as an unreachable ESS: the caller records
+        # `degraded` and leaves camera status visibly stale (§4.5), so every
+        # premature timeout costs a cycle of live camera state for 2,659
+        # cameras. 30s is deliberately above the /cameras latency band (5-19s
+        # measured) rather than a round number.
+        self.open_timeout = open_timeout
         # websockets defaults to a 1 MiB frame limit and closes the connection
         # with 1009 when a frame exceeds it. The getState snapshot for this
         # estate is ~4 MB (2,659 cameras, measured 2026-09-04), so the default
@@ -155,6 +168,7 @@ class MilestoneEss:
         kwargs: dict[str, Any] = {
             _HEADERS_KW: {"Authorization": f"Bearer {token}"},
             "max_size": self.max_frame_bytes,
+            "open_timeout": self.open_timeout,
         }
         if not self.client.verify_ssl:
             import ssl

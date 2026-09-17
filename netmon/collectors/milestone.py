@@ -457,9 +457,14 @@ class MilestoneCollector(Collector):
 
     def __init__(self, engine: Engine, client: MilestoneClient, interval_s: float = 120.0,
                  ess_enabled: bool = True, blind_after_failures: int = 3,
-                 identity_batch: int = 150, identity_concurrency: int = 6) -> None:
+                 identity_batch: int = 150, identity_concurrency: int = 6,
+                 ess_open_timeout: float = 30.0) -> None:
         super().__init__(engine)
         self.client = client
+        # Passed to every ESS connect. Tunable without a deploy because the
+        # gateway's handshake latency is a property of the VMS, not of NetMon —
+        # see MilestoneEss.open_timeout for the measurement that set the default.
+        self.ess_open_timeout = ess_open_timeout
         # One WebSocket getState per cycle (~4 MB on this estate). Default on
         # because it replaces 2,659 stale `blind` rows with a real verdict;
         # disableable without a deploy, and failure is soft either way.
@@ -505,7 +510,8 @@ class MilestoneCollector(Collector):
         )
         return cls(engine, client, interval_s=int(s.get("interval_s") or 120),
                    identity_batch=int(s.get("identity_batch", 150) or 0),
-                   identity_concurrency=int(s.get("identity_concurrency") or 6))
+                   identity_concurrency=int(s.get("identity_concurrency") or 6),
+                   ess_open_timeout=float(s.get("ess_open_timeout") or 30.0))
 
     def _by_milestone_id(self) -> dict[str, dict]:
         rows = db.fetch_all(
@@ -712,7 +718,8 @@ class MilestoneCollector(Collector):
         is visible rather than silent (§4.5).
         """
         try:
-            ess = MilestoneEss(self.client, resource_types=("cameras", "recordingServers"))
+            ess = MilestoneEss(self.client, resource_types=("cameras", "recordingServers"),
+                               open_timeout=self.ess_open_timeout)
             async with ess.connect() as conn:
                 await ess.handshake(conn)
                 states = (ess.initial_state or {}).get("states") or []
@@ -744,8 +751,13 @@ class MilestoneCollector(Collector):
                         cams[guid] = verdict
             return cams, servers
         except Exception as exc:                      # noqa: BLE001 — enrichment
+            # `%s` on a bare TimeoutError renders as the empty string, and 212
+            # of 1,444 failures in the week to 2026-09-17 logged exactly that:
+            # a warning that named no cause. Fall back to the type name so the
+            # line is always diagnosable (§4.5 — fail loud, not merely fail).
             log.warning("milestone ESS state unavailable, status left "
-                        "as-is rather than guessed: %s", exc)
+                        "as-is rather than guessed: %s",
+                        str(exc) or type(exc).__name__)
             return None
 
     async def _event_type_names(self) -> dict[str, str]:

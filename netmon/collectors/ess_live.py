@@ -86,14 +86,16 @@ class EssLive:
 
     def __init__(self, engine: Engine, client: MilestoneClient, *,
                  flush_s: float = 5.0, watchdog_s: float = 180.0,
-                 registry_refresh_s: float = 300.0) -> None:
+                 registry_refresh_s: float = 300.0,
+                 open_timeout: float = 30.0) -> None:
         self.engine = engine
         self.client = client
         self.flush_s = max(1.0, flush_s)
         self.watchdog_s = max(30.0, watchdog_s)
         self.registry_refresh_s = max(60.0, registry_refresh_s)
 
-        self.ess = MilestoneEss(client, resource_types=("cameras",))
+        self.ess = MilestoneEss(client, resource_types=("cameras",),
+                                open_timeout=open_timeout)
         # Only cameras. Recording-server state columns belong to the 120 s
         # cycle, which owns that row wholesale; subscribing to them here would
         # collect events this task then has nowhere safe to put.
@@ -132,6 +134,10 @@ class EssLive:
             engine, collector.client,
             flush_s=float(settings.get("ess_live_flush_s") or 5.0),
             watchdog_s=float(settings.get("ess_live_watchdog_s") or 180.0),
+            # One setting for both ESS readers: the handshake they perform is
+            # the same one against the same gateway, and a value that has to be
+            # raised for the snapshot is already true for the stream.
+            open_timeout=float(settings.get("ess_open_timeout") or 30.0),
         )
 
     async def run(self) -> None:
