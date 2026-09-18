@@ -206,6 +206,14 @@ REGISTRY: list[SettingDef] = [
     _d("milestone.client_id", "str", "GrantValidatorClient", "OAuth client id"),
     _d("milestone.verify_ssl", "bool", True, "Verify TLS certificate"),
     _d("milestone.interval_s", "int", 120, "Poll interval (s)", min=30),
+    _d("milestone.ess_enabled", "bool", True, "Events/State snapshot in the cycle",
+       "The once-per-cycle getState that gives every camera its source_status. "
+       "Turn it off only when the live subscription below is carrying that "
+       "state — with both off, camera status has no source and rows go stale."),
+    _d("milestone.ess_live", "bool", False, "Live Events/State subscription",
+       "Holds one subscription open and applies camera state as events arrive, "
+       "instead of once per cycle. Registers a supervised task at startup, so "
+       "this one needs a service restart rather than Apply.", restart=True),
     _d("milestone.ess_open_timeout", "int", 30, "ESS handshake timeout (s)",
        "How long the Events/State WebSocket upgrade may take before the connect "
        "is abandoned. The websockets default of 10s is not always enough on this "

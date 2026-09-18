@@ -156,6 +156,30 @@ Ported from `reference/zabbix/milestone/*`.
     `ess` to the overview's `degraded` list and leaves every camera's prior
     status untouched — the Surveillance page then says so in a banner rather
     than showing stale figures as current.
+  - *Switch:* `ess_enabled` (default true), web-editable. Off is only safe once
+    `ess_live` is carrying camera `source_status`; with both off nothing writes
+    that dimension and every camera row ages without a source.
+  - *What the Event Server sees:* one connection per cycle, ~3s end to end
+    (measured against `milestone-event` 10.10.3.168 on 2026-09-18: connection
+    created → subscription added → `getState` → closed, 09:57:32.181 to
+    09:57:35.040). The session is then held 30s before `session discarded
+    (timeout)` — the empirical answer to the resume-window question ZCD PR #43
+    left open, and comfortably inside our 120s cadence.
+  - *Known rough edge:* the subscription is a wildcard over every source and
+    event type, so the Event Server begins pushing the ~200 events/s firehose
+    the moment it is added, and we close ~3s later having wanted only the
+    `getState` reply. Its log records the consequence after each of our cycles —
+    `Cannot send data on connection N. State of web socket is Closed.
+    System.ObjectDisposedException`, and occasionally the
+    `already one outstanding 'SendAsync' call` race. We close the socket
+    properly rather than dropping it, which is as far as this can be taken
+    without either (a) narrowing the filter, gated on the stategroup-coverage
+    audit — camera `Communication*` plus the four `ESS_RS_COLUMNS` groups all
+    ride on it, and a blind narrowing would silently drop recording-server
+    state — or (b) a fourth verb to drop the subscription before closing, which
+    `PERMITTED_COMMANDS` forbids by design (§4.1, D5) and which needs the
+    owner's sign-off. Turning `ess_enabled` off once `ess_live` is trusted
+    removes the whole interaction instead.
   - *Handshake ceiling:* `ess_open_timeout` (default 30s), because the
     `websockets` default of 10s is not always enough here. Week to 2026-09-17:
     1,230 `timed out during opening handshake` failures, 6% of cycles rising to
@@ -215,7 +239,10 @@ Ported from `reference/zabbix/milestone/*`.
     an unexpectedly empty array as a malformed request, not an empty fleet.
 - **Config:** `[milestone] enabled, host, user, pass, scheme, client_id,
   verify_ssl, interval_s, identity_batch, identity_concurrency, ess_live,
-  ess_live_flush_s, ess_live_watchdog_s, ess_open_timeout`.
+  ess_live_flush_s, ess_live_watchdog_s, ess_open_timeout, ess_enabled`.
+  `ess_enabled`, `ess_live` and `ess_open_timeout` are in the settings overlay;
+  `ess_live` registers a supervised task at startup, so it is flagged "needs
+  service restart" rather than picked up by Apply.
 
 Both collectors are standalone-runnable
 (`python -m netmon.collectors.packetfence|milestone --once|--loop`).

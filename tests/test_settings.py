@@ -190,3 +190,30 @@ def test_ess_open_timeout_is_overlay_editable_and_reaches_the_collector(tmp_path
     # Source sections carry raw strings; the collector parses them.
     assert cfg.sources["milestone"].settings["ess_open_timeout"] == "75"
     assert MilestoneCollector.from_config(None, cfg).ess_open_timeout == 75.0
+
+
+def test_both_ess_switches_are_reachable_from_the_settings_page(tmp_path):
+    """Enabling the live stream meant hand-editing netmon.conf on the box.
+
+    That is the wrong place on this deployment: the file still reads
+    `enabled = false` with the host commented out while the collector runs, so
+    the file is documentation of an earlier state, not configuration. Both
+    switches belong in the overlay.
+    """
+    live = reg.BY_KEY["milestone.ess_live"]
+    snap = reg.BY_KEY["milestone.ess_enabled"]
+    assert live.kind == "bool" and snap.kind == "bool"
+    # The live task is registered in the app lifespan, so Apply cannot add it.
+    # Saying otherwise on the page would be a lie the operator acts on.
+    assert live.restart is True
+    assert snap.restart is False
+
+    base = _base_cfg(tmp_path)
+    values, errors = reg.resolve_overrides(
+        {"milestone.ess_live": "true", "milestone.ess_enabled": "false",
+         "milestone.host": "vms.example.invalid"}, base.security.settings_key)
+    assert not errors
+    cfg = reg.apply_overrides(base, values)
+    s = cfg.sources["milestone"].settings
+    assert s["ess_live"] == "true"
+    assert MilestoneCollector.from_config(None, cfg).ess_enabled is False
