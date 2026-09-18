@@ -1454,3 +1454,74 @@ def test_ess_open_timeout_reaches_the_socket(tmp_path):
         mod.MilestoneEss = original
 
     assert seen["open_timeout"] == 75.0
+
+
+def test_the_snapshot_can_be_switched_off_without_a_deploy(tmp_path):
+    """`ess_enabled` was documented as config for months but never read.
+
+    The only way to stop the per-cycle getState was to edit the code, which is
+    the opposite of §4.3. It matters now: with `ess_live` holding the
+    subscription open, the snapshot is redundant churn against a gateway that
+    has been refusing handshakes.
+    """
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.servers = [{"id": "RS1", "hostName": "nvr-1.tcs", "running": True}]
+    fake.cameras_data = [{"id": "CAM1", "recordingEnabled": True}]
+    col = MilestoneCollector(engine, fake, ess_enabled=False)
+
+    called = False
+
+    async def spy():
+        nonlocal called
+        called = True
+        return None
+
+    col._ess_state = spy
+    asyncio.run(col.run_once())                     # must not raise
+
+    assert not called, "the snapshot must not run when it is switched off"
+    snap = read_snapshot(engine, "milestone.overview")
+    # Off is a choice, not a degradation: nothing to report as degraded.
+    assert "ess" not in (snap["payload"].get("degraded") or [])
+
+
+def test_the_snapshot_socket_is_closed_not_dropped(tmp_path):
+    """The Event Server is mid-send when we are done reading.
+
+    The subscription is a wildcard over ~200 events/s, so by the time getState
+    returns it is already pushing. Dropping the transport there leaves it
+    sending into a disposed socket — its log says exactly that after each of
+    our cycles. Close properly instead.
+    """
+    engine = _engine(tmp_path)
+    col = MilestoneCollector(engine, FakeMs(), ess_enabled=True)
+    closed = []
+
+    class FakeConn:
+        async def close(self):
+            closed.append(True)
+
+    class FakeEss:
+        def __init__(self, client, **kw):
+            self.initial_state = {"states": []}
+
+        def connect(self):
+            from contextlib import asynccontextmanager
+
+            @asynccontextmanager
+            async def cm():
+                yield FakeConn()
+            return cm()
+
+        async def handshake(self, conn):
+            return None
+
+    import netmon.collectors.milestone as mod
+    original, mod.MilestoneEss = mod.MilestoneEss, FakeEss
+    try:
+        asyncio.run(col._ess_state())
+    finally:
+        mod.MilestoneEss = original
+
+    assert closed == [True], "the snapshot must close its socket explicitly"

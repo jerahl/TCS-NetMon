@@ -261,6 +261,11 @@ interval_s = 120
 # of the cycle is unaffected and MACs already stored are kept.
 identity_batch = 150
 identity_concurrency = 6
+# The Events/State snapshot inside the 120s cycle: one getState per cycle, which
+# is where every camera's source_status comes from (the Config API has no such
+# field). Default ON. Turn it off only once `ess_live` below is carrying that
+# state — with both off nothing writes camera status and the rows go stale.
+ess_enabled = true
 # Live Events/State subscription (spec 20 S7). Default OFF.
 #
 # With this false, the cycle above opens the ESS socket once per interval, reads

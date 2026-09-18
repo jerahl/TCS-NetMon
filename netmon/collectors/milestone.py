@@ -511,7 +511,13 @@ class MilestoneCollector(Collector):
         return cls(engine, client, interval_s=int(s.get("interval_s") or 120),
                    identity_batch=int(s.get("identity_batch", 150) or 0),
                    identity_concurrency=int(s.get("identity_concurrency") or 6),
-                   ess_open_timeout=float(s.get("ess_open_timeout") or 30.0))
+                   ess_open_timeout=float(s.get("ess_open_timeout") or 30.0),
+                   # Documented as "disableable without a deploy" since it was
+                   # written, but nothing ever read it — the only way to stop the
+                   # per-cycle snapshot was to edit the code. It matters now that
+                   # `ess_live` can carry camera status on its own.
+                   ess_enabled=str(s.get("ess_enabled", "true")).strip().lower()
+                   in ("1", "true", "yes", "on"))
 
     def _by_milestone_id(self) -> dict[str, dict]:
         rows = db.fetch_all(
@@ -723,6 +729,20 @@ class MilestoneCollector(Collector):
             async with ess.connect() as conn:
                 await ess.handshake(conn)
                 states = (ess.initial_state or {}).get("states") or []
+                # Close inside the block, having read the snapshot, so the
+                # server sees a close handshake rather than a socket that
+                # vanishes. The subscription is a wildcard over ~200 events/s
+                # (measured 2026-09-08), so by the time getState returns the
+                # Event Server is already pushing; dropping the transport there
+                # leaves it sending into a disposed socket. Its own log says so
+                # after every one of our cycles (2026-09-18, milestone-event):
+                #   Cannot send data on connection 43. State of web socket is
+                #   Closed. System.ObjectDisposedException
+                # and occasionally the SendAsync-already-outstanding race. This
+                # does not silence that — only dropping the subscription would,
+                # and that needs a fourth verb (see the README) — but it stops
+                # us tearing down mid-send 720 times a day.
+                await conn.close()
             if not states:
                 return None
             names = await self._event_type_names()
