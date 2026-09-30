@@ -716,6 +716,62 @@ AUTOMATION_DDL_SQLITE = (
 )
 
 
+# Issue tracker (migration 036). SQLite subset — no FKs declared, because the
+# API deletes children explicitly and SQLite does not enforce them by default
+# anyway; the MariaDB cascade is asserted textually in test_migrations.py.
+ISSUES_DDL_SQLITE = (
+    """
+    CREATE TABLE issues (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open',
+        severity TEXT NOT NULL DEFAULT 'warn',
+        category TEXT NOT NULL DEFAULT 'other',
+        site TEXT,
+        reported_by TEXT NOT NULL,
+        assigned_to TEXT,
+        created_at TIMESTAMP NOT NULL,
+        updated_at TIMESTAMP NOT NULL,
+        resolved_at TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE issue_devices (
+        issue_id INTEGER NOT NULL,
+        device_id INTEGER NOT NULL,
+        note TEXT,
+        PRIMARY KEY (issue_id, device_id)
+    )
+    """,
+    """
+    CREATE TABLE issue_comments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        issue_id INTEGER NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'comment',
+        body TEXT NOT NULL,
+        author TEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL,
+        edited_at TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE issue_attachments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        issue_id INTEGER NOT NULL,
+        comment_id INTEGER,
+        filename TEXT NOT NULL,
+        content_type TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        sha256 TEXT NOT NULL,
+        rel_path TEXT NOT NULL,
+        uploaded_by TEXT NOT NULL,
+        uploaded_at TIMESTAMP NOT NULL
+    )
+    """,
+)
+
+
 def create_core_tables(engine) -> None:
     """Create the tables the poller / collectors / engine / API touch (SQLite)."""
     from sqlalchemy import text
@@ -759,6 +815,7 @@ def create_core_tables(engine) -> None:
             ACTION_AUDIT_DDL_SQLITE,
             *CAMERA_OPS_DDL_SQLITE,
             *AUTOMATION_DDL_SQLITE,
+            *ISSUES_DDL_SQLITE,
         ):
             conn.execute(text(ddl))
 

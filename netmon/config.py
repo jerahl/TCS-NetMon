@@ -372,6 +372,36 @@ class CameraOpsConfig:
 
 
 @dataclass(frozen=True)
+class IssuesConfig:
+    """Issue tracker — human-authored problem records (spec 24).
+
+    Default **on**, which no other optional feature in this file is. It holds
+    no credential, calls no source platform, and writes to nothing but its own
+    four tables and its own directory — so the cautious default that protects
+    everything able to touch hardware has nothing to protect here, and a
+    problem record nobody can file is a problem record nobody keeps.
+
+    The one switch with teeth is ``allow_viewer_reports``. It is what lets a
+    school secretary who can otherwise only read NetMon type "room 204, 10:15,
+    Chromebook TCS-4471, everything dropped at once" — the specifics the
+    wireless investigation had to ask for by email. Turning it off narrows
+    reporting to operators without a deploy.
+    """
+    enabled: bool = True
+    #: Signed-in read-only users may open issues, comment and attach files.
+    #: They still cannot change status, severity, assignee or device links
+    #: (spec 24 §5) — triage stays with operators, so a reporter cannot close
+    #: an investigation that is still live.
+    allow_viewer_reports: bool = True
+    #: Evidence lives outside the repo and outside the database. A 24 MB packet
+    #: capture in a MariaDB BLOB is a backup problem and a max_allowed_packet
+    #: problem; a file on disk is a file on disk.
+    attachment_dir: str = "/var/lib/netmon/issue-attachments"
+    max_attachment_mb: int = 32
+    max_attachments_per_issue: int = 50
+
+
+@dataclass(frozen=True)
 class AutomationConfig:
     """Automation workflow engine (spec 22).
 
@@ -422,6 +452,7 @@ class Config:
     camera_snapshot: CameraSnapshotConfig
     camera_ops: CameraOpsConfig
     automation: AutomationConfig
+    issues: IssuesConfig
     sources: dict[str, SourceToggle]
     path: str
 
@@ -652,6 +683,29 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         # config typo turn the ring buffer into long-term series storage.
         raise ConfigError("[history] retention_hours must be between 1 and 24")
 
+    # --- [issues] issue tracker (spec 24) ---
+    issues = IssuesConfig(
+        enabled=_as_bool(parser.get("issues", "enabled", fallback="true")),
+        allow_viewer_reports=_as_bool(
+            parser.get("issues", "allow_viewer_reports", fallback="true")),
+        attachment_dir=parser.get("issues", "attachment_dir",
+                                  fallback="/var/lib/netmon/issue-attachments").strip(),
+        max_attachment_mb=parser.getint("issues", "max_attachment_mb", fallback=32),
+        max_attachments_per_issue=parser.getint(
+            "issues", "max_attachments_per_issue", fallback=50),
+    )
+    if issues.enabled and not issues.attachment_dir:
+        raise ConfigError("[issues] attachment_dir cannot be empty — evidence has to "
+                          "land somewhere; set it or use enabled = false")
+    if issues.max_attachment_mb < 1:
+        # 0 reads as "no limit" to whoever typed it and means "refuse every
+        # upload" to the code. Neither is worth guessing at; say so at boot.
+        raise ConfigError("[issues] max_attachment_mb must be at least 1; there is no "
+                          "unlimited setting, and 0 would refuse every upload")
+    if issues.max_attachments_per_issue < 1:
+        raise ConfigError("[issues] max_attachments_per_issue must be at least 1; "
+                          "use enabled = false to switch the tracker off")
+
     # --- [automation] workflow engine (spec 22) ---
     def _aint(key: str, default: int) -> int:
         return parser.getint("automation", key, fallback=default)
@@ -783,5 +837,5 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
 
     return Config(db=db, web=web, auth=auth, security=security, poller=poller,
                   snmp_inventory=snmp_inventory, engine=engine, history=history,
-                  actions=actions, automation=automation, camera_snapshot=camera_snapshot,
+                  actions=actions, automation=automation, issues=issues, camera_snapshot=camera_snapshot,
                   camera_ops=camera_ops, sources=sources, path=conf_path)

@@ -3,6 +3,7 @@ import { getJSON } from "../api.js";
 import { Card, Badge, Loading, ErrorMsg, sevColor } from "../primitives.jsx";
 import { SshButton } from "../ssh.jsx";
 import { ActionButton, ActionAudit } from "../actions.jsx";
+import { IssuesForDevice } from "./issues.jsx";
 
 // Device detail (AP / switch / any): registry fields + live state; APs get
 // the Phase 10.2 wireless sections (detail KV, radios, clients) from
@@ -111,6 +112,8 @@ export function ApDetailPage({ id, embedded = false }) {
         <StateTile label="SNMP" state={status?.snmp} />
         <StateTile label="Source (XIQ)" state={status?.source_status} />
       </div>
+
+      <IssuesForDevice deviceId={device.id} deviceName={device.name} />
 
       <Card title="Registry">
         <table className="grid kv">

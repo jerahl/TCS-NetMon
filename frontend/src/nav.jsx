@@ -23,6 +23,7 @@ const NAV = {
   nac: "#/nac",
   events: "#/events",
   problems: "#/problems",
+  issues: "#/issues",
   map: "#/map",
   netmonStatus: "#/netmon-status",
   registry: "#/registry",
@@ -69,6 +70,14 @@ export function Nav({ active, collapsed = false, onToggle }) {
             if (d.device_type === "camera") c.cameras++;
           }
           setCounts(c);
+          // The open-issue badge rides the same 30s tick. Best-effort like
+          // every other nav count: a tracker that is switched off 404s here
+          // and the badge simply does not appear.
+          getJSON("/api/issues?status=open&limit=1000")
+            .then((rows) => {
+              if (live) setCounts({ ...c, issues: rows.length || undefined });
+            })
+            .catch(() => { /* no badge */ });
         })
         .catch(() => { /* nav counts are best-effort */ });
       getJSON("/api/collector-health")
@@ -134,6 +143,7 @@ export function Nav({ active, collapsed = false, onToggle }) {
         {item("nac", NAV.nac, "shield", "NAC")}
         {item("events", NAV.events, "events", "Events")}
         {item("problems", NAV.problems, "alert", "Problems")}
+        {item("issues", NAV.issues, "events", "Issues", counts?.issues)}
         {item("map", NAV.map, "map", "Site Map")}
       </div>
 

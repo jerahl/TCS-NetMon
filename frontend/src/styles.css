@@ -6347,3 +6347,197 @@ kbd.k { font-family: var(--mono); font-size: 10px; background: var(--bg-2); bord
   text-transform: none; letter-spacing: 0;
 }
 .cam-tile .ts { font-size: 11px; text-shadow: none; }
+
+/* ───────── Issue tracker (spec 24) ─────────
+ * Prefixed `isu-` throughout: `.issue` / `.issues` were already taken by the
+ * Global page's issue-count tiles, and a collision there would be silent.
+ *
+ * Everything here is built from the existing tokens — no new colours. The one
+ * new idea is `.isu-status`, which colours by STATUS rather than severity,
+ * because a critical issue that has been resolved must stop reading as red
+ * while its severity dot still says what it was.
+ */
+
+.isu-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap; margin-bottom: 4px;
+}
+.isu-head h1 { margin-bottom: 2px; }
+
+.btn-primary {
+  background: var(--accent); border-color: var(--accent); color: #fff;
+}
+.btn-primary:hover:not(:disabled) { filter: brightness(1.1); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Status pill ─ colour by status, independent of the severity dot. */
+.isu-status {
+  display: inline-block; padding: 1px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 500; letter-spacing: 0.2px;
+  border: 1px solid transparent; white-space: nowrap;
+}
+.isu-status-err  { background: rgba(242,95,92,0.12); border-color: rgba(242,95,92,0.4); color: var(--err); }
+.isu-status-warn { background: rgba(245,179,0,0.12); border-color: rgba(245,179,0,0.4); color: var(--warn); }
+.isu-status-info { background: rgba(95,168,211,0.12); border-color: rgba(95,168,211,0.4); color: var(--info); }
+.isu-status-ok   { background: rgba(52,211,153,0.12); border-color: rgba(52,211,153,0.4); color: var(--ok); }
+.isu-status-dim  { background: var(--bg-2); border-color: var(--line); color: var(--muted); }
+
+/* List */
+.isu-row { cursor: pointer; }
+.isu-row:hover { background: var(--bg-2); }
+.isu-row-title { font-weight: 500; }
+.isu-row-counts { white-space: nowrap; }
+.isu-row-counts span { margin-right: 8px; font-size: 11px; }
+
+.isu-err {
+  margin: 10px 0; padding: 8px 12px; border-radius: var(--r-2);
+  background: rgba(242,95,92,0.1); border: 1px solid rgba(242,95,92,0.4);
+  color: var(--err);
+}
+
+/* Detail */
+.isu-detail-head { margin: 8px 0 14px; }
+.isu-detail-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.isu-detail-title h1 { margin: 0; }
+.isu-num { font-family: var(--mono); color: var(--muted); font-size: 15px; }
+.isu-detail-meta { display: flex; align-items: center; gap: 10px; margin-top: 6px; flex-wrap: wrap; }
+.isu-title-edit {
+  flex: 1; min-width: 260px; font-size: 20px; font-weight: 600;
+  background: var(--bg-2); border: 1px solid var(--line-2); color: var(--fg);
+  border-radius: var(--r-2); padding: 6px 10px;
+}
+
+.isu-controls {
+  display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap;
+  padding: 12px 14px; margin-bottom: 14px;
+  background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r-2);
+}
+.isu-controls label { display: flex; flex-direction: column; gap: 4px; }
+.isu-controls label > span {
+  font-size: 10.5px; color: var(--muted); letter-spacing: 0.3px; text-transform: uppercase;
+}
+.isu-controls select, .isu-controls input {
+  background: var(--bg-2); border: 1px solid var(--line-2); color: var(--fg);
+  border-radius: var(--r-1); padding: 5px 8px; font-family: var(--sans); font-size: 12.5px;
+}
+.isu-controls select:disabled, .isu-controls input:disabled {
+  opacity: 0.55; cursor: not-allowed;
+}
+
+/* Two columns on a wide screen, stacked on a narrow one. The evidence rail is
+ * fixed-width so a screenshot thumbnail grid stays a predictable shape. */
+.isu-cols { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
+@media (max-width: 1100px) { .isu-cols { grid-template-columns: 1fr; } }
+.isu-main, .isu-side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+
+/* Body text is stored and rendered as plain text — NetMon ships no markdown
+ * parser (CLAUDE.md §3) — so the newlines the author typed have to survive. */
+.isu-body { white-space: pre-wrap; word-break: break-word; line-height: 1.55; }
+.isu-edit-btn { margin-top: 12px; }
+
+/* Timeline */
+.isu-timeline { display: flex; flex-direction: column; gap: 14px; }
+.isu-tl-change {
+  display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fg-2);
+  padding-left: 2px;
+}
+.isu-tl-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted-2); flex: none; }
+.isu-tl-change .dim { margin-left: auto; font-size: 11px; }
+.isu-tl-comment {
+  border: 1px solid var(--line); border-radius: var(--r-2);
+  background: var(--bg-1); padding: 10px 12px;
+}
+.isu-tl-head { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 6px; font-size: 12px; }
+
+.isu-reply { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 14px; }
+.isu-reply textarea { width: 100%; }
+
+/* Forms */
+.isu-form { display: flex; flex-direction: column; gap: 14px; }
+.isu-form > label { display: flex; flex-direction: column; gap: 5px; }
+.isu-form > label > span,
+.isu-form-row label > span {
+  font-size: 10.5px; color: var(--muted); letter-spacing: 0.3px; text-transform: uppercase;
+}
+.isu-form input[type="text"], .isu-form select, .isu-form textarea,
+.isu-reply textarea, .isu-devpick input {
+  background: var(--bg-2); border: 1px solid var(--line-2); color: var(--fg);
+  border-radius: var(--r-1); padding: 7px 9px;
+  font-family: var(--sans); font-size: 13px; width: 100%;
+}
+.isu-form textarea, .isu-reply textarea { font-family: var(--mono); font-size: 12.5px; line-height: 1.6; resize: vertical; }
+.isu-form input:focus, .isu-form select:focus, .isu-form textarea:focus,
+.isu-reply textarea:focus, .isu-devpick input:focus {
+  outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent);
+}
+.isu-form-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 720px) { .isu-form-row { grid-template-columns: 1fr; } }
+.isu-form-row label { display: flex; flex-direction: column; gap: 5px; }
+.isu-form-actions { display: flex; gap: 10px; justify-content: flex-end; }
+
+/* Drop zone */
+.isu-drop {
+  border: 1px dashed var(--line-2); border-radius: var(--r-2);
+  padding: 18px 14px; text-align: center; cursor: pointer;
+  background: var(--bg-2); transition: border-color 0.12s, background 0.12s;
+}
+.isu-drop:hover, .isu-drop.over { border-color: var(--accent); background: var(--bg-3); }
+.isu-drop.busy { opacity: 0.6; pointer-events: none; }
+.isu-drop:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.isu-drop-main { font-size: 12.5px; color: var(--fg-2); }
+.isu-drop-sub { font-size: 10.5px; color: var(--muted); margin-top: 5px; }
+
+/* Attachments */
+.isu-att-grid { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.isu-att {
+  display: flex; align-items: center; gap: 10px;
+  border: 1px solid var(--line); border-radius: var(--r-2);
+  background: var(--bg-1); padding: 6px; min-width: 0;
+}
+.isu-att-thumb {
+  width: 44px; height: 44px; flex: none; border-radius: var(--r-1);
+  overflow: hidden; background: var(--bg-3); display: grid; place-items: center;
+}
+.isu-att-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.isu-att-file { border: 1px solid var(--line-2); }
+.isu-att-ext { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+.isu-att-meta { min-width: 0; flex: 1; font-size: 11.5px; }
+.isu-att-name {
+  display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--fg);
+}
+.isu-att-x {
+  flex: none; background: none; border: 0; color: var(--muted);
+  font-size: 16px; cursor: pointer; padding: 0 6px; line-height: 1;
+}
+.isu-att-x:hover { color: var(--err); }
+
+/* Chips + device picker */
+.isu-chips, .isu-pending { display: flex; flex-wrap: wrap; gap: 6px; }
+.isu-pending { margin-top: 8px; }
+.isu-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--bg-3); border: 1px solid var(--line-2); border-radius: 999px;
+  padding: 2px 6px 2px 10px; font-size: 11.5px;
+}
+.isu-chip button {
+  background: none; border: 0; color: var(--muted); cursor: pointer;
+  font-size: 14px; line-height: 1; padding: 0 2px;
+}
+.isu-chip button:hover { color: var(--err); }
+
+.isu-devpick { position: relative; display: flex; flex-direction: column; gap: 6px; }
+.isu-devpick-menu {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 20; margin-top: 2px;
+  background: var(--bg-2); border: 1px solid var(--line-2); border-radius: var(--r-2);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5); overflow: hidden;
+}
+.isu-devpick-menu button {
+  display: flex; justify-content: space-between; gap: 10px; width: 100%;
+  background: none; border: 0; color: var(--fg); text-align: left;
+  padding: 7px 10px; font-size: 12.5px; cursor: pointer; font-family: var(--sans);
+}
+.isu-devpick-menu button:hover { background: var(--bg-3); }
+
+.isu-devlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.isu-devlist li { font-size: 12.5px; }

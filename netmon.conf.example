@@ -623,3 +623,56 @@ cache_s = 5
 # against a real device. Bosch and Axis both count imagers from 1 while
 # Milestone counts from 0; NetMon applies that offset.
 # channel_param = channel
+
+# ═══════════════════════════════════════════════════════════════════════════
+[issues]
+# Issue tracker — human-authored problem records (spec 24).
+#
+# The one part of NetMon a person writes rather than a collector. `alerts` is
+# the engine's open-fault list and closes itself when the symptom stops —
+# which is exactly when the FINDING becomes worth keeping. This is where the
+# finding, the plan and the evidence live.
+#
+# Default ON, which nothing else optional in this file is. It holds no
+# credential, calls no source platform, and writes only to its own four tables
+# (migration 036) and its own directory, so there is no hardware-safety reason
+# to keep it dark — and a problem record nobody can file is a problem record
+# nobody keeps.
+enabled = true
+
+# Who may FILE. Signed-in read-only users can open an issue, comment and attach
+# a screenshot; triage — status, severity, assignee, device links — still needs
+# `operator`, so a reporter cannot close an investigation that is still live.
+#
+# This is a deliberate departure from the rest of the API, where `viewer` is
+# read-only. It is what lets the person who actually saw the problem type
+# "room 204, 10:15, Chromebook TCS-4471, everything dropped at once" instead of
+# that arriving third-hand in an email two days later. Set false to narrow
+# reporting to operators and above.
+allow_viewer_reports = true
+
+# Where evidence lands. Outside the repo and outside the database, for the same
+# reason credentials are: a 24 MB packet capture in a MariaDB BLOB is a backup
+# problem and a max_allowed_packet problem, while a file on disk is a file on
+# disk. Layout is <dir>/<issue id>/<attachment id>-<name>.
+#
+# The service account needs write access here. Back it up with the database —
+# a row pointing at a file that a restore did not bring back renders as a
+# missing attachment, which is honest but not much use.
+attachment_dir = /var/lib/netmon/issue-attachments
+
+# Per-file cap. 32 MB is sized for a class-change packet capture, which is the
+# largest thing anyone has needed to attach. There is no unlimited setting.
+max_attachment_mb = 32
+max_attachments_per_issue = 50
+
+# Not configurable, and worth knowing about:
+#   * Uploads are raw-body PUTs, not multipart forms — parsing multipart needs
+#     a dependency this project has not taken (CLAUDE.md §3).
+#   * The content type is decided by sniffing the file's leading bytes and
+#     cross-checking the extension, never taken from the client. A mismatch is
+#     refused. That type is what the download route puts in the Content-Type
+#     header, so trusting the client there would be stored XSS.
+#   * SVG uploads are accepted (network diagrams are SVGs) but always download
+#     rather than render in place: an SVG is a script host and NetMon does not
+#     sanitize it.

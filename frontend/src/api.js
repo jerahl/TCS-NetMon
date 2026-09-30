@@ -101,4 +101,44 @@ async function sendJSON(method, path, body) {
 }
 
 export function putJSON(path, body) { return sendJSON("PUT", path, body); }
+export function patchJSON(path, body) { return sendJSON("PATCH", path, body); }
 export function deleteJSON(path) { return sendJSON("DELETE", path); }
+
+// Upload one file as a raw PUT body. Deliberately NOT a multipart form: the
+// API parses no multipart (netmon/api/issues.py says why), so the bytes go up
+// as the body and the name rides in the path. `onProgress` gets 0..1 — a
+// packet capture is slow enough that a bar is the difference between "working"
+// and "broken".
+export function putFile(path, file, { onProgress } = {}) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", path, true);
+    xhr.withCredentials = true;
+    xhr.setRequestHeader("Accept", "application/json");
+    // No Content-Type header on purpose. The server decides the type by
+    // sniffing the bytes, and sending one here would only be a claim it
+    // ignores.
+    if (onProgress && xhr.upload) {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(e.loaded / e.total);
+      };
+    }
+    xhr.onload = () => {
+      if (xhr.status === 401) {
+        window.location.assign("/login");
+        reject(new AuthError("redirecting to sign in"));
+        return;
+      }
+      let data = null;
+      try { data = JSON.parse(xhr.responseText); } catch { /* may be empty */ }
+      if (xhr.status >= 200 && xhr.status < 300) { resolve(data); return; }
+      const detail = (data && data.detail) || `API HTTP ${xhr.status}`;
+      const err = new Error(detail);
+      err.status = xhr.status;
+      err.detail = detail;
+      reject(err);
+    };
+    xhr.onerror = () => reject(new Error("network error uploading to NetMon"));
+    xhr.send(file);
+  });
+}
