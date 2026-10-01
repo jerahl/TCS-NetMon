@@ -322,6 +322,23 @@ def test_svg_is_stored_but_never_served_inline(tmp_path):
         assert got.headers["x-content-type-options"] == "nosniff"
 
 
+def test_markdown_is_accepted_and_downloads(tmp_path):
+    """Handoff notes and investigation write-ups arrive as Markdown. Accepted,
+    but not on the inline list — browsers disagree about rendering it and a
+    download is the predictable answer."""
+    client, _ = _client(tmp_path)
+    with client:
+        i = _open(client).json()["id"]
+        up = client.put(f"/api/issues/{i}/attachments/handoff.md",
+                        content=b"# Handoff\n\nSession table at 59%.\n")
+        assert up.status_code == 201, up.text
+        assert up.json()["content_type"] == "text/markdown"
+        assert up.json()["inline"] is False
+        got = client.get(up.json()["url"])
+        assert got.headers["content-disposition"].startswith("attachment")
+        assert b"Session table" in got.content
+
+
 def test_unknown_type_is_refused_with_the_list(tmp_path):
     client, _ = _client(tmp_path)
     with client:

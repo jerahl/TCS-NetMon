@@ -114,6 +114,11 @@ ACCEPTED: dict[str, tuple[str, object]] = {
     "pdf": ("application/pdf", _pdf),
     "txt": ("text/plain", _text),
     "log": ("text/plain", _text),
+    # Handoff notes and investigation write-ups arrive as Markdown more often
+    # than as anything else. Served as text/markdown and NOT on the inline
+    # list: browsers disagree about whether to render or download it, and a
+    # download is the predictable answer.
+    "md": ("text/markdown", _text),
     "csv": ("text/csv", _text),
     "json": ("application/json", _text),
     "conf": ("text/plain", _text),
