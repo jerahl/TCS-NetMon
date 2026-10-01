@@ -206,6 +206,99 @@ migration asserted textually in `tests/test_migrations.py`:
 - comment edit permitted for the author and refused for a non-author non-admin
 - deleting an issue removes its files from disk
 
+## 10. Change tracking — migration `037`
+
+**Built 2026-10-01.** The other half of the tracker.
+
+An issue records a problem. A change records a deliberate act taken against
+one, with the prediction made beforehand and the outcome observed afterwards.
+Everything else in this database records what the network did; `changes`
+records what *we* did to it.
+
+### Why it is not a notes field on the issue
+
+Because the comparison is the artifact. The wireless work is the example again:
+"shorten the DNS timeout — expect the table to drop about 76%" is worth
+nothing on its own and worth a great deal once "actually dropped 75%, peak
+total 3,980" sits beside it, written later by somebody who could not edit the
+first half.
+
+So `expected` and `actual` are separate columns, and **`expected` is refused
+once the change is applied**. A single free-text field lets the prediction be
+quietly revised when the answer arrives, which is exactly the failure the table
+exists to prevent.
+
+### Tables
+
+- **`changes`** — `what`, `why`, `expected`, `actual`, plus `status`
+  (`proposed | approved | applied | verified | reverted | abandoned`), `verdict`
+  (`pending | as_expected | partial | no_effect | worse`), `risk`, `rollback`,
+  `site`, and who/when for each transition. `issue_id` is nullable with
+  `ON DELETE SET NULL` — routine work happens that nobody opened an issue for,
+  and deleting an issue must not destroy the record that a device was
+  reconfigured.
+- **`change_devices`** — `role` ∈ `target | baseline`. The standing method here
+  is to change one AP and hold a neighbouring one as a control across the same
+  school day; a record listing both without saying which was which cannot be
+  read afterwards. The API refuses a device listed as both.
+
+### The three design decisions worth defending
+
+1. **`expected` locks at apply.** See above. Enforced in `patch_change`, with
+   the refusal pointing the author at `actual` instead.
+2. **`no_effect` and `worse` are first-class verdicts.** A change log in which
+   every entry reads as a success is one nobody learns from, and the two most
+   useful rows a year later are "we were confident and wrong" and "this made it
+   worse".
+3. **Applied-but-unverified is surfaced, not filtered for.**
+   `GET /api/changes/outstanding` is its own endpoint so the page can lead with
+   the count and the nav can badge it. This is CLAUDE.md §4.5 (fail loud, never
+   stale) turned on our own work rather than on a collector.
+
+### Permissions
+
+Operator and above for everything that writes; `viewer` reads only. **No
+viewer carve-out**, deliberately unlike issues: filing a report is something a
+teacher should be able to do, recording that the network was reconfigured is
+not. Deleting is admin, and is refused outright while a change is live —
+removing the record would leave the configuration with no explanation. Revert
+or abandon it instead.
+
+### No thread of its own
+
+Proposing, applying, verifying and reverting each write a `status_change` entry
+onto the linked issue's timeline, carrying both halves of the comparison. A
+second comment system would split one problem's story across two places.
+
+### API — `netmon/api/changes.py`, prefix `/api/changes`
+
+| Method | Path | Role |
+|---|---|---|
+| GET | `/api/changes` | viewer — filters: `status` (plus pseudo `live`, `unverified`), `verdict`, `issue_id`, `device_id`, `site`, `q` |
+| GET | `/api/changes/outstanding` | viewer |
+| GET | `/api/changes/meta` | viewer |
+| GET | `/api/changes/{id}` | viewer |
+| POST | `/api/changes` | operator |
+| PATCH | `/api/changes/{id}` | operator — refuses `expected` once applied |
+| POST | `/api/changes/{id}/apply` | operator |
+| POST | `/api/changes/{id}/verify` | operator — refuses an unapplied change and a `pending` verdict |
+| POST | `/api/changes/{id}/revert` | operator |
+| DELETE | `/api/changes/{id}` | admin — refused while live |
+
+### UI
+
+`#/changes` leads with the outstanding banner, then a filterable table.
+`#/changes/:id` puts expected and actual side by side above everything else.
+The compose form can be opened from an issue, which is where a prediction gets
+written honestly because the problem is still on screen. Nav badge counts
+outstanding, not total.
+
+### Not built
+
+No attachments of their own — evidence goes on the linked issue. A change with
+no issue therefore has nowhere to put a before/after graph; revisit if that
+turns out to matter.
+
 ## 9. Open threads
 
 - **Retention.** Issues are kept forever today. The 24h rule (CLAUDE.md §6)

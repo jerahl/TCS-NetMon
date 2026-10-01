@@ -274,3 +274,27 @@ def test_036_stores_attachment_paths_relatively():
     sql = migs["036"].path.read_text()
     assert "rel_path" in sql
     assert "content_type" in sql
+
+
+def test_037_changes_keeps_the_record_when_an_issue_goes():
+    """SET NULL, not CASCADE. A change record outlives the problem that
+    prompted it — it is what explains why a timeout is set the way it is a year
+    later, long after the issue was closed and tidied away."""
+    migs = {m.version: m for m in discover_migrations()}
+    assert "037" in migs, "expected the change-tracking migration"
+    sql = migs["037"].path.read_text()
+    for table in ("changes", "change_devices"):
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in sql, f"missing {table}"
+    assert "REFERENCES issues (id) ON DELETE SET NULL" in sql
+    assert "ON DELETE CASCADE" in sql          # change_devices, from the change
+    assert "REFERENCES devices" not in sql     # same reasoning as 036
+    assert "DELETE FROM schema_migrations WHERE version = '037'" in sql
+
+
+def test_037_separates_expected_from_actual():
+    """One notes column would let the prediction be rewritten once the answer
+    is known, which is the failure the table exists to prevent."""
+    sql = {m.version: m for m in discover_migrations()}["037"].path.read_text()
+    for col in ("expected", "actual", "verdict", "rollback"):
+        assert col in sql, f"missing {col}"
+    assert "role" in sql, "change_devices must distinguish target from baseline"

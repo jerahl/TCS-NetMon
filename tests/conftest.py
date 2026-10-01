@@ -772,6 +772,44 @@ ISSUES_DDL_SQLITE = (
 )
 
 
+# Change tracking (migration 037).
+CHANGES_DDL_SQLITE = (
+    """
+    CREATE TABLE changes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        issue_id INTEGER,
+        title TEXT NOT NULL,
+        what TEXT NOT NULL,
+        why TEXT NOT NULL,
+        expected TEXT NOT NULL,
+        actual TEXT,
+        status TEXT NOT NULL DEFAULT 'proposed',
+        verdict TEXT NOT NULL DEFAULT 'pending',
+        risk TEXT NOT NULL DEFAULT 'low',
+        site TEXT,
+        rollback TEXT,
+        proposed_by TEXT NOT NULL,
+        proposed_at TIMESTAMP NOT NULL,
+        applied_by TEXT,
+        applied_at TIMESTAMP,
+        verified_by TEXT,
+        verified_at TIMESTAMP,
+        reverted_at TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE change_devices (
+        change_id INTEGER NOT NULL,
+        device_id INTEGER NOT NULL,
+        role TEXT NOT NULL DEFAULT 'target',
+        note TEXT,
+        PRIMARY KEY (change_id, device_id)
+    )
+    """,
+)
+
+
 def create_core_tables(engine) -> None:
     """Create the tables the poller / collectors / engine / API touch (SQLite)."""
     from sqlalchemy import text
@@ -816,6 +854,7 @@ def create_core_tables(engine) -> None:
             *CAMERA_OPS_DDL_SQLITE,
             *AUTOMATION_DDL_SQLITE,
             *ISSUES_DDL_SQLITE,
+            *CHANGES_DDL_SQLITE,
         ):
             conn.execute(text(ddl))
 

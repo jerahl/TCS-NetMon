@@ -6541,3 +6541,103 @@ kbd.k { font-family: var(--mono); font-size: 10px; background: var(--bg-2); bord
 
 .isu-devlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
 .isu-devlist li { font-size: 12.5px; }
+
+/* ───────── Change tracking (spec 24 §10) ─────────
+ * Shares the `isu-` form, chip and body rules; only what is specific to a
+ * change record is defined here. The two ideas with their own treatment are
+ * the expected/actual pair, which is always side by side because the
+ * comparison is the whole point, and the outstanding banner, which is the
+ * number the page exists to make go down.
+ */
+
+.chg-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap; margin: 8px 0 14px;
+}
+.chg-head h1 { margin: 0 0 6px; }
+.chg-head-pills { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.chg-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.chg-pill {
+  display: inline-block; padding: 1px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 500; letter-spacing: 0.2px;
+  border: 1px solid transparent; white-space: nowrap;
+}
+.chg-pill-err  { background: rgba(242,95,92,0.12); border-color: rgba(242,95,92,0.4); color: var(--err); }
+.chg-pill-warn { background: rgba(245,179,0,0.12); border-color: rgba(245,179,0,0.4); color: var(--warn); }
+.chg-pill-info { background: rgba(95,168,211,0.12); border-color: rgba(95,168,211,0.4); color: var(--info); }
+.chg-pill-ok   { background: rgba(52,211,153,0.12); border-color: rgba(52,211,153,0.4); color: var(--ok); }
+.chg-pill-dim  { background: var(--bg-2); border-color: var(--line); color: var(--muted); }
+
+/* The outstanding banner. Amber rather than red: unverified work is a debt to
+ * clear, not a fault — but it is the first thing on the page. */
+.chg-banner {
+  display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+  margin: 4px 0 14px; padding: 12px 14px; cursor: pointer;
+  background: rgba(245,179,0,0.08); border: 1px solid rgba(245,179,0,0.4);
+  border-radius: var(--r-2); color: var(--fg); font-family: var(--sans);
+  font-size: 13px;
+}
+.chg-banner:hover { background: rgba(245,179,0,0.14); }
+.chg-banner-n {
+  font-family: var(--mono); font-size: 22px; font-weight: 600;
+  color: var(--warn); line-height: 1; flex: none;
+}
+.chg-banner-go { margin-left: auto; color: var(--warn); white-space: nowrap; }
+
+.chg-issue-link { margin-bottom: 14px; font-size: 12.5px; color: var(--fg-2); }
+
+/* Expected against actual — always two columns on a wide screen, because the
+ * comparison is what the record is for. */
+.chg-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+@media (max-width: 860px) { .chg-compare { grid-template-columns: 1fr; } }
+.chg-compare-h {
+  display: block; font-size: 10.5px; color: var(--muted);
+  letter-spacing: 0.3px; text-transform: uppercase; margin-bottom: 6px;
+}
+.chg-compare textarea { width: 100%; }
+
+.chg-empty-actual {
+  padding: 12px; border: 1px dashed var(--line-2); border-radius: var(--r-2);
+  color: var(--muted); font-size: 12.5px;
+}
+/* An applied change with no result is the state worth noticing. */
+.chg-empty-actual.overdue {
+  border-color: rgba(245,179,0,0.5); color: var(--warn);
+  background: rgba(245,179,0,0.06);
+}
+
+.chg-verdict-row {
+  display: flex; align-items: center; gap: 8px; margin-top: 14px;
+  padding-top: 12px; border-top: 1px solid var(--line); font-size: 12.5px;
+}
+
+.chg-lock-note { font-size: 11px; color: var(--muted); margin-top: 4px; display: block; }
+
+.chg-verify { gap: 16px; }
+
+.chg-pickers { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 720px) { .chg-pickers { grid-template-columns: 1fr; } }
+.chg-pick { display: flex; flex-direction: column; gap: 5px; position: relative; }
+.chg-pick-label {
+  font-size: 10.5px; color: var(--muted); letter-spacing: 0.3px; text-transform: uppercase;
+}
+.chg-pick-hint { font-size: 11px; color: var(--muted-2); margin-top: -3px; }
+.chg-pick-input { position: relative; }
+.chg-pick-input input {
+  background: var(--bg-2); border: 1px solid var(--line-2); color: var(--fg);
+  border-radius: var(--r-1); padding: 7px 9px; font-family: var(--sans);
+  font-size: 13px; width: 100%;
+}
+
+.chg-dev-group { margin-bottom: 14px; }
+.chg-dev-group:last-child { margin-bottom: 0; }
+.chg-dev-h {
+  display: block; font-size: 10.5px; color: var(--muted);
+  letter-spacing: 0.3px; text-transform: uppercase; margin-bottom: 6px;
+}
+
+.chg-mini { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+.chg-mini li { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
+.chg-mini-pills { display: flex; gap: 6px; flex-wrap: wrap; }
+.chg-mini-add { margin-top: 12px; }

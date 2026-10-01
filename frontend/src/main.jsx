@@ -12,6 +12,7 @@ import { SurveillancePage } from "./pages/surveillance.jsx";
 import { EventsPage } from "./pages/events.jsx";
 import { ProblemsPage } from "./pages/problems.jsx";
 import { IssuesPage } from "./pages/issues.jsx";
+import { ChangesPage } from "./pages/changes.jsx";
 import { VoipPage } from "./pages/voip.jsx";
 import { MapPage } from "./pages/map.jsx";
 import { NetmonStatusPage } from "./pages/netmon_status.jsx";
@@ -44,6 +45,7 @@ function parseRoute() {
   if (parts[0] === "events") return { name: "events", query };
   if (parts[0] === "problems") return { name: "problems", query };
   if (parts[0] === "issues") return { name: "issues", id: parts[1] || null, query };
+  if (parts[0] === "changes") return { name: "changes", id: parts[1] || null, query };
   if (parts[0] === "voip") return { name: "voip", query };
   if (parts[0] === "map") return { name: "map", query };
   if (parts[0] === "netmon-status") return { name: "netmon-status", query };
@@ -71,7 +73,7 @@ function useRoute() {
 const CRUMBS = {
   global: "Global", switches: "Switches", xiq: "XIQ · Status",
   wireless: "Wireless APs", surveillance: "Surveillance", voip: "VoIP · 3CX",
-  nac: "NAC", events: "Events", problems: "Problems", issues: "Issues",
+  nac: "NAC", events: "Events", problems: "Problems", issues: "Issues", changes: "Changes",
   map: "Site Map",
   "netmon-status": "NetMon Status", registry: "Registry", settings: "Settings",
   automation: "Automation",
@@ -132,6 +134,7 @@ function App() {
   else if (route.name === "events") { page = <EventsPage />; active = "events"; }
   else if (route.name === "problems") { page = <ProblemsPage />; active = "problems"; }
   else if (route.name === "issues") { page = <IssuesPage id={route.id} query={route.query} />; active = "issues"; }
+  else if (route.name === "changes") { page = <ChangesPage id={route.id} query={route.query} />; active = "changes"; }
   else if (route.name === "voip") { page = <VoipPage />; active = "voip"; }
   else if (route.name === "map") { page = <MapPage />; active = "map"; }
   else if (route.name === "netmon-status") { page = <NetmonStatusPage />; active = "netmon-status"; }

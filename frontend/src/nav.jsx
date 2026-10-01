@@ -24,6 +24,7 @@ const NAV = {
   events: "#/events",
   problems: "#/problems",
   issues: "#/issues",
+  changes: "#/changes",
   map: "#/map",
   netmonStatus: "#/netmon-status",
   registry: "#/registry",
@@ -75,7 +76,14 @@ export function Nav({ active, collapsed = false, onToggle }) {
           // and the badge simply does not appear.
           getJSON("/api/issues?status=open&limit=1000")
             .then((rows) => {
-              if (live) setCounts({ ...c, issues: rows.length || undefined });
+              if (live) setCounts((prev) => ({ ...(prev || c), issues: rows.length || undefined }));
+            })
+            .catch(() => { /* no badge */ });
+          // The changes badge counts only what is applied and unverified —
+          // the outstanding work, not the total ever recorded.
+          getJSON("/api/changes/outstanding")
+            .then((r) => {
+              if (live) setCounts((prev) => ({ ...(prev || c), changes: r.count || undefined }));
             })
             .catch(() => { /* no badge */ });
         })
@@ -144,6 +152,7 @@ export function Nav({ active, collapsed = false, onToggle }) {
         {item("events", NAV.events, "events", "Events")}
         {item("problems", NAV.problems, "alert", "Problems")}
         {item("issues", NAV.issues, "events", "Issues", counts?.issues)}
+        {item("changes", NAV.changes, "gear", "Changes", counts?.changes)}
         {item("map", NAV.map, "map", "Site Map")}
       </div>
 

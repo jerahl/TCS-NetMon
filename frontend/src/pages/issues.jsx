@@ -1,6 +1,7 @@
 import React from "react";
 import { getJSON, postJSON, patchJSON, deleteJSON, putFile, qs } from "../api.js";
 import { Card, Dot, Loading, ErrorMsg, SevText } from "../primitives.jsx";
+import { ChangesForIssue, ComposeChange } from "./changes.jsx";
 
 // Issues — human-authored problem records (docs/spec/24).
 //
@@ -361,6 +362,16 @@ function Detail({ id, meta, onBack, onChanged }) {
   const [uploading, setUploading] = React.useState(false);
   const [editing, setEditing] = React.useState(false);
   const [draft, setDraft] = React.useState({ title: "", body: "" });
+  // Recording a change against this issue happens here rather than on the
+  // Changes page: the context — what the problem is, what was expected — is
+  // all on screen, which is when a prediction gets written honestly.
+  const [changeMeta, setChangeMeta] = React.useState(null);
+  const [composingChange, setComposingChange] = React.useState(false);
+  const [changeKey, setChangeKey] = React.useState(0);
+
+  React.useEffect(() => {
+    getJSON("/api/changes/meta").then(setChangeMeta).catch(() => { /* strip hides */ });
+  }, []);
 
   const load = React.useCallback(() => {
     getJSON(`/api/issues/${id}`)
@@ -578,6 +589,17 @@ function Detail({ id, meta, onBack, onChanged }) {
               </div>
             )}
           </Card>
+
+          {changeMeta && (composingChange ? (
+            <ComposeChange
+              meta={changeMeta} issueId={issue.id} issueTitle={issue.title}
+              onCancel={() => setComposingChange(false)}
+              onDone={() => { setComposingChange(false); setChangeKey((k) => k + 1); load(); }} />
+          ) : (
+            <ChangesForIssue key={changeKey} issueId={issue.id}
+                             canRecord={changeMeta.can.record}
+                             onCompose={() => setComposingChange(true)} />
+          ))}
 
           <Card title="Affected devices" kicker={`${issue.devices.length} linked`}>
             {issue.devices.length === 0 ? (
