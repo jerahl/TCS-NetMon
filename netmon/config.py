@@ -512,6 +512,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         zabbix_url=parser.get("web", "zabbix_url", fallback="").strip().rstrip("/"),
         ssheasy_url=parser.get("web", "ssheasy_url", fallback="").strip().rstrip("/"),
         carto_api_key=parser.get("web", "carto_api_key", fallback="").strip(),
+        packetfence_url=parser.get("web", "packetfence_url", fallback="").strip().rstrip("/"),
     )
 
     # --- [auth] — SAML SP (ClassLink) + dev bypass ---
