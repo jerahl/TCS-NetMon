@@ -113,6 +113,10 @@ netmon/
 
 **DDI (spec 21, migration `031`) — the one source with no scheduled collector.** Lookups are user-initiated (`/api/ddi/resolve`), which is the rConfig-diff / camera-proxy pattern, not a render-loop call. Tables: `ddi_addresses` (IP PK; MAC, DNS name, lease/reservation, `mac_origin`) + `ddi_scopes` (DHCP scope utilization → stored severity). Replace-on-refresh, no history. `ddi_addresses.mac` is intentionally **non-unique** — one MAC holds several addresses — so joins to it must pick one row deliberately (see `netmon/api/switches.py::_DDI_ONE_IP`).
 
+**Change tracking (spec 24 §10, migration `037`, built 2026-10-01).** `changes` (what/why/expected/actual, status, verdict, risk, rollback) + `change_devices` (`role` ∈ target|baseline — the standing "change one AP, hold a neighbour" method). `expected` is written before and refused after apply; a change log whose prediction can be revised once the answer is known records nothing. `issue_id` is `ON DELETE SET NULL`: the record of a reconfiguration outlives the problem that prompted it.
+
+**Issue tracker (spec 24, migration `036`, built 2026-09-30) — the one domain a *person* writes.** `issues` (status/severity/category/site/reporter/assignee), `issue_devices` (many-to-many to `devices`), `issue_comments` (thread; status changes are entries in it), `issue_attachments` (index; bytes live under `[issues] attachment_dir`, never in the DB). Unlike everything else in §6 no collector writes here, which is why `issues.status` can be mutable without touching the append-only `state_events` invariant. Uploads are raw-body PUTs — no multipart dependency, same call `camera_ops.upload_firmware` made — and the served content type is decided by sniffing the bytes, never taken from the client. `[issues] allow_viewer_reports` (default true) is the one place in the API where `viewer` may write, scoped to filing a report and adding to it; triage stays at `operator`.
+
 **Bounded history (D3 approved; built Phase 10.6):** one `state_samples` ring-buffer table (migration `019`; `(series, ts) → value`), hard 24h retention, auto-pruned by the `netmon.history` sampler — nothing else stores series.
 
 **Design invariants:** `device_state` answers "what is true now"; `state_events` answers "what changed when"; inventory tables are descriptive facts; dashboards read only NetMon's DB — **zero source-platform calls at page render**. A source being unreachable is itself a state (`source_status = blind`), and blind must never render as healthy.
@@ -132,6 +136,8 @@ netmon/
 | **10.4 Surveillance + VoIP** | camera/RS/storage persistence + `milestone.overview`; ESS WebSocket wiring; camera JPEG proxy; trunks/extensions + SystemStatus | ✅ D5 |
 | **10.5 Global + Search** | `/api/summary`, `/api/sites` cards, `/api/search` + ⌘K palette; Global page; staleness badging pass | — |
 | **10.6 History buffer** | `state_samples` (24h ring, pruned) + sampler + `/api/history` + chart slots | ✅ D3 (built 2026-07-17) |
+| **11.x Change tracking** | What was changed, why, expected vs actual, with target/baseline device roles (spec 24 §10, migration 037) | built 2026-10-01 |
+| **11.x Issue tracker** | Human-authored problem records: issues + threads + file/screenshot attachments, linked to devices and sites (spec 24, migration 036) | built 2026-09-30 |
 | **11.x Post-parity** | FortiGate collector + page (D1); operator write actions with audit log (✅ D4); direct camera SNMP monitoring (✅ D10 — spec 13); Micetro DDI federation (D12 — spec 21); EAPS/SFP-DOM extras | ✅ D4/D10 (2026-07-28), D12 (2026-09-09) — post-cutover, default-off |
 | **8 — Parallel run & cutover** *(owner-gated)* | ≥4 weeks shadow comparison; owner flips `shadow=false`; Zabbix network/wireless/voice/camera hosts disabled (configs exported as rollback); Zabbix remains for servers | owner |
 

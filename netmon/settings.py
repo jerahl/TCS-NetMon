@@ -30,7 +30,8 @@ log = logging.getLogger("netmon.settings")
 
 # Sections whose defs overlay typed config dataclass attributes (def.attr);
 # everything else in the registry is a raw source-section string setting.
-TYPED_SECTIONS = ("web", "auth", "poller", "snmp_inventory", "engine", "history")
+TYPED_SECTIONS = ("web", "auth", "poller", "snmp_inventory", "engine",
+                  "history", "issues")
 
 SECTION_LABELS = {
     "web": "Web sessions",
@@ -39,6 +40,7 @@ SECTION_LABELS = {
     "snmp_inventory": "SNMP inventory sweeps",
     "engine": "Alert engine & email",
     "history": "History ring buffer",
+    "issues": "Issue tracker",
     "xiq": "ExtremeCloud IQ",
     "packetfence": "PacketFence",
     "milestone": "Milestone XProtect",
@@ -177,6 +179,25 @@ REGISTRY: list[SettingDef] = [
     _d("history.retention_hours", "int", 24, "Retention (hours, ≤24)",
        "Hard-capped at 24 — the charter's only metric-series exception.",
        attr="retention_hours", restart=True, min=1, max=24),
+
+    # --- issues (spec 24) ---
+    # attachment_dir is deliberately absent: it is a path the service writes to,
+    # and repointing a storage directory from the web is the same class of edit
+    # as repointing an executable (spec 12 S2). It stays file-only.
+    _d("issues.enabled", "bool", True, "Issue tracker enabled",
+       "Turns the tracker and its routes off. Existing issues and their files "
+       "are untouched — they stop being reachable, not deleted.",
+       attr="enabled"),
+    _d("issues.allow_viewer_reports", "bool", True, "Read-only users may file issues",
+       "Lets anyone signed in open an issue, comment and attach a screenshot. "
+       "Triage — status, severity, assignee, device links — still needs "
+       "operator. Off narrows reporting to operators and above.",
+       attr="allow_viewer_reports"),
+    _d("issues.max_attachment_mb", "int", 32, "Max attachment size (MB)",
+       "Per file. A packet capture is the reason this is not smaller.",
+       attr="max_attachment_mb", min=1, max=512),
+    _d("issues.max_attachments_per_issue", "int", 50, "Max attachments per issue",
+       attr="max_attachments_per_issue", min=1, max=500),
 
     # --- sources (raw section settings; collectors parse them) ---
     _d("xiq.enabled", "bool", False, "Enable XIQ collector"),
@@ -358,6 +379,8 @@ def apply_overrides(base: Config, values: dict[str, Any]) -> Config:
         cfg = replace(cfg, engine=replace(cfg.engine, **typed["engine"]))
     if typed["history"]:
         cfg = replace(cfg, history=replace(cfg.history, **typed["history"]))
+    if typed["issues"]:
+        cfg = replace(cfg, issues=replace(cfg.issues, **typed["issues"]))
 
     if source_sets:
         sources = dict(cfg.sources)

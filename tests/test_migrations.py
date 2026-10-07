@@ -240,3 +240,61 @@ def test_032_device_ids_match_the_devices_table():
     assert re.search(r"(?m)^\s+device_id\s+INT\b", sql) is None
     assert re.search(r"(?m)^\s+switch_device_id\s+INT\b", sql) is None
     assert re.search(r"(?m)^\s+action_audit_id\s+BIGINT\s+NULL", sql) is None
+
+
+def test_036_issues_tables_and_cascade_direction():
+    """The asymmetry in 036 is deliberate and easy to "fix" by accident.
+
+    `issue_devices` cascades from the ISSUE and not from `devices`: a device
+    decommissioned after an investigation must not erase the record that it was
+    the one that filled its connection table. There is no FK to `devices` at
+    all, and adding one with ON DELETE CASCADE would silently destroy evidence.
+    """
+    migs = {m.version: m for m in discover_migrations()}
+    assert "036" in migs, "expected the issues migration"
+    sql = migs["036"].path.read_text()
+    for table in ("issues", "issue_devices", "issue_comments", "issue_attachments"):
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in sql, f"missing {table}"
+
+    assert "REFERENCES devices" not in sql, (
+        "issue_devices must not reference devices — a decommissioned device "
+        "would take the evidence with it (migration 036, spec 24 §3)")
+    # Every child table cascades from the issue, so deleting one issue is one
+    # statement and cannot leave orphans behind.
+    assert sql.count("REFERENCES issues (id) ON DELETE CASCADE") == 3
+
+    assert "-- rollback:" in sql
+    assert "DELETE FROM schema_migrations WHERE version = '036'" in sql
+
+
+def test_036_stores_attachment_paths_relatively():
+    """Same reasoning as firmware_images.rel_path (029): an absolute path in a
+    row means moving the store invalidates every one of them."""
+    migs = {m.version: m for m in discover_migrations()}
+    sql = migs["036"].path.read_text()
+    assert "rel_path" in sql
+    assert "content_type" in sql
+
+
+def test_037_changes_keeps_the_record_when_an_issue_goes():
+    """SET NULL, not CASCADE. A change record outlives the problem that
+    prompted it — it is what explains why a timeout is set the way it is a year
+    later, long after the issue was closed and tidied away."""
+    migs = {m.version: m for m in discover_migrations()}
+    assert "037" in migs, "expected the change-tracking migration"
+    sql = migs["037"].path.read_text()
+    for table in ("changes", "change_devices"):
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in sql, f"missing {table}"
+    assert "REFERENCES issues (id) ON DELETE SET NULL" in sql
+    assert "ON DELETE CASCADE" in sql          # change_devices, from the change
+    assert "REFERENCES devices" not in sql     # same reasoning as 036
+    assert "DELETE FROM schema_migrations WHERE version = '037'" in sql
+
+
+def test_037_separates_expected_from_actual():
+    """One notes column would let the prediction be rewritten once the answer
+    is known, which is the failure the table exists to prevent."""
+    sql = {m.version: m for m in discover_migrations()}["037"].path.read_text()
+    for col in ("expected", "actual", "verdict", "rollback"):
+        assert col in sql, f"missing {col}"
+    assert "role" in sql, "change_devices must distinguish target from baseline"

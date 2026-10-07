@@ -41,7 +41,10 @@ function capFor(caps, key) {
  * `body` is sent as-is to /api/actions/<path>. It must contain ids the server
  * can resolve — never a URL or host; the server refuses anything else.
  */
-export function ActionButton({ actionKey, path, body, label, compact, onDone }) {
+// `className` swaps the button chrome — the AP device card uses ZCD's compact
+// `.pf-btn` row rather than the generic `.btn`; "warn" styling for disruptive
+// actions is appended either way.
+export function ActionButton({ actionKey, path, body, label, compact, onDone, className = "btn btn-sm" }) {
   const caps = useActionCaps();
   const cap = capFor(caps, actionKey);
   const [state, setState] = React.useState("idle");   // idle|confirm|running|done|error
@@ -56,7 +59,7 @@ export function ActionButton({ actionKey, path, body, label, compact, onDone }) 
     // Present but unavailable, with the reason — more useful than hiding it,
     // and it stops "why is there no button?" tickets.
     return (
-      <button type="button" className="btn btn-sm" disabled
+      <button type="button" className={className} disabled
               title={cap.reason || "not enabled"}>
         {text}
       </button>
@@ -100,7 +103,7 @@ export function ActionButton({ actionKey, path, body, label, compact, onDone }) 
         </span>
       ) : (
         <button type="button"
-                className={"btn btn-sm" + (cap.disruptive ? " btn-warn" : "")}
+                className={className + (cap.disruptive ? (className.includes("pf-btn") ? " warn" : " btn-warn") : "")}
                 disabled={state === "running"}
                 title={cap.effect}
                 onClick={() => (cap.disruptive ? setState("confirm") : run())}>

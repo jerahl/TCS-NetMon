@@ -3,6 +3,7 @@ import { getJSON } from "../api.js";
 import { Card, Badge, Loading, ErrorMsg, sevColor } from "../primitives.jsx";
 import { SshButton } from "../ssh.jsx";
 import { ActionButton, ActionAudit } from "../actions.jsx";
+import { IssuesForDevice } from "./issues.jsx";
 
 // Device detail (AP / switch / any): registry fields + live state; APs get
 // the Phase 10.2 wireless sections (detail KV, radios, clients) from
@@ -32,6 +33,9 @@ export function ApDetailPage({ id, embedded = false }) {
         // A switch belongs on the Switches page (faceplate/ports/PoE), never
         // "under AP" — bounce there if we were reached via an #/ap/ link.
         if (dev.device_type === "switch") { location.replace(`#/switches/${id}`); return; }
+        // An AP's home is the Wireless page (navigator + ZCD AP Detail); this
+        // generic view remains for every other device type.
+        if (dev.device_type === "ap" && !embedded) { location.replace(`#/wireless/${id}`); return; }
         setDevice(dev);
         setStatus(rows.find((r) => String(r.id) === String(id)) || null);
         if (dev.device_type === "ap") {
@@ -111,6 +115,8 @@ export function ApDetailPage({ id, embedded = false }) {
         <StateTile label="SNMP" state={status?.snmp} />
         <StateTile label="Source (XIQ)" state={status?.source_status} />
       </div>
+
+      <IssuesForDevice deviceId={device.id} deviceName={device.name} />
 
       <Card title="Registry">
         <table className="grid kv">

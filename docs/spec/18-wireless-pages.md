@@ -199,7 +199,7 @@ tab and nav marker PacketFence amber.)
 |---|---|---|
 | Global | ✅ ported | ✅ **converted** — severity strip, system cards, sites heatmap + legend + seg-toggle, hotspots, triggers |
 | XIQ · Status | ✅ ported | ✅ **converted** — 6-cell `xiq-kpi` strip, `sites-grid` AP tiles |
-| Wireless APs | (uses switches.css) | ✅ **converted** — same `host-nav` as Switches |
+| Wireless APs | ✅ ported | ✅ **converted 2026-10-07** — ZCD AP Detail: `ap-nav-*` navigator, `device-card-h`, overview rows, tab bar (see addendum below) |
 | Switches | ✅ ported | ✅ **converted** — host navigator, `swstat-strip`, `swport-head`/`-title`/`-legend`, `pd-grid` |
 | Events | ✅ ported | ⏳ |
 | Problems | ✅ ported | ⏳ |
@@ -399,3 +399,44 @@ Each PF-known MAC in the Devices table links to
 The pane's `fdb_entries ⋈ pf_nodes ON mac` join is raw, not normalised — and
 unlike `ap_details.mgmt_mac` (spec 18, AP actions) that is correct, because both
 tables store the colon form. It resolves 75,955 of 79,033 FDB rows.
+
+
+---
+
+# Addendum — Wireless page is ZCD's AP Detail (2026-10-07)
+
+`#/wireless` previously wore the Switches `host-nav` and stacked generic KV
+cards. It now emits ZCD's AP Detail markup (`reference/assets/app.jsx`,
+`shell.jsx`, `tabs.jsx`): page header + tab bar over `.zbx-layout`, the
+`ap-nav-*` AP Navigator (All/Problems seg-toggle, client/health summary,
+per-site down counts, LED + client-load per AP), the `device-card-h` with the
+XIQ · SNMP · PING pills and the `pf-btn` action row, and the Overview's four
+rows. `#/ap/:id` for an AP now redirects here; it remains the generic view for
+other device types. No URL lands on an empty pane — with no id the page opens
+the first down AP.
+
+**State composition** follows ZCD's `composeApState` over the sources NetMon
+has (XIQ `source_status`, `ping`, and `snmp` once APs are polled for it): all
+known up → Connected, all down → Unreachable, mixed → Degraded, none →
+Unknown. Live: 708 / 41 / 33 / 1. `/api/wireless/aps` gained `ping` and
+`reachability`; `/api/wireless/aps/{id}` gained `state` (every dimension),
+`events` (last 50 `state_events`) and `xiq_device_id`.
+
+**Substitutions, named on the card, never silent:**
+
+| ZCD card (Zabbix item) | NetMon shows | Why |
+|---|---|---|
+| CPU / Memory rings | `ap_details.cpu_pct/mem_pct`, "—" + "not collected yet" | NULL on all 781 rows until d360 telemetry is sourced |
+| Association / Auth failures | Weak signal (< −70 dBm), Unregistered in PF | RADIUS failure counts are not collected |
+| Network issues | Down transitions (24h) from `state_events` | |
+| Packet Loss % | Reachability tier (`netmon/reachability.py`) | no loss % — tiers also say which path failed |
+| Live Telemetry sparklines | current values, "no history" | 24h ring buffer is fleet-level by charter (D3) |
+| Noise / utilisation | "—" | NULL on all 1,570 radio rows |
+| Debug · Data Bridge | Data freshness (row `updated_at` + age) | |
+| Graphs / Latest Data / Configuration tabs | not ported | ZCD rendered them as "coming soon"; an empty tab is a promise |
+
+**Bug fixed on the way:** `_ap_pf_node` referenced `_MACN` without importing it
+from `netmon.uplink`, so `/api/wireless/aps/{id}` returned 500 for every AP
+with a base MAC (780 of 781) — 8 occurrences in the journal over three days.
+The fixtures had no `mgmt_mac`, so the test suite never reached the line; a
+regression test now does.

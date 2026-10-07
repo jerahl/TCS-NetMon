@@ -156,3 +156,15 @@ def test_a_secret_containing_percent_is_delivered_verbatim(tmp_path):
     assert cfg.camera_snapshot.password_backup == "50%off"
     assert cfg.poller.snmp_community == "c0mmun1ty%%"
     assert cfg.db.url.endswith("?x=100%25")
+
+
+def test_web_packetfence_url_is_read_from_the_file(tmp_path):
+    # Regression: WebConfig declared packetfence_url but the loader never read
+    # it, so every "View in PacketFence" link stayed disabled whatever the
+    # conf file said.
+    path = write_config(tmp_path)
+    assert load_config(path).web.packetfence_url == ""
+    text = open(path).read().replace(
+        "[web]\n", "[web]\npacketfence_url = https://pf.example.org:1443/\n", 1)
+    open(path, "w").write(text)
+    assert load_config(path).web.packetfence_url == "https://pf.example.org:1443"

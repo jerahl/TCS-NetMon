@@ -14,6 +14,7 @@ export * as cameraOps from "./src/pages/camera_ops.jsx";
 export * as cameraSnapshot from "./src/pages/camera_snapshot.jsx";
 export * as primitives from "./src/primitives.jsx";
 export * as automation from "./src/pages/automation.jsx";
+export * as wireless from "./src/pages/wireless.jsx";
 export { default as React } from "react";
 export { renderToString } from "react-dom/server";
 `;
@@ -31,14 +32,67 @@ const require = createRequire(import.meta.url);
 const mod = { exports: {} };
 new Function("module", "exports", "require", res.outputFiles[0].text)(mod, mod.exports, require);
 const { surveillance: S, cameraDetail: D, cameras: C, cameraSnapshot: SNAP,
-        netmonStatus: NS, cameraOps: OPS, automation: AUTO, primitives: P, React,
+        netmonStatus: NS, cameraOps: OPS, automation: AUTO, wireless: W, primitives: P, React,
         renderToString } = mod.exports;
 
 const CAM = (over) => ({ device_id: 1, name: "chs-cam-1", site: "Central High",
   model: "Bosch FLEXIDOME", recording_state: "up", recording_server: "CHS-BCD-DVR",
   ip: "10.32.18.4", ...over });
 
+// AP Detail (wireless.jsx). Two shapes: a fully populated AP, and the
+// starved one the live fleet mostly is — no cpu/mem, no uplink, no PF node,
+// no clients, no events. Every "—" path must render, not throw.
+const AP_FULL = {
+  id: 364, name: "ALB-3", site: "Alberta Performing Arts", device_type: "ap",
+  mgmt_ip: "192.0.2.61", xiq_device_id: "70849780746751",
+  detail: { model: "AP305C", serial: "S1", fw_version: "10.6.4.0", mgmt_mac: "BCF310B63780",
+            ip: "192.0.2.61", network_policy: "TCS-Schools", uptime_s: 93784,
+            clients_total: 3, cpu_pct: 12.5, mem_pct: 40, updated_at: "2026-10-07 14:00:00" },
+  radios: [
+    { radio: "wifi0", band: "2.4", channel: 6, width_mhz: 20, tx_power_dbm: 14, clients: 1, updated_at: "2026-10-07 14:00:00" },
+    { radio: "wifi1", band: "5", channel: 149, width_mhz: 80, tx_power_dbm: 17, clients: 2, updated_at: "2026-10-07 14:00:00" },
+  ],
+  pf: { mac: "bc:f3:10:b6:37:80", role: "AP", reg_status: "reg", vlan: "20", online: 1,
+        last_switch: "192.0.2.3", last_port: "5:20", updated_at: "2026-10-07 14:00:00" },
+  uplink: { switch_device_id: 9, switch_name: "ALB-SW-5", port: "5:20", ifindex: 1020,
+            oper_state: "up", speed_mbps: 1000, poe_delivering: 1, poe_watts: 9.4,
+            macs_on_port: 1, candidates: 4, pf_agrees: true, pf_port: "5:20",
+            poe_cycle_safe: true, why: "single MAC, PoE delivering" },
+  clients: [
+    { mac: "aa:bb:cc:00:01:01", ssid: "TCS-Student", band: "5", rssi_dbm: -54, pf_status: "reg", updated_at: "2026-10-07 14:00:00" },
+    { mac: "aa:bb:cc:00:01:02", ssid: "TCS-Staff", band: "2.4", rssi_dbm: -78, pf_status: "unreg" },
+  ],
+  state: {
+    source_status: { value: "down", severity: "crit", source: "xiq", updated_at: "2026-10-07 14:00:00" },
+    ping: { value: "up", severity: "ok", source: "poller", updated_at: "2026-10-07 14:00:00" },
+    reachability: { value: "down_source_only", severity: "warn", source: "reachability", updated_at: "2026-10-07 14:00:00" },
+  },
+  events: [{ id: 1, dimension: "source_status", old_value: "up", new_value: "down", severity: "crit",
+             source: "xiq", occurred_at: "2026-10-07 13:58:00" }],
+};
+const AP_BARE = { id: 1, name: "X-1", site: null, device_type: "ap", mgmt_ip: null,
+                  detail: null, radios: [], pf: null, uplink: null, clients: [], state: {}, events: [] };
+const FLEET = [
+  { id: 364, name: "ALB-3", site: "Alberta Performing Arts", mgmt_ip: "192.0.2.61", status: "down", ping: "up", model: "AP305C", clients_total: 3 },
+  { id: 365, name: "ALB-4", site: "Alberta Performing Arts", mgmt_ip: null, status: "up", ping: "up", model: null, clients_total: 60 },
+  { id: 400, name: "Z-1", site: null, status: null, ping: null, clients_total: null },
+];
+
 const cases = [
+  ["Wireless · navigator", W.ApNavigator, { fleet: FLEET, activeId: 364 }],
+  ["Wireless · navigator, nothing selected", W.ApNavigator, { fleet: FLEET, activeId: null }],
+  ["Wireless · device card", W.DeviceCard, { ap: AP_FULL, state: "warn", meta: { packetfence_url: "https://pf.example" } }],
+  ["Wireless · device card, starved", W.DeviceCard, { ap: AP_BARE, state: "idle", meta: null }],
+  ["Wireless · overview", W.OverviewTab, { ap: AP_FULL }],
+  ["Wireless · overview, starved", W.OverviewTab, { ap: AP_BARE }],
+  ["Wireless · radios + SSIDs", W.WirelessTab, { ap: AP_FULL }],
+  ["Wireless · radios, none", W.WirelessTab, { ap: AP_BARE }],
+  ["Wireless · wired", W.WiredTab, { ap: AP_FULL }],
+  ["Wireless · wired, unresolved", W.WiredTab, { ap: AP_BARE }],
+  ["Wireless · clients", W.ClientsTab, { ap: AP_FULL }],
+  ["Wireless · events", W.EventsTab, { ap: AP_FULL }],
+  ["Wireless · data panel", W.DataPanel, { ap: AP_FULL, loadedAt: "2026-10-07T14:00:00Z", onRefresh: () => {} }],
+  ["Wireless · page shell", W.WirelessPage, { id: "364" }],
   ["OverviewTab · used space unknown", S.OverviewTab, {
     summary: { cameras_total: 2651, cameras_recording: 2651, servers_total: 22,
                servers_up: 22, storage_total_gb: 1837600, storage_used_gb: null,
