@@ -567,6 +567,28 @@ body {
   border-color: rgba(245,179,0,0.30);
 }
 
+/* NetMon: the AP card carries six actions (ZCD had four) plus each action's
+   inline result, so a single flex row let the action group take its
+   max-content width and squeeze Location / Clients / Uplink to zero width,
+   overlapping their text. The info blocks get floors, and below very wide
+   viewports the actions drop to their own full-width row under the card. */
+.device-card-h { flex-wrap: wrap; }
+.dev-h-loc { min-width: 150px; }
+.dev-h-cli { flex: 0 0 auto; min-width: 84px; }
+.dev-h-templates { min-width: 150px; }
+.dev-h-block .v { overflow-wrap: anywhere; }
+.dev-h-actions { flex: 0 1 520px; }
+.ap-pf-btns .act-result { white-space: normal; }
+@media (max-width: 1900px) {
+  .dev-h-actions {
+    flex: 1 1 100%;
+    border-top: 1px solid var(--line);
+    border-right: none !important;
+    padding: 10px 16px;
+  }
+  .device-card-h > .dev-h-templates { border-right: none; }
+}
+
 /* ───────── Legacy device summary card (still used elsewhere) ───────── */
 .device-card { padding: 0; }
 .device-hero {

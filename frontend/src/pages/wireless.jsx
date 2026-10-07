@@ -359,7 +359,7 @@ export function DeviceCard({ ap, state, meta }) {
         <div className="dev-h-sub mono">{ap.mgmt_ip || d.ip || "—"}{d.model ? ` · ${d.model}` : ""}</div>
       </div>
 
-      <div className="dev-h-block">
+      <div className="dev-h-block dev-h-loc">
         <div className="label">Location</div>
         <div className="v">
           {ap.site || "Unassigned"}
@@ -369,7 +369,7 @@ export function DeviceCard({ ap, state, meta }) {
         </div>
       </div>
 
-      <div className="dev-h-block">
+      <div className="dev-h-block dev-h-cli">
         <div className="label">Clients</div>
         <div className="v"
              style={{
