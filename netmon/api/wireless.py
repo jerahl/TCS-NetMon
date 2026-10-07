@@ -16,7 +16,10 @@ from sqlalchemy.engine import Engine
 
 from netmon import db
 from netmon.api.deps import get_engine, require_role
-from netmon.uplink import uplink_for_mac
+# _MACN normalises a MAC column for comparison; it lives with the uplink
+# resolver, which needs the same match. Referencing it without this import
+# made every AP that has a base MAC 500 on /api/wireless/aps/{id}.
+from netmon.uplink import _MACN, uplink_for_mac
 from netmon.models.schemas import Role
 
 router = APIRouter(prefix="/api/wireless", tags=["wireless"])
@@ -24,11 +27,14 @@ router = APIRouter(prefix="/api/wireless", tags=["wireless"])
 _AP_LIST_SQL = """
 SELECT d.id, d.name, d.site, d.mgmt_ip,
        s.value AS status, s.updated_at AS status_updated_at,
+       pg.value AS ping, rc.value AS reachability,
        a.model, a.serial, a.fw_version, a.ip, a.network_policy,
        a.uptime_s, a.clients_total, a.updated_at
 FROM devices d
 LEFT JOIN ap_details a ON a.device_id = d.id
 LEFT JOIN device_state s ON s.device_id = d.id AND s.dimension = 'source_status'
+LEFT JOIN device_state pg ON pg.device_id = d.id AND pg.dimension = 'ping'
+LEFT JOIN device_state rc ON rc.device_id = d.id AND rc.dimension = 'reachability'
 WHERE d.device_type = 'ap' AND d.enabled = 1
 ORDER BY d.site, d.name
 """
@@ -121,7 +127,8 @@ def ap_detail(
 ) -> dict:
     dev = db.fetch_one(
         engine,
-        "SELECT id, name, site, device_type, mgmt_ip FROM devices WHERE id = :d",
+        "SELECT id, name, site, device_type, mgmt_ip, xiq_device_id, pf_node_mac "
+        "FROM devices WHERE id = :d",
         {"d": device_id},
     )
     if dev is None:
@@ -155,6 +162,29 @@ def ap_detail(
         "p.owner AS pf_owner, p.role AS pf_role, p.reg_status AS pf_status "
         "FROM wireless_clients w LEFT JOIN pf_nodes p ON p.mac = w.mac "
         "WHERE w.device_id = :d ORDER BY w.ssid, w.mac",
+        {"d": device_id},
+    )]
+    # Every current-state dimension for this AP (ping / source_status /
+    # reachability / snmp …), keyed by dimension, so the page can show ZCD's
+    # three-source XIQ · SNMP · PING pills without pulling the fleet-wide
+    # /api/status. A dimension that was never written is simply absent — the
+    # UI renders that as "—", not as UP.
+    out["state"] = {
+        r["dimension"]: {"value": r["value"], "severity": r["severity"],
+                         "source": r["source"], "updated_at": r["updated_at"]}
+        for r in db.fetch_all(
+            engine,
+            "SELECT dimension, value, severity, source, updated_at "
+            "FROM device_state WHERE device_id = :d",
+            {"d": device_id},
+        )
+    }
+    # The AP's own transition log tail — ZCD's "Recent Events" card, fed from
+    # state_events rather than Zabbix triggers.
+    out["events"] = [dict(r) for r in db.fetch_all(
+        engine,
+        "SELECT id, dimension, old_value, new_value, severity, source, occurred_at "
+        "FROM state_events WHERE device_id = :d ORDER BY id DESC LIMIT 50",
         {"d": device_id},
     )]
     return out

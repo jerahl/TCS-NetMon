@@ -24,7 +24,12 @@ def _seed(url):
             "('BHS-Core-1','BHS','switch',1,'100002')"))
         c.execute(text(
             "INSERT INTO device_state (device_id, dimension, value, severity, source, updated_at) VALUES "
-            "(1,'source_status','up','ok','xiq',:t),(2,'source_status','down','crit','xiq',:t)"),
+            "(1,'source_status','up','ok','xiq',:t),(2,'source_status','down','crit','xiq',:t),"
+            "(1,'ping','up','ok','poller',:t),(2,'reachability','down_confirmed','crit','poller',:t)"),
+            {"t": now})
+        c.execute(text(
+            "INSERT INTO state_events (device_id, dimension, old_value, new_value, severity, source, occurred_at) "
+            "VALUES (1,'ping','down','up','ok','poller',:t),(2,'ping','up','down','crit','poller',:t)"),
             {"t": now})
         c.execute(text(
             "INSERT INTO ap_details (device_id, model, serial, fw_version, ip, network_policy, "
@@ -71,11 +76,18 @@ def test_wireless_aps_and_detail(tmp_path):
         aps = client.get("/api/wireless/aps").json()
         assert [a["name"] for a in aps] == ["BHS-56-Hallway", "CHS-12-Room"]  # switch excluded
         assert aps[0]["status"] == "up" and aps[0]["model"] == "AP305C"
+        assert aps[0]["ping"] == "up" and aps[1]["ping"] is None
+        assert "reachability" in aps[0]  # classifier-owned; present as a column
 
         d = client.get("/api/wireless/aps/1").json()
         assert d["detail"]["fw_version"] == "10.6.4.0"
         assert [r["radio"] for r in d["radios"]] == ["wifi0", "wifi1"]
         assert len(d["clients"]) == 2
+        # Only this AP's state and events — never a neighbour's.
+        assert {"source_status", "ping"} <= set(d["state"])
+        assert d["state"]["ping"]["value"] == "up"
+        ev = [(e["dimension"], e["new_value"]) for e in d["events"]]
+        assert ("ping", "up") in ev and ("ping", "down") not in ev
         assert client.get("/api/wireless/aps/999").status_code == 404
 
 
@@ -224,3 +236,23 @@ def test_ap_uplink_none_when_mac_unknown(tmp_path):
     assert _ap_uplink(engine, {"mgmt_mac": None}) is None
     assert _ap_uplink(engine, {"mgmt_mac": "nonsense"}) is None
     assert _ap_uplink(engine, {"mgmt_mac": "aabbcc001122"}) is None   # no FDB rows
+
+
+def test_ap_detail_with_a_base_mac_resolves_its_pf_node(tmp_path):
+    # Regression: _ap_pf_node referenced an un-imported _MACN, so every AP
+    # carrying a base MAC — 780 of 781 on the live fleet — 500'd here, while
+    # the fixtures above (no mgmt_mac) never reached that line.
+    url = f"sqlite:///{tmp_path/'w.db'}"
+    _seed(url)
+    engine = db.make_engine(url)
+    now = datetime.now(timezone.utc)
+    with engine.begin() as c:
+        c.execute(text("UPDATE ap_details SET mgmt_mac = 'BCF310B63780' WHERE device_id = 1"))
+        c.execute(text(
+            "INSERT INTO pf_nodes (mac, role, reg_status, updated_at) "
+            "VALUES ('bc:f3:10:b6:37:80', 'AP', 'reg', :t)"), {"t": now})
+    engine.dispose()
+    with _client(tmp_path, url) as client:
+        r = client.get("/api/wireless/aps/1")
+        assert r.status_code == 200, r.text
+        assert r.json()["pf"]["mac"] == "bc:f3:10:b6:37:80"

@@ -33,6 +33,9 @@ export function ApDetailPage({ id, embedded = false }) {
         // A switch belongs on the Switches page (faceplate/ports/PoE), never
         // "under AP" — bounce there if we were reached via an #/ap/ link.
         if (dev.device_type === "switch") { location.replace(`#/switches/${id}`); return; }
+        // An AP's home is the Wireless page (navigator + ZCD AP Detail); this
+        // generic view remains for every other device type.
+        if (dev.device_type === "ap" && !embedded) { location.replace(`#/wireless/${id}`); return; }
         setDevice(dev);
         setStatus(rows.find((r) => String(r.id) === String(id)) || null);
         if (dev.device_type === "ap") {
