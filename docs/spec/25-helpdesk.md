@@ -1,7 +1,8 @@
 # Spec 25 — Helpdesk: Frontline tickets and NetMon links
 
-**Status:** BUILT 2026-10-08 against fixtures; **live contract not yet validated**
-(credentials not provisioned on the VM when built — see §10).
+**Status:** BUILT 2026-10-08; live contract probed the same day against
+Frontline v10.2.0 (§10a). Comments and field history are refused by Frontline
+for the integration account — a Frontline-side permission, not a NetMon gap.
 **Source documents:** owner's Helpdesk brief (2026-10-08) and
 `HelpDesk-API-Map.xlsx` (Frontline v10.2.0 endpoint map, mapped 2026-10-08).
 
@@ -218,6 +219,34 @@ inaccessible, create-then-link retry).
    NetMon-user → Frontline-user mapping; not built.
 10. ToS: the workbook asks to confirm with Frontline that API use against Help
     Desk is supported for the district's license.
+
+## 10a. Live probe results (2026-10-08, `scope_user_id = 14`)
+
+| Item | Result |
+|---|---|
+| Login | ✓ token issued; JWT exp ≈ 9 h (adapter renews 5 min early) |
+| Export grid, state 0 / 1 / 2 | ✓ 180 active; 149 inactive and 227 all in a 14-day createdDate window |
+| Two-layer payload | ✓ `result` is a JSON string, `totalCount` present |
+| Paging | ✓ `pageNumber` **zero-based**; pages 0/1/2 of 5 disjoint, totalCount stable |
+| Sort | ✓ Kendo `createdDate` asc and desc honoured → plain browsing is server-paged |
+| Field names | subject = `ticketSummary`; `site`, `location`, `problemTypeHierarchy`, `assignedTo`, `slaTargetDate`, `resolutionDate`; detail nests site/location/category/description under `ticketDetails`; no active flag (derived from the view) |
+| `GET Ticket/{n}` | ✓ |
+| Attachments list | ✓ |
+| Statuses / Priorities / Sites lookups | ✗ 403 — filters fall back to list values; refusal cached 10 min |
+| Categories hierarchy | ✗ 404 — category comes from the ticket row instead |
+| Technicians | ✓ 18 |
+| Comments, CommentsBulk, private-only, +userID | ✗ 403 in every variant |
+| Field history (+userID) | ✗ 403 |
+| GetPossibleActions | ✗ 403 |
+| `HasTicketAccess/{userID}/{n}` | ✓ `{hasAccess, ticketNumber, userID}` |
+
+**Consequences.** Comments and history cannot be shown until the API account
+is granted access in Frontline (Asset Management › Management › District
+Settings › API and SSO Information, or Frontline support); the tabs say so and
+point to the help desk. Comment visibility semantics therefore remain
+unvalidated, and `detail_role = admin` stays. `HasTicketAccess` working means a
+per-NetMon-user check is feasible once NetMon users are mapped to Frontline
+user IDs (item 9 in §10) — not built.
 
 ## 11. Reversibility
 
