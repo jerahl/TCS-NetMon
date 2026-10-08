@@ -2,6 +2,7 @@ import React from "react";
 import { getJSON, postJSON } from "../api.js";
 import { Card, Dot, Loading, ErrorMsg, SevText } from "../primitives.jsx";
 import { SEV_RANK } from "../severity.js";
+import { hd, LinkedTickets, RecordStatus, fmtDate } from "../helpdesk.jsx";
 
 // Problems — open alerts from the engine with the three NetMon-native actions
 // (spec 10 §2): Ack, Assign, Suppress-1h. These act on the alert lifecycle;
@@ -67,7 +68,45 @@ function SortHeader({ label, col, sort, setSort }) {
   );
 }
 
-export function ProblemsPage() {
+// A problem's detail drawer (spec 25 §7): what the alert is, and which help
+// desk tickets NetMon links to it. Reachable as #/problems/{id}, including for
+// a problem that has since closed (it is no longer in the open list, so its
+// summary comes from the links endpoint, which resolves any alert id).
+function ProblemDrawer({ id, row, onClose }) {
+  const [rec, setRec] = React.useState(null);
+  React.useEffect(() => {
+    let live = true;
+    hd("GET", `/api/helpdesk/links?record_type=problem&record_id=${id}`)
+      .then((r) => live && setRec(r.record || false)).catch(() => live && setRec(false));
+    return () => { live = false; };
+  }, [id]);
+  return (
+    <div className="evt-drawer open" role="dialog" aria-label={`Problem ${id}`}>
+      <div className="drawer-h">
+        <h3>Problem #{id}</h3>
+        <div className="h-spacer" />
+        <button type="button" className="btn sm ghost" onClick={onClose} aria-label="Close">✕</button>
+      </div>
+      <div className="drawer-b">
+        {rec === false && !row ? <div className="msg">Problem #{id} does not exist.</div> : (
+          <div className="drawer-section">
+            <div className="drawer-trigger">{row ? `${row.rule_name} — ${row.device_name || row.device_id}` : rec?.title || "…"}</div>
+            <div className="hd-rec-meta">
+              {row ? <><Dot severity={row.severity} /> <SevText severity={row.severity} /></> : rec && <RecordStatus status={rec.status} />}
+              {(row?.site || rec?.site) && <span>{row?.site || rec?.site}</span>}
+              <span>opened {fmtDate(row?.opened_at || rec?.created)}</span>
+              {row?.acked_by && <span>acked by {row.acked_by}</span>}
+              {row?.assigned_to && <span>owner {row.assigned_to}</span>}
+            </div>
+          </div>
+        )}
+        {(row || rec) && <LinkedTickets recordType="problem" recordId={Number(id)} compact />}
+      </div>
+    </div>
+  );
+}
+
+export function ProblemsPage({ id }) {
   const [rows, setRows] = React.useState(null);
   const [error, setError] = React.useState(null);
   const [busy, setBusy] = React.useState(null);
@@ -164,6 +203,7 @@ export function ProblemsPage() {
                   <td>{a.assigned_to || <span className="dim">—</span>}</td>
                   <td>{a.acked_by ? `✓ ${a.acked_by}` : <span className="dim">—</span>}</td>
                   <td className="evt-actions">
+                    <a className="btn" href={`#/problems/${a.id}`} title="Details and linked help desk tickets">Details</a>
                     {!a.acked_by && (
                       <button className="btn" disabled={busy === a.id} onClick={() => ack(a.id)}>Ack</button>
                     )}
@@ -177,6 +217,8 @@ export function ProblemsPage() {
           </table>
         )}
       </Card>
+      {id && <ProblemDrawer id={id} row={rows.find((a) => String(a.id) === String(id))}
+                            onClose={() => { location.hash = "#/problems"; }} />}
     </div>
   );
 }

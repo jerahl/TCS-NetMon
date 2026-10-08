@@ -30,7 +30,7 @@ from netmon import settings as settings_engine
 from netmon.api import (
     actions, alerts, auth_routes, automation, camera_ops, changes, ddi,
     devices, events,
-    health, history as history_api, issues, nac, registry, search, settings, sites,
+    health, helpdesk, history as history_api, issues, nac, registry, search, settings, sites,
     status, summary, surveillance, switches, voip, wireless,
 )
 from netmon.auth.sessions import DbSessionStore, SessionStore
@@ -348,6 +348,7 @@ def create_app(
     app.include_router(alerts.router)
     app.include_router(issues.router)
     app.include_router(changes.router)
+    app.include_router(helpdesk.router)
     app.include_router(settings.router)
     app.include_router(actions.router)
     app.include_router(automation.router)

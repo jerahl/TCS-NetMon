@@ -7,6 +7,7 @@ import { Icon } from "./primitives.jsx";
 import { GlobalPage } from "./pages/global.jsx";
 import { SwitchesPage } from "./pages/switches.jsx";
 import { ApDetailPage } from "./pages/ap_detail.jsx";
+import { TicketsPage } from "./pages/tickets.jsx";
 import { NacPage } from "./pages/nac.jsx";
 import { SurveillancePage } from "./pages/surveillance.jsx";
 import { EventsPage } from "./pages/events.jsx";
@@ -43,7 +44,8 @@ function parseRoute() {
   if (parts[0] === "cameras") return { name: "cameras", id: parts[1] || null, query };
   if (parts[0] === "camera" && parts[1]) return { name: "camera", id: parts[1], query };
   if (parts[0] === "events") return { name: "events", query };
-  if (parts[0] === "problems") return { name: "problems", query };
+  if (parts[0] === "problems") return { name: "problems", id: parts[1] || null, query };
+  if (parts[0] === "tickets") return { name: "tickets", id: parts[1] || null, query };
   if (parts[0] === "issues") return { name: "issues", id: parts[1] || null, query };
   if (parts[0] === "changes") return { name: "changes", id: parts[1] || null, query };
   if (parts[0] === "voip") return { name: "voip", query };
@@ -74,6 +76,7 @@ const CRUMBS = {
   global: "Global", switches: "Switches", xiq: "XIQ · Status",
   wireless: "Wireless APs", surveillance: "Surveillance", voip: "VoIP · 3CX",
   nac: "NAC", events: "Events", problems: "Problems", issues: "Issues", changes: "Changes",
+  tickets: "Tickets",
   map: "Site Map",
   "netmon-status": "NetMon Status", registry: "Registry", settings: "Settings",
   automation: "Automation",
@@ -82,18 +85,22 @@ const CRUMBS = {
   camera: "Camera Detail",
 };
 
+// Routes that live under the Helpdesk nav group (spec 25 §1).
+const HELPDESK_ROUTES = new Set(["tickets", "problems", "issues"]);
+
 // ZCD's topbar (spec 14 §2 row 1): breadcrumb, search, refresh. Ported to
 // NetMon's own vocabulary — the search opens the existing ⌘K palette rather
 // than being a second search box, and there is no "back to Zabbix dashboard"
 // chevron because NetMon is not a Zabbix module.
 function Topbar({ route }) {
   const label = CRUMBS[route.name] || "Global";
+  const group = HELPDESK_ROUTES.has(route.name) ? "Helpdesk" : "Operations";
   return (
     <div className="topbar">
       <div className="crumb">
         <span className="seg">Tuscaloosa City Schools</span>
         <span className="sep">/</span>
-        <span className="seg">Operations</span>
+        <span className="seg">{group}</span>
         <span className="sep">/</span>
         <span className="seg">{label}</span>
       </div>
@@ -132,7 +139,8 @@ function App() {
   else if (route.name === "nac") { page = <NacPage query={route.query} />; active = "nac"; }
   else if (route.name === "surveillance") { page = <SurveillancePage query={route.query} />; active = "surveillance"; }
   else if (route.name === "events") { page = <EventsPage />; active = "events"; }
-  else if (route.name === "problems") { page = <ProblemsPage />; active = "problems"; }
+  else if (route.name === "problems") { page = <ProblemsPage id={route.id} />; active = "problems"; }
+  else if (route.name === "tickets") { page = <TicketsPage id={route.id} query={route.query} />; active = "tickets"; }
   else if (route.name === "issues") { page = <IssuesPage id={route.id} query={route.query} />; active = "issues"; }
   else if (route.name === "changes") { page = <ChangesPage id={route.id} query={route.query} />; active = "changes"; }
   else if (route.name === "voip") { page = <VoipPage />; active = "voip"; }

@@ -6663,3 +6663,141 @@ kbd.k { font-family: var(--mono); font-size: 10px; background: var(--bg-2); bord
 .chg-mini li { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
 .chg-mini-pills { display: flex; gap: 6px; flex-wrap: wrap; }
 .chg-mini-add { margin-top: 12px; }
+
+/* ───────── Helpdesk (spec 25) ─────────
+   Capacity-style ticket workspace — list · detail · properties — composed
+   from NetMon's own tokens and card/table/tab primitives. Ticket status chips
+   are deliberately neutral (Frontline's vocabulary); NetMon record chips carry
+   an "NM ·" prefix, so the two statuses can never be read as one. */
+.hd-page { display: flex; flex-direction: column; gap: 10px; }
+.hd-banner {
+  padding: 8px 12px; border: 1px solid rgba(245,179,0,0.35); border-radius: var(--r-2);
+  background: rgba(245,179,0,0.08); color: var(--fg-2); font-size: 12px;
+}
+.hd-ws {
+  display: grid; grid-template-columns: 320px minmax(0, 1fr) 300px; gap: 12px;
+  height: calc(100vh - 96px); min-height: 520px;
+}
+.hd-ws > .card { min-height: 0; display: flex; flex-direction: column; margin: 0; }
+.hd-ws > .card > .card-b { overflow: auto; flex: 1; }
+
+/* list */
+.hd-list-tools { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.hd-list-tools input[type=search] { width: 100%; }
+.hd-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.hd-filter { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.hd-filter > span { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
+.hd-filter select { width: 100%; min-width: 0; }
+.hd-fresh { padding: 4px 12px; font-size: 10.5px; color: var(--muted); font-family: var(--mono); }
+.hd-fresh .warn { color: var(--warn); }
+.hd-list-scroll { flex: 1; overflow: auto; min-height: 0; }
+.hd-row {
+  display: block; padding: 9px 12px; border-bottom: 1px solid var(--line);
+  color: inherit; text-decoration: none; border-left: 2px solid transparent;
+}
+.hd-row:hover { background: var(--bg-2); }
+.hd-row.active { background: var(--bg-2); border-left-color: var(--accent); }
+.hd-row-top { display: flex; align-items: center; gap: 6px; }
+.hd-row-subject { margin-top: 3px; font-size: 12.5px; color: var(--fg); line-height: 1.35;
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.hd-row-meta { margin-top: 4px; display: flex; gap: 10px; font-size: 10.5px; color: var(--muted); flex-wrap: wrap; }
+.hd-pager { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 11px; color: var(--muted); }
+.hd-pager .h-spacer { flex: 1; }
+
+/* chips */
+.hd-ticketno { color: var(--accent); font-weight: 600; font-size: 12px; text-decoration: none; }
+.hd-chip {
+  display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 10.5px;
+  border: 1px solid var(--line-2); background: var(--bg-2); color: var(--fg-2); white-space: nowrap;
+}
+.hd-chip.closed { color: var(--muted); }
+.hd-chip.nm { border-color: rgba(91,140,255,0.4); color: var(--accent); font-family: var(--mono); font-size: 10px; }
+.hd-chip.dim { color: var(--muted); }
+.hd-prio { font-size: 10.5px; color: var(--muted); }
+
+/* detail */
+.hd-detail-h { flex-wrap: wrap; gap: 8px; }
+.hd-subject { padding: 12px 16px 2px; font-size: 16px; font-weight: 600; color: var(--fg); line-height: 1.3; }
+.hd-subline { padding: 0 16px 8px; font-size: 11.5px; color: var(--muted); }
+.hd-tabs { padding: 0 12px; }
+.hd-detail-body { overflow: auto; flex: 1; }
+.hd-body { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12.5px; line-height: 1.5; color: var(--fg-2); }
+.hd-thread { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.hd-thread li { border: 1px solid var(--line); border-radius: var(--r-2); padding: 10px 12px; background: var(--bg-2); }
+.hd-thread-h { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; font-size: 11.5px; }
+.hd-unsupported { margin-top: 16px; padding-top: 10px; border-top: 1px dashed var(--line); display: flex;
+  gap: 8px; align-items: center; flex-wrap: wrap; font-size: 11px; }
+.hd-empty { align-items: center; justify-content: center; }
+.hd-back, .hd-props-btn, .hd-props-close { display: none; }
+
+/* properties */
+.hd-kv { margin-bottom: 14px; }
+.hd-related-h { font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted);
+  font-weight: 600; margin: 4px 0 8px; }
+.hd-group { border-top: 1px solid var(--line); padding: 10px 0; }
+.hd-group-h { display: flex; justify-content: space-between; align-items: baseline; }
+.hd-group-h h4 { margin: 0 0 6px; font-size: 12px; font-weight: 600; }
+.hd-reclist { list-style: none; margin: 0 0 6px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.hd-reclist a { color: var(--fg); text-decoration: none; font-size: 12px; }
+.hd-reclist a:hover { color: var(--accent); }
+.hd-rec-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 10.5px; color: var(--muted); margin-top: 3px; }
+.hd-group-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* linked tickets on a NetMon record */
+.hd-linklist { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.hd-link { border: 1px solid var(--line); border-radius: var(--r-2); padding: 8px 10px; background: var(--bg-2); }
+.hd-link.unresolved { border-style: dashed; }
+.hd-link-main { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.hd-link-subject { font-size: 12px; color: var(--fg); flex: 1; min-width: 120px; }
+.hd-link-meta { display: flex; flex-wrap: wrap; gap: 10px; font-size: 10.5px; color: var(--muted); margin-top: 4px; }
+.hd-link-actions { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.hd-note { font-style: italic; color: var(--fg-2); font-size: 11px; }
+.hd-addlink { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
+.hd-events { margin: 6px 0 0; padding-left: 16px; font-size: 11px; color: var(--fg-2); }
+.hd-small { font-size: 11px; margin-top: 6px; }
+
+/* messages */
+.hd-err, .hd-warn { padding: 7px 10px; border-radius: var(--r-1); font-size: 11.5px; margin: 6px 0; }
+.hd-err { border: 1px solid rgba(242,95,92,0.4); background: rgba(242,95,92,0.08); color: var(--err); }
+.hd-warn { border: 1px solid rgba(245,179,0,0.35); background: rgba(245,179,0,0.07); color: var(--fg-2); }
+
+/* dialogs */
+.hd-overlay { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,0.55);
+  display: flex; align-items: flex-start; justify-content: center; padding: 8vh 16px 16px; }
+.hd-modal { width: min(560px, 100%); max-height: 84vh; display: flex; flex-direction: column;
+  background: var(--bg-1); border: 1px solid var(--line-2); border-radius: var(--r-3);
+  box-shadow: 0 24px 64px rgba(0,0,0,0.5); overflow: hidden; }
+.hd-modal.wide { width: min(860px, 100%); }
+.hd-form-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.hd-form-row input { flex: 1; min-width: 0; }
+.hd-pick td, .hd-pick th { white-space: nowrap; }
+.hd-pick td.fg { white-space: normal; }
+.hd-form { display: flex; flex-direction: column; gap: 10px; margin: 10px 0; }
+.hd-form label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--muted); }
+.hd-form input, .hd-form textarea, .hd-form select { font: inherit; font-size: 12.5px; color: var(--fg); }
+.hd-form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+.hd-scrim { display: none; }
+
+/* < 1400px: properties become a drawer */
+@media (max-width: 1400px) {
+  .hd-ws { grid-template-columns: 300px minmax(0, 1fr); }
+  .hd-props-btn, .hd-props-close { display: inline-flex; }
+  .hd-ws > .hd-props {
+    position: fixed; top: 0; right: 0; bottom: 0; width: min(340px, 92vw); z-index: 45;
+    border-radius: 0; transform: translateX(100%); transition: transform 180ms ease;
+    box-shadow: -16px 0 40px rgba(0,0,0,0.4);
+  }
+  .hd-ws > .hd-props.open { transform: translateX(0); }
+  .hd-scrim { display: block; position: fixed; inset: 0; z-index: 44; background: rgba(0,0,0,0.35); }
+}
+
+/* phones: list and detail are separate views with a back action */
+@media (max-width: 760px) {
+  .hd-ws { grid-template-columns: 1fr; height: auto; min-height: 0; }
+  .hd-ws > .card { max-height: none; }
+  .hd-ws.has-selection > .hd-list { display: none; }
+  .hd-ws:not(.has-selection) > .hd-detail { display: none; }
+  .hd-list-scroll { max-height: none; }
+  .hd-back { display: inline-flex; }
+  .hd-filters { grid-template-columns: 1fr 1fr; }
+}

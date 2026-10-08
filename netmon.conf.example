@@ -676,3 +676,41 @@ max_attachments_per_issue = 50
 #   * SVG uploads are accepted (network diagrams are SVGs) but always download
 #     rather than render in place: an SVG is a script host and NetMon does not
 #     sanitize it.
+
+# ═══════════════════════════════════════════════════════════════════════════
+[helpdesk]
+# Frontline Help Desk integration (docs/spec/25-helpdesk.md).
+#
+# Tickets are READ through NetMon's server-side adapter and shown on
+# Helpdesk › Tickets; NetMon never writes to the help desk. What NetMon owns is
+# the link between a ticket and a Problem / Issue / Change (migration 038) —
+# links keep working with this section disabled or the help desk down.
+#
+# Credentials are NOT read from this file (it refuses to start if they are
+# here). Put them in /etc/netmon/netmon.env, loaded by a systemd drop-in:
+#   HD_API_KEY=...
+#   HD_API_PASSPHRASE=...
+# See netmon.env.example and docs/runbooks/helpdesk.md.
+enabled = false
+base_url = https://tuscaloosacsd.gethelphss.com/api/
+instance = frontline
+# Frontline user ID whose visibility scopes the ticket lists. Required when
+# enabled; never guessed. Confirm it with scripts/helpdesk_probe.py first.
+scope_user_id =
+timeout_s = 15
+verify_ssl = true
+# Reuse a fetched ticket list this long (s) — bounds help desk load.
+list_cache_s = 120
+lookup_cache_s = 3600
+# Inactive / All views cover tickets created in this window (days).
+window_days = 90
+max_window_days = 365
+# NetMon roles (viewer < operator < admin). The integration key is privileged;
+# these decide what each NetMon user may see through it.
+min_role = operator
+# Comments / history / attachment lists may contain private notes.
+detail_role = admin
+link_role = operator
+# Original-ticket URL with {ticket}. Leave empty until the real format is
+# verified; "Open in Helpdesk" stays hidden until then.
+ticket_url_template =

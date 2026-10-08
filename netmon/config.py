@@ -439,6 +439,63 @@ class AutomationConfig:
 
 
 @dataclass(frozen=True)
+class HelpdeskConfig:
+    """Frontline Help Desk integration (docs/spec/25-helpdesk.md).
+
+    Read-only presentation of tickets plus NetMon-owned links between tickets
+    and Problems / Issues / Changes. Default **off**: it carries a credential
+    and calls an external production system.
+
+    The credential is never read from this file. ``HD_API_KEY`` and
+    ``HD_API_PASSPHRASE`` come from the process environment
+    (``/etc/netmon/netmon.env`` via a systemd ``EnvironmentFile=`` drop-in), and
+    both fields are excluded from ``repr`` so a logged config cannot leak them.
+
+    The integration identity (``scope_user_id``) and the NetMon roles that may
+    see ticket data are deliberately separate settings: the help desk API key is
+    privileged, and holding it must not hand every NetMon viewer every ticket
+    and every private note.
+    """
+    enabled: bool = False
+    base_url: str = "https://tuscaloosacsd.gethelphss.com/api/"
+    #: Namespace for ticket numbers in helpdesk_links. A ticket number is only
+    #: unique within its own help desk.
+    instance: str = "frontline"
+    #: Frontline user ID whose visibility scopes list calls ({userID} in the
+    #: route). No default: the workbook's example ID must not be guessed into
+    #: production.
+    scope_user_id: str = ""
+    timeout_s: float = 15.0
+    verify_ssl: bool = True
+    #: Seconds a fetched ticket list is reused before the next call. Bounds the
+    #: load an open Tickets page puts on the help desk.
+    list_cache_s: int = 120
+    #: Lookup tables (statuses, priorities, sites, categories, technicians).
+    lookup_cache_s: int = 3600
+    #: Inactive / All views are bounded to tickets created in this many days,
+    #: so "All" is never the district's entire ticket history.
+    window_days: int = 90
+    max_window_days: int = 365
+    #: Minimum NetMon role to read ticket lists and summaries.
+    min_role: str = "operator"
+    #: Minimum NetMon role for comments, field history and attachment lists.
+    #: Admin by default: the returned visibility of private notes is not yet
+    #: validated (spec 25 §6), so every comment is treated as possibly private.
+    detail_role: str = "admin"
+    #: Minimum NetMon role to create or remove a link.
+    link_role: str = "operator"
+    #: Original-ticket URL, with ``{ticket}`` substituted. Empty hides "Open in
+    #: Helpdesk" until the real format is verified.
+    ticket_url_template: str = ""
+    api_key: str = field(default="", repr=False)
+    passphrase: str = field(default="", repr=False)
+
+    @property
+    def has_credentials(self) -> bool:
+        return bool(self.api_key and self.passphrase)
+
+
+@dataclass(frozen=True)
 class Config:
     db: DBConfig
     web: WebConfig
@@ -455,6 +512,7 @@ class Config:
     issues: IssuesConfig
     sources: dict[str, SourceToggle]
     path: str
+    helpdesk: HelpdeskConfig = field(default_factory=HelpdeskConfig)
 
     def source_enabled(self, name: str) -> bool:
         src = self.sources.get(name)
@@ -684,6 +742,47 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         # config typo turn the ring buffer into long-term series storage.
         raise ConfigError("[history] retention_hours must be between 1 and 24")
 
+    # --- [helpdesk] Frontline Help Desk (spec 25) ---
+    def _hd(key: str, fallback: str) -> str:
+        return parser.get("helpdesk", key, fallback=fallback).strip()
+
+    helpdesk = HelpdeskConfig(
+        enabled=_as_bool(_hd("enabled", "false")),
+        base_url=_hd("base_url", HelpdeskConfig.base_url).rstrip("/") + "/",
+        instance=_hd("instance", "frontline") or "frontline",
+        scope_user_id=_hd("scope_user_id", ""),
+        timeout_s=float(_hd("timeout_s", "15")),
+        verify_ssl=_as_bool(_hd("verify_ssl", "true")),
+        list_cache_s=int(_hd("list_cache_s", "120")),
+        lookup_cache_s=int(_hd("lookup_cache_s", "3600")),
+        window_days=int(_hd("window_days", "90")),
+        max_window_days=int(_hd("max_window_days", "365")),
+        min_role=_hd("min_role", "operator").lower(),
+        detail_role=_hd("detail_role", "admin").lower(),
+        link_role=_hd("link_role", "operator").lower(),
+        ticket_url_template=_hd("ticket_url_template", ""),
+        # Secrets: environment only. A key written into netmon.conf is ignored
+        # on purpose, so there is exactly one place to rotate it.
+        api_key=os.environ.get("HD_API_KEY", "").strip(),
+        passphrase=os.environ.get("HD_API_PASSPHRASE", "").strip(),
+    )
+    for _k in ("min_role", "detail_role", "link_role"):
+        if getattr(helpdesk, _k) not in ROLES:
+            raise ConfigError(f"[helpdesk] {_k} must be one of {ROLES}")
+    if helpdesk.link_role == "viewer":
+        raise ConfigError("[helpdesk] link_role = viewer would let read-only users "
+                          "create and remove links; use operator or admin")
+    if helpdesk.enabled and not helpdesk.scope_user_id.isdigit():
+        raise ConfigError("[helpdesk] scope_user_id must be the numeric Frontline user "
+                          "ID whose ticket visibility NetMon uses — it is not guessed")
+    if not 1 <= helpdesk.window_days <= helpdesk.max_window_days:
+        raise ConfigError("[helpdesk] window_days must be between 1 and max_window_days")
+    if helpdesk.ticket_url_template and "{ticket}" not in helpdesk.ticket_url_template:
+        raise ConfigError("[helpdesk] ticket_url_template must contain {ticket}")
+    if parser.has_option("helpdesk", "api_key") or parser.has_option("helpdesk", "passphrase"):
+        raise ConfigError("[helpdesk] credentials do not belong in netmon.conf — put "
+                          "HD_API_KEY / HD_API_PASSPHRASE in /etc/netmon/netmon.env")
+
     # --- [issues] issue tracker (spec 24) ---
     issues = IssuesConfig(
         enabled=_as_bool(parser.get("issues", "enabled", fallback="true")),
@@ -839,4 +938,5 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
     return Config(db=db, web=web, auth=auth, security=security, poller=poller,
                   snmp_inventory=snmp_inventory, engine=engine, history=history,
                   actions=actions, automation=automation, issues=issues, camera_snapshot=camera_snapshot,
-                  camera_ops=camera_ops, sources=sources, path=conf_path)
+                  camera_ops=camera_ops, sources=sources, path=conf_path,
+                  helpdesk=helpdesk)

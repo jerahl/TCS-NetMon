@@ -15,6 +15,9 @@ export * as cameraSnapshot from "./src/pages/camera_snapshot.jsx";
 export * as primitives from "./src/primitives.jsx";
 export * as automation from "./src/pages/automation.jsx";
 export * as wireless from "./src/pages/wireless.jsx";
+export * as tickets from "./src/pages/tickets.jsx";
+export * as helpdesk from "./src/helpdesk.jsx";
+export * as problems from "./src/pages/problems.jsx";
 export { default as React } from "react";
 export { renderToString } from "react-dom/server";
 `;
@@ -32,7 +35,7 @@ const require = createRequire(import.meta.url);
 const mod = { exports: {} };
 new Function("module", "exports", "require", res.outputFiles[0].text)(mod, mod.exports, require);
 const { surveillance: S, cameraDetail: D, cameras: C, cameraSnapshot: SNAP,
-        netmonStatus: NS, cameraOps: OPS, automation: AUTO, wireless: W, primitives: P, React,
+        netmonStatus: NS, cameraOps: OPS, automation: AUTO, wireless: W, tickets: TK, helpdesk: HDK, problems: PRB, primitives: P, React,
         renderToString } = mod.exports;
 
 const CAM = (over) => ({ device_id: 1, name: "chs-cam-1", site: "Central High",
@@ -78,7 +81,38 @@ const FLEET = [
   { id: 400, name: "Z-1", site: null, status: null, ping: null, clients_total: null },
 ];
 
+// Helpdesk (spec 25). Ticket fields beyond the number are optional on purpose
+// — the live field map is unvalidated, so every "—" path must render.
+const TK_FULL = { ticket: "004822", subject: "Wi-Fi drops in library", status: "Open",
+  status_id: "1", priority: "High", site: "Bryant High", room: "Library", category: "Network > Wireless",
+  assigned_to: "Tech A", created: "2026-10-05T14:00:00Z", updated: "2026-10-07T09:00:00Z",
+  due: null, closed: null, is_active: true, description: "Drops every 10 min\nsince Monday" };
+const TK_BARE = { ticket: "1", subject: null, status: null, priority: null, site: null,
+  created: null, updated: null, is_active: null, description: null };
+const DET = (data, error = null) => ({ data, error, loading: false, load: () => {} });
+const HD_ST = { enabled: true, can_read: true, can_read_detail: false, can_link: true,
+  window_days: 90, max_window_days: 365, health: { configured: true, available: true } };
+const LINK = (type, rec) => ({ id: 1, ticket_ref: "004822", record_type: type, record_id: 5,
+  created_by: "devadmin", created_at: "2026-10-08 10:00:00", note: "same outage", record: rec });
+
 const cases = [
+  ["Tickets · row", TK.TicketRow, { t: TK_FULL, active: true, href: "#/tickets/004822" }],
+  ["Tickets · row, bare", TK.TicketRow, { t: TK_BARE, active: false, href: "#/tickets/1" }],
+  ["Tickets · list pane", TK.ListPane, { filters: { view: "all", q: "wifi" }, setFilters: () => {}, activeId: "1", status: HD_ST }],
+  ["Tickets · detail", TK.DetailPane, { id: "004822", status: HD_ST, det: DET({ ticket: TK_FULL, source: "detail", fetched_at: "2026-10-08T10:00:00Z", url: "https://hd.example/t/004822", links: [] }), onBack: () => {}, onProps: () => {} }],
+  ["Tickets · detail from list fallback", TK.DetailPane, { id: "1", status: HD_ST, det: DET({ ticket: TK_BARE, source: "list", fetched_at: null, url: null, links: [] }), onBack: () => {}, onProps: () => {} }],
+  ["Tickets · detail, not found", TK.DetailPane, { id: "9", status: HD_ST, det: DET(null, Object.assign(new Error("gone"), { kind: "not_found" })), onBack: () => {}, onProps: () => {} }],
+  ["Tickets · detail, loading", TK.DetailPane, { id: "9", status: HD_ST, det: DET(null), onBack: () => {}, onProps: () => {} }],
+  ["Tickets · properties", TK.PropsPane, { id: "004822", status: HD_ST, ticket: TK_FULL, open: true, onClose: () => {} }],
+  ["Tickets · record group", TK.RecordGroup, { type: "issue", links: [LINK("issue", { id: 5, title: "Library Wi-Fi", status: "open", site: "Bryant High", href: "#/issues/5" })], canLink: true, onLink: () => {}, onCreate: () => {}, onUnlink: () => {} }],
+  ["Tickets · record group, record deleted", TK.RecordGroup, { type: "problem", links: [LINK("problem", null)], canLink: true, onLink: () => {}, onUnlink: () => {} }],
+  ["Tickets · create issue", TK.CreateFromTicket, { type: "issue", ticket: TK_FULL, onClose: () => {}, onLinked: () => {} }],
+  ["Tickets · create change", TK.CreateFromTicket, { type: "change", ticket: TK_BARE, onClose: () => {}, onLinked: () => {} }],
+  ["Tickets · page shell", TK.TicketsPage, { id: "004822", query: { view: "all" } }],
+  ["Helpdesk · linked tickets", HDK.LinkedTickets, { recordType: "issue", recordId: 5 }],
+  ["Helpdesk · ticket picker", HDK.TicketPicker, { onPick: () => {}, onClose: () => {} }],
+  ["Helpdesk · record picker", HDK.RecordPicker, { recordType: "change", ticket: "004822", onLinked: () => {}, onClose: () => {} }],
+  ["Problems · page with drawer id", PRB.ProblemsPage, { id: "7" }],
   ["Wireless · navigator", W.ApNavigator, { fleet: FLEET, activeId: 364 }],
   ["Wireless · navigator, nothing selected", W.ApNavigator, { fleet: FLEET, activeId: null }],
   ["Wireless · device card", W.DeviceCard, { ap: AP_FULL, state: "warn", meta: { packetfence_url: "https://pf.example" } }],

@@ -22,6 +22,7 @@ const NAV = {
   voip: "#/voip",
   nac: "#/nac",
   events: "#/events",
+  tickets: "#/tickets",
   problems: "#/problems",
   issues: "#/issues",
   changes: "#/changes",
@@ -150,10 +151,19 @@ export function Nav({ active, collapsed = false, onToggle }) {
         <div className="nav-label">Access & events</div>
         {item("nac", NAV.nac, "shield", "NAC")}
         {item("events", NAV.events, "events", "Events")}
-        {item("problems", NAV.problems, "alert", "Problems")}
-        {item("issues", NAV.issues, "events", "Issues", counts?.issues)}
         {item("changes", NAV.changes, "gear", "Changes", counts?.changes)}
         {item("map", NAV.map, "map", "Site Map")}
+      </div>
+
+      {/* Helpdesk (spec 25): Frontline tickets beside NetMon's own Problems
+          and Issues. Problems and Issues keep their routes; only their place
+          in the nav moved. Changes stays above — it is linkable from tickets
+          but is not a help desk concept. */}
+      <div className="nav-section">
+        <div className="nav-label">Helpdesk</div>
+        {item("tickets", NAV.tickets, "events", "Tickets")}
+        {item("problems", NAV.problems, "alert", "Problems")}
+        {item("issues", NAV.issues, "events", "Issues", counts?.issues)}
       </div>
 
       <div className="nav-section">

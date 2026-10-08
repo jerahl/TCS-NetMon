@@ -810,6 +810,48 @@ CHANGES_DDL_SQLITE = (
 )
 
 
+# Helpdesk links (migration 038).
+HELPDESK_DDL_SQLITE = (
+    """
+    CREATE TABLE helpdesk_links (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        instance TEXT NOT NULL,
+        ticket_ref TEXT NOT NULL,
+        record_type TEXT NOT NULL CHECK (record_type IN ('problem','issue','change')),
+        record_id INTEGER NOT NULL,
+        note TEXT,
+        created_at TIMESTAMP NOT NULL,
+        created_by TEXT NOT NULL,
+        UNIQUE (instance, ticket_ref, record_type, record_id)
+    )
+    """,
+    """
+    CREATE TABLE helpdesk_link_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        instance TEXT NOT NULL,
+        ticket_ref TEXT NOT NULL,
+        record_type TEXT NOT NULL,
+        record_id INTEGER NOT NULL,
+        action TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        note TEXT,
+        occurred_at TIMESTAMP NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE helpdesk_ticket_cache (
+        instance TEXT NOT NULL,
+        ticket_ref TEXT NOT NULL,
+        subject TEXT, status TEXT, priority TEXT, site TEXT, category TEXT,
+        assigned_to TEXT, created_date TEXT, updated_date TEXT, is_active INTEGER,
+        state TEXT NOT NULL DEFAULT 'ok',
+        fetched_at TIMESTAMP, checked_at TIMESTAMP,
+        PRIMARY KEY (instance, ticket_ref)
+    )
+    """,
+)
+
+
 def create_core_tables(engine) -> None:
     """Create the tables the poller / collectors / engine / API touch (SQLite)."""
     from sqlalchemy import text
@@ -855,6 +897,7 @@ def create_core_tables(engine) -> None:
             *AUTOMATION_DDL_SQLITE,
             *ISSUES_DDL_SQLITE,
             *CHANGES_DDL_SQLITE,
+            *HELPDESK_DDL_SQLITE,
         ):
             conn.execute(text(ddl))
 

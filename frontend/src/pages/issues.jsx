@@ -1,4 +1,5 @@
 import React from "react";
+import { LinkedTickets } from "../helpdesk.jsx";
 import { getJSON, postJSON, patchJSON, deleteJSON, putFile, qs } from "../api.js";
 import { Card, Dot, Loading, ErrorMsg, SevText } from "../primitives.jsx";
 import { ChangesForIssue, ComposeChange } from "./changes.jsx";
@@ -600,6 +601,8 @@ function Detail({ id, meta, onBack, onChanged }) {
                              canRecord={changeMeta.can.record}
                              onCompose={() => setComposingChange(true)} />
           ))}
+
+          <LinkedTickets recordType="issue" recordId={issue.id} />
 
           <Card title="Affected devices" kicker={`${issue.devices.length} linked`}>
             {issue.devices.length === 0 ? (

@@ -1,4 +1,5 @@
 import React from "react";
+import { LinkedTickets } from "../helpdesk.jsx";
 import { getJSON, postJSON, patchJSON, deleteJSON, qs } from "../api.js";
 import { Card, Loading, ErrorMsg } from "../primitives.jsx";
 
@@ -420,6 +421,8 @@ function Detail({ id, meta, onBack, onChanged }) {
         </div>
 
         <div className="isu-side">
+          <LinkedTickets recordType="change" recordId={change.id} />
+
           <Card title="Devices">
             <div className="chg-dev-group">
               <span className="chg-dev-h">Changed</span>

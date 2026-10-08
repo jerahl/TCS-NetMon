@@ -42,3 +42,8 @@ netmon.conf
 # (/var/lib/netmon/firmware). A gigabyte of Bosch binary does not belong in git.
 *.fw
 docs/RCP_doc_*.pdf
+
+# Filled-in environment secrets (the .example template is tracked)
+netmon.env
+*.env
+!*.env.example
