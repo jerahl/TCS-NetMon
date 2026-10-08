@@ -78,6 +78,8 @@ def main() -> int:
     ap.add_argument("--user-id", required=True, help="Frontline user ID for list scope")
     ap.add_argument("--base-url", default=HelpdeskConfig.base_url)
     ap.add_argument("--days", type=int, default=14, help="window for the inactive/all probes")
+    ap.add_argument("--variants", action="store_true",
+                    help="also try documented alternatives for the comment/history routes")
     args = ap.parse_args()
     if not args.user_id.isdigit():
         print("--user-id must be numeric"); return 2
@@ -188,6 +190,33 @@ def main() -> int:
                                  or "public" in k.lower() or "visib" in k.lower()]
                         print(f"    visibility-looking keys: {flags or 'none'} "
                               "(confirm semantics before showing public/private tabs)")
+    if first and args.variants:
+        ref = normalize_ticket(first)["ticket"] if normalize_ticket(first) else None
+        print("\n[7] comment / history access variants (reads only; status + shape only)")
+        uid = int(cfg.scope_user_id)
+        variants = [
+            ("GET  Ticket/{n}/GetTicketCommentsBulk", "GET", f"Ticket/{ref}/GetTicketCommentsBulk", None),
+            ("POST GetTicketComments privateNotesOnly=true", "POST", f"Ticket/{ref}/GetTicketComments",
+             {"pageNumber": 0, "pageCount": 0, "privateNotesOnly": True}),
+            ("POST GetTicketComments + userID", "POST", f"Ticket/{ref}/GetTicketComments",
+             {"pageNumber": 0, "pageCount": 0, "privateNotesOnly": False, "userID": uid}),
+            ("POST GetTicketHistory + userID", "POST",
+             f"Ticket/{ref}/TicketFieldHistory/GetTicketHistory",
+             {"pageNumber": 0, "pageCount": 0, "userID": uid}),
+            ("GET  HasTicketAccess/{userID}/{n}", "GET", f"Ticket/HasTicketAccess/{uid}/{ref}", None),
+            ("GET  Ticket/{n}/GetPossibleActions", "GET", f"Ticket/{ref}/GetPossibleActions", None),
+        ]
+        for label, method, path, body in variants:
+            out, err = step(label, lambda m=method, p=path, b=body: c.request(m, p, b))
+            if err is None:
+                shape = keys_of(out)
+                if isinstance(out, list) and out and isinstance(out[0], dict):
+                    flags = [k for k in out[0] if any(w in k.lower() for w in
+                             ("priv", "intern", "public", "visib"))]
+                    shape += f"  visibility-looking keys: {flags or 'none'}"
+                elif isinstance(out, (bool, int)):
+                    shape = f"{type(out).__name__} = {out}"
+                print(f"{OK} {label}: {shape}")
     print("\nDone. Nothing was written to the help desk.")
     c.close()
     return 0

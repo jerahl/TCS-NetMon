@@ -38,17 +38,32 @@ def _jwt(exp: float) -> str:
     return f"{enc({'alg': 'none'})}.{enc({'exp': int(exp)})}.sig"
 
 
+# Shapes as returned by the live instance (probe, 2026-10-08, Frontline
+# v10.2.0): export rows carry `ticketSummary`, `site`, `location`,
+# `problemTypeHierarchy`, `assignedTo` and no active flag; GET Ticket/{n}
+# nests site/location/category/description under `ticketDetails`.
 TICKETS = [
-    {"ticketNumber": 4821, "subject": "Projector dead in 204", "statusName": "Open",
-     "statusID": 1, "priorityName": "High", "ticketPriorityID": 2, "siteName": "Central High",
-     "siteID": 11, "assignedToName": "Tech A", "assignedToUserID": 7,
+    {"ticketNumber": 4821, "ticketSummary": "Projector dead in 204", "statusName": "Open",
+     "statusID": 1, "priorityName": "High", "ticketPriorityID": 2, "site": "Central High",
+     "location": "Room 204", "problemTypeHierarchy": "AV > Projector",
+     "assignedTo": "Tech A", "assignedToUserID": 7,
      "createdDate": "2026-10-01T14:00:00Z", "lastModifiedDate": "2026-10-07T09:00:00Z",
-     "isActive": True},
-    {"ticketNumber": "004822", "subject": "Wi-Fi drops in library", "statusName": "In Progress",
-     "statusID": 3, "priorityName": "Medium", "ticketPriorityID": 3, "siteName": "Bryant High",
-     "siteID": 12, "createdDate": "2026-10-05T14:00:00Z", "isActive": True},
-    {"subject": "row with no ticket number — must be dropped"},
+     "slaTargetDate": "2026-10-09T14:00:00Z"},
+    {"ticketNumber": "004822", "ticketSummary": "Wi-Fi drops in library", "statusName": "In Progress",
+     "statusID": 3, "priorityName": "Medium", "ticketPriorityID": 3, "site": "Bryant High",
+     "createdDate": "2026-10-05T14:00:00Z"},
+    {"ticketSummary": "row with no ticket number — must be dropped",
+     "createdDate": "2026-09-01T00:00:00Z"},
 ]
+
+
+def _detail(row: dict) -> dict:
+    flat = {k: v for k, v in row.items()
+            if k not in ("site", "location", "problemTypeHierarchy")}
+    flat["ticketDetails"] = {"site": row.get("site"), "location": row.get("location"),
+                             "problemTypeHierarchy": row.get("problemTypeHierarchy"),
+                             "ticketDescription": "<p>Lamp <b>out</b></p><script>alert(1)</script>"}
+    return flat
 
 
 class FakeFrontline:
@@ -77,22 +92,31 @@ class FakeFrontline:
             return httpx.Response(401)
         if path.startswith("Ticket/GetExportDataTickets/"):
             body = json.loads(req.content)
-            assert body["pageNumber"] == 0 and body["visibleCustomColumns"] == []
-            rows = TICKETS if body["state"] in (0, 2) else []
-            return httpx.Response(200, json={"totalCount": len(rows), "result": json.dumps(rows)})
+            assert body["visibleCustomColumns"] == []
+            rows = list(TICKETS) if body["state"] in (0, 2) else []
+            for srt in body.get("sort") or []:      # createdDate sort, as validated
+                rows.sort(key=lambda r: r.get(srt["field"]) or "", reverse=srt["dir"] == "desc")
+            total = len(rows)
+            n, size = body["pageNumber"], body["pageCount"]
+            if size:                                 # zero-based paging, as validated
+                rows = rows[n * size:(n + 1) * size]
+            return httpx.Response(200, json={"totalCount": total, "result": json.dumps(rows)})
         if path in ("Ticket/4821", "Ticket/004822"):
             if self.detail_code != 200:
                 return httpx.Response(self.detail_code)
             num = path.split("/")[1]
             row = next(t for t in TICKETS if str(t.get("ticketNumber")) == num.lstrip("0") or
                        t.get("ticketNumber") == num)
-            return httpx.Response(200, json=dict(row, ticketDescription=
-                "<p>Lamp <b>out</b></p><script>alert(1)</script>"))
+            return httpx.Response(200, json=_detail(row))
         if path.startswith("Ticket/") and path.count("/") == 1:
             return httpx.Response(404)
+        if path.endswith("/TicketFieldHistory/GetTicketHistory"):
+            return httpx.Response(403)              # as on the live instance
         if path.endswith("/GetTicketComments"):
             return httpx.Response(200, json=[{"commentID": 1, "comment": "<i>hi</i>",
                                               "createdByName": "Tech A"}])
+        if path in ("TicketPriority/GetPriorities", "Location/GetSites"):
+            return httpx.Response(403)              # as on the live instance
         if path == "Status/GetActiveStatuses":
             return httpx.Response(200, json=[{"statusID": 1, "statusName": "Open"},
                                              {"statusID": 3, "statusName": "In Progress"}])
@@ -273,13 +297,15 @@ def test_ticket_list_filters_pages_and_never_leaks_credentials(tmp_path, env):
         assert r.status_code == 200
         body = r.json()
         assert [t["ticket"] for t in body["items"]] == ["004822", "4821"]  # created desc
-        assert body["total"] == 2 and body["stale"] is False
+        assert body["paging"] == "server" and body["stale"] is False
+        assert body["items"][0]["is_active"] is True                      # from the view
         assert c.get("/api/helpdesk/tickets?q=projector").json()["total"] == 1
         assert c.get("/api/helpdesk/tickets?status=3").json()["items"][0]["ticket"] == "004822"
         assert c.get("/api/helpdesk/tickets?site=Central High").json()["total"] == 1
         assert c.get("/api/helpdesk/tickets?limit=1&offset=1").json()["items"][0]["ticket"] == "4821"
-        # Bounded: one help desk call for all of the above (list cache).
-        assert sum("GetExportDataTickets" in x for x in fake.calls) == 1
+        # Bounded: the filtered queries share one cached window pull; plain
+        # pages are one server page each.
+        assert sum("GetExportDataTickets" in x for x in fake.calls) == 3
         for path in ("/api/helpdesk/status", "/api/helpdesk/tickets", "/api/helpdesk/tickets/4821"):
             text_ = c.get(path).text
             assert KEY not in text_ and PASS not in text_ and "Bearer" not in text_
@@ -514,7 +540,57 @@ def test_an_unknown_route_does_not_block_the_others():
     fake = FakeFrontline()
     c = FrontlineClient(_cfg(), transport=httpx.MockTransport(fake))
     with pytest.raises(HelpdeskError) as e:
-        c.priorities()
+        c.categories()
     assert e.value.kind == "bad_response"
     assert c.status()["backoff_s"] == 0
     assert c.ticket_grid(0, None)[0] == len(TICKETS)
+
+
+
+def test_plain_browsing_uses_validated_server_paging(tmp_path, env):
+    fake = FakeFrontline()
+    seen = []
+    def spy(req):
+        if "GetExportDataTickets" in req.url.path:
+            seen.append(json.loads(req.content))
+        return fake(req)
+    with _client(_app(tmp_path), spy) as c:
+        p0 = c.get("/api/helpdesk/tickets?view=active&limit=1&offset=0").json()
+        p1 = c.get("/api/helpdesk/tickets?view=active&limit=1&offset=1&dir=asc").json()
+        filtered = c.get("/api/helpdesk/tickets?view=active&q=wi-fi").json()
+    assert seen[0]["pageNumber"] == 0 and seen[0]["pageCount"] == 1
+    assert seen[0]["sort"] == [{"field": "createdDate", "dir": "desc"}]
+    assert seen[1]["pageNumber"] == 1 and seen[1]["sort"][0]["dir"] == "asc"
+    assert p0["paging"] == "server" and p0["total"] == len(TICKETS)
+    assert p0["items"][0]["ticket"] == "004822" and p1["items"][0]["ticket"] == "4821"
+    # Filtered queries never send an unvalidated vendor filter or sort.
+    assert seen[2]["pageCount"] == 0 and seen[2]["sort"] is None
+    assert filtered["paging"] == "netmon" and filtered["total"] == 1
+
+
+def test_live_shapes_resolve_subject_site_and_nested_detail(tmp_path, env):
+    with _client(_app(tmp_path), FakeFrontline()) as c:
+        row = c.get("/api/helpdesk/tickets?q=projector").json()["items"][0]
+        assert row["subject"] == "Projector dead in 204"
+        assert (row["site"], row["room"], row["category"]) == ("Central High", "Room 204", "AV > Projector")
+        assert row["due"] == "2026-10-09T14:00:00Z" and row["assigned_to"] == "Tech A"
+        t = c.get("/api/helpdesk/tickets/4821").json()["ticket"]
+        assert t["site"] == "Central High" and t["category"] == "AV > Projector"
+        assert t["description"] == "Lamp out"
+
+
+def test_refused_lookups_fall_back_and_are_not_retried_every_load(tmp_path, env):
+    fake = FakeFrontline()
+    with _client(_app(tmp_path), fake) as c:
+        first = c.get("/api/helpdesk/lookups").json()
+        assert first["priorities"]["items"] == [] and "403" in first["priorities"]["error"]
+        assert first["statuses"]["items"]                       # the one that works
+        n = len(fake.calls)
+        c.get("/api/helpdesk/lookups")
+        assert len(fake.calls) == n                              # all served from memory
+
+
+def test_history_refused_by_the_help_desk_is_reported_as_such(tmp_path, env):
+    with _client(_app(tmp_path), FakeFrontline()) as c:
+        r = c.get("/api/helpdesk/tickets/4821/history")
+        assert r.status_code == 403 and r.json()["detail"]["kind"] == "inaccessible"

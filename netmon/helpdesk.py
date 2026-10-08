@@ -213,7 +213,9 @@ def _ref(v: Any) -> str | None:
 #: confirms or corrects them.
 _FIELDS: dict[str, tuple[str, ...]] = {
     "ticket": ("ticketNumber", "ticketNo", "ticketID", "ticketId", "number", "id"),
-    "subject": ("subject", "ticketSubject", "title", "summary"),
+    # Probe 2026-10-08 (v10.2.0): the subject is `ticketSummary` on both the
+    # export rows and GET Ticket/{n}.
+    "subject": ("ticketSummary", "subject", "ticketSubject", "title", "summary"),
     "status": ("statusName", "status", "ticketStatus", "statusDescription"),
     "status_id": ("statusID", "statusId"),
     "priority": ("priorityName", "ticketPriorityName", "priority", "ticketPriority"),
@@ -229,7 +231,7 @@ _FIELDS: dict[str, tuple[str, ...]] = {
     "updated": ("lastModifiedDate", "modifiedDate", "updatedDate", "lastUpdatedDate",
                 "lastActivityDate"),
     "due": ("slaTargetDate", "dueDate"),
-    "closed": ("closedDate", "dateClosed", "resolvedDate"),
+    "closed": ("resolutionDate", "closedDate", "dateClosed", "resolvedDate"),
     "is_active": ("isActive", "active", "isOpen"),
     "description": ("ticketDescription", "description", "details", "body"),
 }
@@ -547,6 +549,21 @@ class FrontlineClient:
         return parse_grid(self.request(
             "POST", f"Ticket/GetExportDataTickets/{self.cfg.scope_user_id}",
             grid_body(state, filt)))
+
+    def ticket_page(self, state: int, filt: dict | None, page: int, count: int,
+                    direction: str) -> tuple[int, list[dict]]:
+        """One server-side page, newest or oldest first by createdDate.
+
+        Validated by the probe on 2026-10-08: ``pageNumber`` is zero-based
+        (pages 0/1/2 of 5 were disjoint, totalCount stable at the window's
+        size) and the Kendo sort on ``createdDate`` is honoured both ways. No
+        other sort field and no filter other than createdDate is used here —
+        those remain unvalidated."""
+        body = grid_body(state, filt)
+        body.update(pageNumber=max(0, int(page)), pageCount=max(1, int(count)),
+                    sort=[{"field": "createdDate", "dir": "asc" if direction == "asc" else "desc"}])
+        return parse_grid(self.request(
+            "POST", f"Ticket/GetExportDataTickets/{self.cfg.scope_user_id}", body))
 
     def ticket(self, ref: str) -> dict:
         _check_ref(ref)

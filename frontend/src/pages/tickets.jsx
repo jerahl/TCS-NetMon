@@ -222,7 +222,16 @@ function ActivityList({ path, render, empty }) {
     hd("GET", path).then((r) => live && setData(r)).catch((e) => live && setError(e));
     return () => { live = false; };
   }, [path]);
-  if (error) return <div className={error.status === 403 ? "hd-warn" : "hd-err"}>{error.message}</div>;
+  if (error) {
+    // Two different 403s: the help desk refusing NetMon's integration account
+    // (kind "inaccessible" — on this instance, comments and field history),
+    // and NetMon's own role gate. They need different fixes, so say which.
+    if (error.kind === "inaccessible") {
+      return <div className="hd-warn">The help desk does not let NetMon's integration account read this
+        (Frontline answered 403). Use Open in Helpdesk, or grant the API account access in Frontline.</div>;
+    }
+    return <div className={error.status === 403 ? "hd-warn" : "hd-err"}>{error.message}</div>;
+  }
   if (!data) return <Loading what="activity" />;
   if (!data.items.length) return <div className="msg">{empty}</div>;
   return render(data);

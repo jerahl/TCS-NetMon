@@ -49,6 +49,8 @@ log = logging.getLogger("netmon.api.helpdesk")
 router = APIRouter(prefix="/api/helpdesk", tags=["helpdesk"])
 
 RECORD_TYPES = ("problem", "issue", "change")
+#: How long a failed lookup is remembered before it is tried again.
+LOOKUP_FAIL_CACHE_S = 600
 HEALTH_NAME = "helpdesk"
 
 #: HTTP status per adapter error kind. 503 for anything that means "ask
@@ -84,6 +86,24 @@ def _require(user: UserSession, role: str, what: str) -> None:
                             detail=f"{what} requires role {role} or higher")
 
 
+def _with_state(rows: list[dict], state: int) -> list[dict]:
+    """Normalise rows and fill ``is_active`` from the view that returned them.
+
+    The export rows carry no active flag (probe 2026-10-08), but the view is
+    itself the answer: state 0 returns only active tickets, state 1 only
+    inactive ones. "All" leaves it unknown unless a row says.
+    """
+    out = []
+    for r in rows:
+        t = normalize_ticket(r)
+        if not t:
+            continue
+        if t["is_active"] is None and state != STATES["all"]:
+            t["is_active"] = state == STATES["active"]
+        out.append(t)
+    return out
+
+
 # ── the service: one adapter + small caches per process ─────────────────────
 
 class HelpdeskService:
@@ -93,7 +113,7 @@ class HelpdeskService:
         self.client = FrontlineClient(cfg, transport=transport)
         self._lock = threading.Lock()
         self._lists: dict[tuple[int, int], tuple[float, int, list[dict]]] = {}
-        self._lookups: dict[str, tuple[float, list[dict]]] = {}
+        self._lookups: dict[str, tuple[float, list[dict], str | None]] = {}
         self._health_state: tuple[str, float] | None = None
 
     # -- health: the nav's source pill -------------------------------------
@@ -146,7 +166,30 @@ class HelpdeskService:
             if hit:
                 return hit[0], hit[1], hit[2], e
             raise
-        tickets = [t for t in (normalize_ticket(r) for r in rows) if t]
+        tickets = _with_state(rows, state)
+        fetched = time.time()
+        with self._lock:
+            self._lists[key] = (fetched, total, tickets)
+        self._refresh_cache(tickets)
+        return fetched, total, tickets, None
+
+    def ticket_page(self, state: int, days: int, page: int, count: int, direction: str,
+                    *, force: bool = False):
+        """Server-paged variant for plain browsing (no search, no filters,
+        newest/oldest first). Same caching and stale-on-outage rules."""
+        key = ("page", state, 0 if state == STATES["active"] else days, page, count, direction)
+        with self._lock:
+            hit = self._lists.get(key)
+        if hit and not force and time.time() - hit[0] < self.cfg.list_cache_s:
+            return hit[0], hit[1], hit[2], None
+        filt = None if state == STATES["active"] else created_filter(days)
+        try:
+            total, rows = self.call(self.client.ticket_page, state, filt, page, count, direction)
+        except HelpdeskError as e:
+            if hit:
+                return hit[0], hit[1], hit[2], e
+            raise
+        tickets = _with_state(rows, state)
         fetched = time.time()
         with self._lock:
             self._lists[key] = (fetched, total, tickets)
@@ -174,14 +217,22 @@ class HelpdeskService:
                "technicians": self.client.technicians}
         with self._lock:
             hit = self._lookups.get(name)
-        if hit and time.time() - hit[0] < self.cfg.lookup_cache_s:
-            return hit[1], None
+        if hit and time.time() - hit[0] < (self.cfg.lookup_cache_s if hit[2] is None
+                                           else LOOKUP_FAIL_CACHE_S):
+            return hit[1], hit[2]
         try:
             items = self.call(fns[name])
         except HelpdeskError as e:
-            return (hit[1] if hit else []), e.message
+            # Remember a refusal too. On this instance the integration account
+            # gets 403 for statuses/priorities/sites and 404 for categories
+            # (probe 2026-10-08); asking again on every page load would only
+            # add four failing calls per visit.
+            items = hit[1] if hit else []
+            with self._lock:
+                self._lookups[name] = (time.time(), items, e.message)
+            return items, e.message
         with self._lock:
-            self._lookups[name] = (time.time(), items)
+            self._lookups[name] = (time.time(), items, None)
         return items, None
 
     # -- detail --------------------------------------------------------------
@@ -361,6 +412,24 @@ def list_tickets(
     _require(user, cfg.min_role, "reading help desk tickets")
     svc = _svc(request, engine)
     window = min(days or cfg.window_days, cfg.max_window_days)
+    # Plain browsing — no search, no filter, ordered by created date — uses the
+    # help desk's own paging and sort (validated 2026-10-08), so a page costs
+    # one page. Anything filtered falls back to the bounded window, filtered by
+    # NetMon, because no Kendo filter other than createdDate is validated.
+    if (not any((q, status_, priority, site, assigned)) and sort == "created"
+            and offset % limit == 0):
+        try:
+            fetched, total, rows, stale = svc.ticket_page(
+                STATES[view], window, offset // limit, limit, direction, force=refresh)
+        except HelpdeskError as e:
+            raise _err(e)
+        return {
+            "view": view, "window_days": None if view == "active" else window,
+            "items": rows, "total": total, "total_source": total, "offset": offset,
+            "limit": limit, "fetched_at": _iso(fetched), "paging": "server",
+            "stale": stale is not None,
+            "error": ({"kind": stale.kind, "message": stale.message} if stale else None),
+        }
     try:
         fetched, total_source, rows, stale = svc.ticket_list(STATES[view], window, force=refresh)
     except HelpdeskError as e:
@@ -386,6 +455,7 @@ def list_tickets(
         "offset": offset,
         "limit": limit,
         "fetched_at": _iso(fetched),
+        "paging": "netmon",
         "stale": stale is not None,
         "error": ({"kind": stale.kind, "message": stale.message} if stale else None),
     }
