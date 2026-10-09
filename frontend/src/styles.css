@@ -6732,6 +6732,13 @@ kbd.k { font-family: var(--mono); font-size: 10px; background: var(--bg-2); bord
 
 /* properties */
 .hd-kv { margin-bottom: 14px; }
+/* The shared .kv grid's 160px label column leaves a 300px pane ~6 characters
+   for values. Narrow labels, proportional text, and wrap at word boundaries. */
+.kv.hd-kv { grid-template-columns: 76px minmax(0, 1fr) 0; }
+.kv.hd-kv .k { padding: 7px 8px 7px 0; align-items: flex-start; }
+.kv.hd-kv .v { padding: 7px 0; font-family: var(--sans); font-size: 12.5px; line-height: 1.4;
+  align-items: flex-start; word-break: normal; overflow-wrap: anywhere; }
+.kv.hd-kv .b { padding: 0; }
 .hd-related-h { font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted);
   font-weight: 600; margin: 4px 0 8px; }
 .hd-group { border-top: 1px solid var(--line); padding: 10px 0; }
