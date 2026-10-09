@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import configparser
 import os
+from datetime import date
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -487,6 +488,8 @@ class HelpdeskConfig:
     #: Original-ticket URL, with ``{ticket}`` substituted. Empty hides "Open in
     #: Helpdesk" until the real format is verified.
     ticket_url_template: str = ""
+    #: First day of the school year (MM-DD). The dashboard's trend starts here.
+    school_year_start: str = "08-01"
     api_key: str = field(default="", repr=False)
     passphrase: str = field(default="", repr=False)
 
@@ -761,6 +764,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         detail_role=_hd("detail_role", "admin").lower(),
         link_role=_hd("link_role", "operator").lower(),
         ticket_url_template=_hd("ticket_url_template", ""),
+        school_year_start=_hd("school_year_start", "08-01"),
         # Secrets: environment only. A key written into netmon.conf is ignored
         # on purpose, so there is exactly one place to rotate it.
         api_key=os.environ.get("HD_API_KEY", "").strip(),
@@ -777,6 +781,11 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
                           "ID whose ticket visibility NetMon uses — it is not guessed")
     if not 1 <= helpdesk.window_days <= helpdesk.max_window_days:
         raise ConfigError("[helpdesk] window_days must be between 1 and max_window_days")
+    try:
+        _m, _d = (int(x) for x in helpdesk.school_year_start.split("-"))
+        date(2001, _m, _d)  # a non-leap year: Feb 29 would skip most years
+    except ValueError:
+        raise ConfigError("[helpdesk] school_year_start must be MM-DD, e.g. 08-01")
     if helpdesk.ticket_url_template and "{ticket}" not in helpdesk.ticket_url_template:
         raise ConfigError("[helpdesk] ticket_url_template must contain {ticket}")
     if parser.has_option("helpdesk", "api_key") or parser.has_option("helpdesk", "passphrase"):

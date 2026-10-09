@@ -25,8 +25,8 @@ not NetMon Problems.
 
 ## 2. Navigation and routes
 
-* Sidebar gains **Helpdesk**: Tickets (`#/tickets`), Problems (`#/problems`),
-  Issues (`#/issues`). Problems and Issues moved into it; their routes, records
+* Sidebar gains **Helpdesk**: Dashboard (`#/helpdesk`, §12), Tickets
+  (`#/tickets`), Problems (`#/problems`), Issues (`#/issues`). Problems and Issues moved into it; their routes, records
   and permissions are unchanged. Changes stays under "Access & events".
 * Breadcrumb: `Tuscaloosa City Schools / Helpdesk / <page>` for those three;
   every other page keeps `Operations`.
@@ -253,3 +253,47 @@ user IDs (item 9 in §10) — not built.
 `[helpdesk] enabled = false` removes ticket access without a deploy; links stay
 readable. Migration 038 has a rollback note (drops three tables; nothing else
 references them; Frontline is unaffected either way).
+
+## 12. Dashboard and triage board (owner request 2026-10-09)
+
+Modelled on two owner-supplied reports — the "IT Help-Desk Status Digest"
+(HDstat) and the "Ticket Triage Board" — rebuilt live in NetMon's own tokens
+(dark ZCD theme; no second design system, no chart library, no CDN). The
+owner's reports' ticket data was not copied; only their layout.
+
+**Data.** Both pages are computed by `netmon/helpdesk_stats.py` (pure, unit
+tested) from two export pulls that ride the ordinary list cache
+(`list_cache_s`): the active queue (state 0) and every ticket created since
+the earlier of `[helpdesk] school_year_start` (MM-DD, default 08-01) and the
+first of last month — at least 9 weeks, capped by `max_window_days`. "Open" =
+in the active queue. "Closed" for a period = submitted in it and no longer
+active. "Resolved" = `resolutionDate` in the period. Resolutions of tickets
+created before the window are not visible, so early weeks under-count
+"resolved" (stated on both pages).
+
+**`GET /api/helpdesk/dashboard`** (`min_role`) — `#/helpdesk`:
+executive summary; urgent flags (open, past SLA, High/Critical, by days
+overdue); scorecard (open, overdue, new / resolved this week, MTD new vs the
+same elapsed span of last month, MTD closed); this week by day; open by
+status, priority (with overdue) and problem type; school-year trend (7-day
+buckets from the start date: new, of-those-closed, resolved); MTD top problem
+types; open by site; month-to-date comparison tables; weekly table; rule-based
+suggested actions (oldest urgent overdue, one person holding ≥30 % of overdue,
+top category, top sites, on-hold / overdue-Low tail). Each action names the
+tickets or numbers behind it.
+
+**`GET /api/helpdesk/board?assigned=`** (`min_role`) — `#/tickets`:
+scope by assignee (Frontline ID or name, or `unassigned`; remembered per
+browser); 7-day delta (closed, new, closes/day vs the prior 7 days, queue size
+then vs now — rebuilt from creation/resolution dates); tiles; "Do these first"
+(High/Critical past SLA, the group holding most past-SLA, tickets untouched
+14+ days, the fastest-growing group); 8-week queue size; queue mix; the queue
+grouped by the top level of `problemTypeHierarchy`, split into sub-types when
+a group has several. Groups with High/Critical past SLA sort first and are
+marked. Rows: number, summary (+ site, sub-type, assignee, "untouched"),
+requester (`submittedBy`), status pill, age or days past SLA, priority; the
+left edge deepens at 1 / 8 / 30 days over. Filters All / Past SLA / High /
+Open / In progress / On hold and search ride the URL (`f`, `q`, `a`).
+Clicking a row opens the §3 detail + properties panes in a drawer (Esc
+closes), so linking works unchanged. The §3 list workspace remains at
+`#/tickets?mode=browse` for inactive/all history.

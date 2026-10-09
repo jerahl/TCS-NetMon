@@ -1,5 +1,6 @@
 import React from "react";
 import { Loading } from "../primitives.jsx";
+import { TriageBoard } from "./triage.jsx";
 import {
   hd, useHelpdeskStatus, fmtDate, fmtAge, TicketStatus, RecordStatus, TYPE_LABEL,
   TICKET_STATE, Modal, RecordPicker,
@@ -19,7 +20,17 @@ import {
 
 const PAGE = 50;
 const VIEWS = [["active", "Active"], ["inactive", "Inactive"], ["all", "All"]];
-const FILTER_KEYS = ["view", "q", "status", "priority", "site", "assigned", "days", "sort", "dir", "page"];
+// `mode=browse` selects the list workspace below; without it the page is the
+// triage board (triage.jsx), whose own keys are f / q / a.
+const FILTER_KEYS = ["mode", "view", "q", "status", "priority", "site", "assigned", "days", "sort", "dir", "page"];
+
+const BOARD_KEYS = ["f", "q", "a"];
+
+function cleanBoard(q) {
+  const out = {};
+  for (const k of BOARD_KEYS) if (q?.[k] !== undefined && q[k] !== null) out[k] = q[k];
+  return out;
+}
 
 function cleanQuery(q) {
   const out = {};
@@ -568,6 +579,17 @@ export function TicketsPage({ id, query }) {
   const filters = cleanQuery(query);
   const activeId = id ? decodeURIComponent(id) : null;
   const det = useTicket(status?.enabled && status?.can_read ? activeId : null);
+  const boardMode = filters.mode !== "browse";
+  React.useEffect(() => {
+    if (!activeId || !boardMode) return undefined;
+    const on = (e) => {
+      if (e.key === "Escape" && !document.querySelector(".hd-overlay")) {
+        location.hash = `#/tickets${qstr(cleanBoard(query))}`;
+      }
+    };
+    window.addEventListener("keydown", on);
+    return () => window.removeEventListener("keydown", on);
+  }, [activeId, boardMode, query]);
 
   const setFilters = React.useCallback((patch) => {
     const next = { ...cleanQuery(query), ...patch };
@@ -592,16 +614,55 @@ export function TicketsPage({ id, query }) {
   }
 
   const h = status.health || {};
+  const banner = (!h.configured || !h.available) && (
+    <div className="hd-banner">
+      {!h.configured ? "Help desk credentials are not set (HD_API_KEY / HD_API_PASSPHRASE) — tickets cannot load."
+        : `Help desk unavailable${h.backoff_s ? ` — retrying in ${h.backoff_s}s` : ""}. ${h.last_error || ""}`}
+      {h.last_ok && <span className="dim"> Last successful contact {fmtAge(h.last_ok)}.</span>}
+      {" "}Problems, Issues, Changes and existing links are unaffected.
+    </div>
+  );
+
+  if (boardMode) {
+    // Triage board; a selected ticket opens detail + properties in a drawer.
+    const board = cleanBoard(query);
+    const setBoard = (patch) => {
+      const next = { ...board, ...patch };
+      for (const k of Object.keys(next)) if (next[k] === undefined) delete next[k];
+      const path = activeId ? `#/tickets/${encodeURIComponent(activeId)}` : "#/tickets";
+      location.replace(path + qstr(next));
+    };
+    const close = () => { location.hash = `#/tickets${qstr(board)}`; };
+    return (
+      <div className="hd-page">
+        {banner}
+        <TriageBoard query={board} setQuery={setBoard}
+                     openTicket={(n) => { location.hash = `#/tickets/${encodeURIComponent(n)}${qstr(board)}`; }} />
+        {activeId && (
+          <>
+            <div className="hdb-scrim" onClick={close} />
+            <div className="hdb-drawer" role="dialog" aria-label={`Ticket #${activeId}`}>
+              <div className="hd-ws hdb-ws has-selection">
+                <DetailPane id={activeId} status={status} det={det} onBack={close}
+                            onProps={() => setPropsOpen(true)} />
+                <PropsPane id={activeId} status={status} ticket={det.data?.ticket || null}
+                           open={propsOpen} onClose={() => setPropsOpen(false)} />
+                {propsOpen && <div className="hd-scrim" onClick={() => setPropsOpen(false)} />}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="hd-page">
-      {(!h.configured || !h.available) && (
-        <div className="hd-banner">
-          {!h.configured ? "Help desk credentials are not set (HD_API_KEY / HD_API_PASSPHRASE) — tickets cannot load."
-            : `Help desk unavailable${h.backoff_s ? ` — retrying in ${h.backoff_s}s` : ""}. ${h.last_error || ""}`}
-          {h.last_ok && <span className="dim"> Last successful contact {fmtAge(h.last_ok)}.</span>}
-          {" "}Problems, Issues, Changes and existing links are unaffected.
-        </div>
-      )}
+      {banner}
+      <div className="hd-browse-h">
+        <a className="btn sm" href="#/tickets">‹ Triage board</a>
+        <span className="dim">Browse every ticket — active, inactive or all within a date window.</span>
+      </div>
       <div className={"hd-ws" + (activeId ? " has-selection" : "")}>
         <ListPane filters={filters} setFilters={setFilters} activeId={activeId} status={status} />
         {activeId ? (

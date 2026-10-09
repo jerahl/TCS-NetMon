@@ -712,5 +712,9 @@ min_role = operator
 detail_role = admin
 link_role = operator
 # Original-ticket URL with {ticket}. Leave empty until the real format is
-# verified; "Open in Helpdesk" stays hidden until then.
+# verified; "Open in Helpdesk" stays hidden until then. The district's
+# Frontline UI opens a ticket at /UI/tickets/<number>:
+#   ticket_url_template = https://tuscaloosacsd.gethelphss.com/UI/tickets/{ticket}
 ticket_url_template =
+# First day of the school year (MM-DD) — where the dashboard's trend starts.
+school_year_start = 08-01

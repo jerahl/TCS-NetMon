@@ -1,0 +1,184 @@
+{
+ "now": "2026-10-08T17:00:00+00:00",
+ "window_days": 70,
+ "window_truncated": false,
+ "school_year_start": "2026-08-01",
+ "totals": {
+  "open": 0,
+  "overdue": 0,
+  "overdue_pct": null,
+  "urgent_overdue": 0,
+  "in_window": 0
+ },
+ "urgent": [],
+ "overdue_by_priority": [],
+ "overdue_by_site": [],
+ "overdue_by_assignee": [],
+ "week": {
+  "start": "2026-10-05T00:00:00+00:00",
+  "new": 0,
+  "by_day": [
+   {
+    "date": "2026-10-05",
+    "count": 0,
+    "partial": false
+   },
+   {
+    "date": "2026-10-06",
+    "count": 0,
+    "partial": false
+   },
+   {
+    "date": "2026-10-07",
+    "count": 0,
+    "partial": false
+   },
+   {
+    "date": "2026-10-08",
+    "count": 0,
+    "partial": true
+   }
+  ],
+  "closed_of_intake": 0,
+  "closed_pct": null,
+  "still_open": 0,
+  "resolved": 0
+ },
+ "by_status": [],
+ "by_priority": [],
+ "by_category": [],
+ "by_site": [],
+ "top4_sites": {
+  "count": 0,
+  "pct": null
+ },
+ "mtd": {
+  "start": "2026-10-01T00:00:00+00:00",
+  "end": "2026-10-08T17:00:01+00:00",
+  "new": 0,
+  "closed": 0,
+  "closed_pct": null,
+  "still_open": 0,
+  "urgent": 0,
+  "priorities": [],
+  "new_change_pct": null,
+  "closed_change_pct": null
+ },
+ "prior": {
+  "start": "2026-09-01T00:00:00+00:00",
+  "end": "2026-09-08T17:00:00+00:00",
+  "new": 0,
+  "closed": 0,
+  "closed_pct": null,
+  "still_open": 0,
+  "urgent": 0,
+  "priorities": []
+ },
+ "mtd_types": [],
+ "weeks": [
+  {
+   "start": "2026-08-01",
+   "new": 0,
+   "closed": 0,
+   "closed_pct": null,
+   "still_open": 0,
+   "resolved": 0,
+   "partial": false
+  },
+  {
+   "start": "2026-08-08",
+   "new": 0,
+   "closed": 0,
+   "closed_pct": null,
+   "still_open": 0,
+   "resolved": 0,
+   "partial": false
+  },
+  {
+   "start": "2026-08-15",
+   "new": 0,
+   "closed": 0,
+   "closed_pct": null,
+   "still_open": 0,
+   "resolved": 0,
+   "partial": false
+  },
+  {
+   "start": "2026-08-22",
+   "new": 0,
+   "closed": 0,
+   "closed_pct": null,
+   "still_open": 0,
+   "resolved": 0,
+   "partial": false
+  },
+  {
+   "start": "2026-08-29",
+   "new": 0,
+   "closed": 0,
+   "closed_pct": null,
+   "still_open": 0,
+   "resolved": 0,
+   "partial": false
+  },
+  {
+   "start": "2026-09-05",
+   "new": 0,
+   "closed": 0,
+   "closed_pct": null,
+   "still_open": 0,
+   "resolved": 0,
+   "partial": false
+  },
+  {
+   "start": "2026-09-12",
+   "new": 0,
+   "closed": 0,
+   "closed_pct": null,
+   "still_open": 0,
+   "resolved": 0,
+   "partial": false
+  },
+  {
+   "start": "2026-09-19",
+   "new": 0,
+   "closed": 0,
+   "closed_pct": null,
+   "still_open": 0,
+   "resolved": 0,
+   "partial": false
+  },
+  {
+   "start": "2026-09-26",
+   "new": 0,
+   "closed": 0,
+   "closed_pct": null,
+   "still_open": 0,
+   "resolved": 0,
+   "partial": false
+  },
+  {
+   "start": "2026-10-03",
+   "new": 0,
+   "closed": 0,
+   "closed_pct": null,
+   "still_open": 0,
+   "resolved": 0,
+   "partial": true
+  }
+ ],
+ "ytd": {
+  "new": 0,
+  "closed": 0,
+  "closed_pct": null,
+  "still_open": 0
+ },
+ "summary": [
+  "The help desk holds 0 open tickets."
+ ],
+ "actions": [],
+ "fetched_at": "2026-10-08T17:00:00+00:00",
+ "stale": false,
+ "error": null,
+ "ticket_url": null
+}

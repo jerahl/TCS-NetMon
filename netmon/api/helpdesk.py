@@ -42,6 +42,7 @@ from netmon.config import ROLES, Config, HelpdeskConfig
 from netmon.helpdesk import (STATES, TICKET_RE, FrontlineClient, HelpdeskError,
                              created_filter, normalize_attachment, normalize_comment,
                              normalize_history, normalize_ticket)
+from netmon import helpdesk_stats
 from netmon.models.schemas import UserSession
 
 log = logging.getLogger("netmon.api.helpdesk")
@@ -65,6 +66,11 @@ def _now() -> datetime:
 
 def _iso(ts: float | None) -> str | None:
     return datetime.fromtimestamp(ts, timezone.utc).isoformat() if ts else None
+
+
+def _local_tz():
+    """The box's local zone: "this week" and "today" are the district's."""
+    return datetime.now().astimezone().tzinfo
 
 
 def _err(e: HelpdeskError) -> HTTPException:
@@ -195,6 +201,19 @@ class HelpdeskService:
             self._lists[key] = (fetched, total, tickets)
         self._refresh_cache(tickets)
         return fetched, total, tickets, None
+
+    def snapshot(self, *, force: bool = False):
+        """The two lists the dashboard and board are computed from: the live
+        queue and every ticket created since the school year (or last month)
+        began. (fetched_at, active, window, window_days, truncated, stale).
+        Both ride the ordinary list cache, so the two pages and the browse
+        list share one fetch per ``list_cache_s``."""
+        tz = _local_tz()
+        days, truncated = helpdesk_stats.window_days_needed(
+            _now(), tz, self.cfg.school_year_start, self.cfg.max_window_days)
+        f1, _, active, e1 = self.ticket_list(STATES["active"], 0, force=force)
+        f2, _, window, e2 = self.ticket_list(STATES["all"], days, force=force)
+        return min(f1, f2), active, window, days, truncated, e1 or e2
 
     def find_in_lists(self, ref: str) -> dict | None:
         with self._lock:
@@ -459,6 +478,53 @@ def list_tickets(
         "stale": stale is not None,
         "error": ({"kind": stale.kind, "message": stale.message} if stale else None),
     }
+
+
+def _stale(stale: HelpdeskError | None) -> dict | None:
+    return {"kind": stale.kind, "message": stale.message} if stale else None
+
+
+@router.get("/dashboard")
+def helpdesk_dashboard(request: Request, refresh: bool = False,
+                       engine: Engine = Depends(get_engine),
+                       user: UserSession = Depends(current_user)) -> dict:
+    """Help desk status digest: scorecard, urgent flags, this week, backlog
+    breakdowns, month-to-date, school-year trend, suggested actions."""
+    cfg = _hdcfg(request)
+    _require(user, cfg.min_role, "reading help desk tickets")
+    svc = _svc(request, engine)
+    try:
+        fetched, active, window, days, truncated, stale = svc.snapshot(force=refresh)
+    except HelpdeskError as e:
+        raise _err(e)
+    out = helpdesk_stats.dashboard(active, window, now=_now(), tz=_local_tz(),
+                                   year_start_mm_dd=cfg.school_year_start,
+                                   window_days=days, truncated=truncated)
+    out.update(fetched_at=_iso(fetched), stale=stale is not None, error=_stale(stale),
+               ticket_url=cfg.ticket_url_template or None)
+    return out
+
+
+@router.get("/board")
+def helpdesk_board(request: Request,
+                   assigned: str | None = Query(default=None, max_length=200),
+                   refresh: bool = False,
+                   engine: Engine = Depends(get_engine),
+                   user: UserSession = Depends(current_user)) -> dict:
+    """The triage board: the open queue by root cause, optionally scoped to
+    one assignee (Frontline user ID or name, or ``unassigned``)."""
+    cfg = _hdcfg(request)
+    _require(user, cfg.min_role, "reading help desk tickets")
+    svc = _svc(request, engine)
+    try:
+        fetched, active, window, days, truncated, stale = svc.snapshot(force=refresh)
+    except HelpdeskError as e:
+        raise _err(e)
+    out = helpdesk_stats.board(active, window, now=_now(), tz=_local_tz(), assigned=assigned or None)
+    out.update(fetched_at=_iso(fetched), stale=stale is not None, error=_stale(stale),
+               window_days=days, assignees=helpdesk_stats.assignees(active),
+               ticket_url=cfg.ticket_url_template or None)
+    return out
 
 
 @router.get("/tickets/{ref}")

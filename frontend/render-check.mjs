@@ -4,6 +4,7 @@
 // "usedKnown is not defined" reached production on the Surveillance page.
 import { build } from "esbuild";
 import { createRequire } from "module";
+import { readFileSync } from "fs";
 
 const entry = `
 export * as surveillance from "./src/pages/surveillance.jsx";
@@ -18,6 +19,8 @@ export * as wireless from "./src/pages/wireless.jsx";
 export * as tickets from "./src/pages/tickets.jsx";
 export * as helpdesk from "./src/helpdesk.jsx";
 export * as problems from "./src/pages/problems.jsx";
+export * as triage from "./src/pages/triage.jsx";
+export * as hdDash from "./src/pages/helpdesk_dash.jsx";
 export { default as React } from "react";
 export { renderToString } from "react-dom/server";
 `;
@@ -36,7 +39,10 @@ const mod = { exports: {} };
 new Function("module", "exports", "require", res.outputFiles[0].text)(mod, mod.exports, require);
 const { surveillance: S, cameraDetail: D, cameras: C, cameraSnapshot: SNAP,
         netmonStatus: NS, cameraOps: OPS, automation: AUTO, wireless: W, tickets: TK, helpdesk: HDK, problems: PRB, primitives: P, React,
-        renderToString } = mod.exports;
+        triage: TRI, hdDash: HDD, renderToString } = mod.exports;
+// Dashboard / board responses produced by netmon.helpdesk_stats itself
+// (scripts/helpdesk_fixtures.py), so the views are checked against real shapes.
+const HDFX = (n) => JSON.parse(readFileSync(new URL(`./fixtures/helpdesk_${n}.json`, import.meta.url)));
 
 const CAM = (over) => ({ device_id: 1, name: "chs-cam-1", site: "Central High",
   model: "Bosch FLEXIDOME", recording_state: "up", recording_server: "CHS-BCD-DVR",
@@ -113,6 +119,28 @@ const cases = [
   ["Helpdesk · ticket picker", HDK.TicketPicker, { onPick: () => {}, onClose: () => {} }],
   ["Helpdesk · record picker", HDK.RecordPicker, { recordType: "change", ticket: "004822", onLinked: () => {}, onClose: () => {} }],
   ["Problems · page with drawer id", PRB.ProblemsPage, { id: "7" }],
+  ["Helpdesk · dashboard", HDD.DashboardView, { data: HDFX("dashboard") },
+   (html) => {
+     for (const w of ["Urgent flags", "Executive summary", "School-year trend", "Suggested actions",
+                      "Escalate the oldest overdue", "#/tickets/1", "Month-to-date", "Northridge"]) {
+       if (!html.includes(w)) throw new Error(`${w} missing`);
+     }
+   }],
+  ["Helpdesk · dashboard, empty queue", HDD.DashboardView, { data: HDFX("dashboard_empty") },
+   (html) => { if (!html.includes("No High or Critical ticket is past its SLA target")) throw new Error("empty urgent state missing"); }],
+  ["Helpdesk · dashboard page shell", HDD.HelpdeskDashboard, {}],
+  ["Tickets · triage board", TRI.BoardView, { data: HDFX("board") },
+   (html) => {
+     for (const w of ["Do these first", "The queue by root cause", "Security Cameras", "hdb-row od-2",
+                      "Requester One", "20d over", "Past SLA", "Queue size, last "]) {
+       if (!html.includes(w)) throw new Error(`${w} missing`);
+     }
+   }],
+  ["Tickets · triage board, filtered to on hold", TRI.BoardView, { data: HDFX("board"), f: "hold" },
+   (html) => { if (html.includes(">ticket 1<")) throw new Error("filter did not apply"); }],
+  ["Tickets · triage board, empty queue", TRI.BoardView, { data: HDFX("board_empty") },
+   (html) => { if (!html.includes("No tickets match")) throw new Error("empty board state missing"); }],
+  ["Tickets · board page shell", TK.TicketsPage, { id: "1", query: { f: "overdue" } }],
   ["Wireless · navigator", W.ApNavigator, { fleet: FLEET, activeId: 364 }],
   ["Wireless · navigator, nothing selected", W.ApNavigator, { fleet: FLEET, activeId: null }],
   ["Wireless · device card", W.DeviceCard, { ap: AP_FULL, state: "warn", meta: { packetfence_url: "https://pf.example" } }],

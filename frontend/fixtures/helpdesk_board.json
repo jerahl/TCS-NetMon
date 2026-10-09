@@ -1,0 +1,311 @@
+{
+ "now": "2026-10-08T17:00:00+00:00",
+ "assigned": null,
+ "totals": {
+  "active": 5,
+  "open": 3,
+  "prog": 1,
+  "hold": 1,
+  "other": 0,
+  "overdue": 3,
+  "max_over": 25,
+  "urgent": 2,
+  "urgent_overdue": 2,
+  "stalled": 3
+ },
+ "delta": {
+  "closed_7d": 2,
+  "new_7d": 3,
+  "rate_7d": 0.3,
+  "rate_prev_7d": 0.1,
+  "queue_7d_ago": 4,
+  "net": 1,
+  "net_pct": 25.0
+ },
+ "trend": [
+  {
+   "at": "2026-08-20T17:00:00+00:00",
+   "size": 0
+  },
+  {
+   "at": "2026-08-27T17:00:00+00:00",
+   "size": 0
+  },
+  {
+   "at": "2026-09-03T17:00:00+00:00",
+   "size": 2
+  },
+  {
+   "at": "2026-09-10T17:00:00+00:00",
+   "size": 3
+  },
+  {
+   "at": "2026-09-17T17:00:00+00:00",
+   "size": 3
+  },
+  {
+   "at": "2026-09-24T17:00:00+00:00",
+   "size": 3
+  },
+  {
+   "at": "2026-10-01T17:00:00+00:00",
+   "size": 4
+  },
+  {
+   "at": "2026-10-08T17:00:00+00:00",
+   "size": 5
+  }
+ ],
+ "mix": [
+  {
+   "name": "Security Cameras",
+   "count": 2,
+   "hot": true
+  },
+  {
+   "name": "Classlink",
+   "count": 2,
+   "hot": false
+  },
+  {
+   "name": "Misc",
+   "count": 1,
+   "hot": false
+  }
+ ],
+ "do_first": [
+  {
+   "title": "2 High/Critical tickets are past SLA",
+   "detail": "Oldest: #1 (ticket 1), 20d past target at Northridge.",
+   "refs": [
+    "1",
+    "2"
+   ]
+  },
+  {
+   "title": "Security Cameras holds 2 of the 3 past-SLA tickets",
+   "detail": "2 open in this group; 2 untouched for 7+ days; the oldest is 20d over.",
+   "refs": [
+    "1",
+    "2"
+   ]
+  },
+  {
+   "title": "2 tickets have not moved in 14+ days",
+   "detail": "Longest untouched: #4, 40 days since its last update. A status note or a close clears these fastest.",
+   "refs": [
+    "4",
+    "1"
+   ]
+  },
+  {
+   "title": "Classlink grew this week",
+   "detail": "3 new against 1 closed in the last 7 days; 2 open now. Growth here is cheapest to stop at intake.",
+   "refs": []
+  }
+ ],
+ "groups": [
+  {
+   "name": "Security Cameras",
+   "count": 2,
+   "overdue": 2,
+   "urgent": 2,
+   "urgent_overdue": 2,
+   "oldest_over": 20,
+   "stalled": 2,
+   "new_7d": 0,
+   "closed_7d": 1,
+   "hot": true,
+   "subgroups": [
+    {
+     "name": "Recorder",
+     "count": 1
+    },
+    {
+     "name": "Field",
+     "count": 1
+    }
+   ],
+   "items": [
+    {
+     "ticket": "1",
+     "subject": "ticket 1",
+     "status": "Open",
+     "priority": "High",
+     "site": "Northridge",
+     "category": "Security Cameras > Recorder",
+     "assigned_to": "Tech A",
+     "assigned_id": "7",
+     "requester": "Requester One",
+     "created": "2026-09-08T17:00:00",
+     "due": "2026-09-18T17:00:00",
+     "closed": null,
+     "updated": "2026-09-08T17:00:00",
+     "is_open": true,
+     "group": "Security Cameras",
+     "sub": "Recorder",
+     "prio_rank": 1,
+     "status_kind": "open",
+     "age_days": 30,
+     "overdue": true,
+     "over_days": 20,
+     "due_in_days": null,
+     "idle_days": 30
+    },
+    {
+     "ticket": "2",
+     "subject": "ticket 2",
+     "status": "Open",
+     "priority": "High",
+     "site": "Northridge",
+     "category": "Security Cameras > Field",
+     "assigned_to": "Tech A",
+     "assigned_id": "7",
+     "requester": "Requester One",
+     "created": "2026-09-28T17:00:00",
+     "due": "2026-10-06T17:00:00",
+     "closed": null,
+     "updated": "2026-09-28T17:00:00",
+     "is_open": true,
+     "group": "Security Cameras",
+     "sub": "Field",
+     "prio_rank": 1,
+     "status_kind": "open",
+     "age_days": 10,
+     "overdue": true,
+     "over_days": 2,
+     "due_in_days": null,
+     "idle_days": 10
+    }
+   ]
+  },
+  {
+   "name": "Classlink",
+   "count": 2,
+   "overdue": 0,
+   "urgent": 0,
+   "urgent_overdue": 0,
+   "oldest_over": null,
+   "stalled": 0,
+   "new_7d": 3,
+   "closed_7d": 1,
+   "hot": false,
+   "subgroups": [],
+   "items": [
+    {
+     "ticket": "3",
+     "subject": "ticket 3",
+     "status": "In Progress",
+     "priority": "Medium",
+     "site": "Central High",
+     "category": "Classlink",
+     "assigned_to": "Tech A",
+     "assigned_id": "7",
+     "requester": "Requester One",
+     "created": "2026-10-05T17:00:00",
+     "due": "2026-10-13T17:00:00",
+     "closed": null,
+     "updated": "2026-10-07T17:00:00",
+     "is_open": true,
+     "group": "Classlink",
+     "sub": null,
+     "prio_rank": 2,
+     "status_kind": "prog",
+     "age_days": 3,
+     "overdue": false,
+     "over_days": null,
+     "due_in_days": 5,
+     "idle_days": 1
+    },
+    {
+     "ticket": "5",
+     "subject": "ticket 5",
+     "status": "Open",
+     "priority": "Low",
+     "site": "Northridge",
+     "category": "Classlink",
+     "assigned_to": "Tech B",
+     "assigned_id": "8",
+     "requester": "Requester One",
+     "created": "2026-10-07T17:00:00",
+     "due": null,
+     "closed": null,
+     "updated": "2026-10-07T17:00:00",
+     "is_open": true,
+     "group": "Classlink",
+     "sub": null,
+     "prio_rank": 3,
+     "status_kind": "open",
+     "age_days": 1,
+     "overdue": false,
+     "over_days": null,
+     "due_in_days": null,
+     "idle_days": 1
+    }
+   ]
+  },
+  {
+   "name": "Misc",
+   "count": 1,
+   "overdue": 1,
+   "urgent": 0,
+   "urgent_overdue": 0,
+   "oldest_over": 25,
+   "stalled": 1,
+   "new_7d": 0,
+   "closed_7d": 0,
+   "hot": false,
+   "subgroups": [],
+   "items": [
+    {
+     "ticket": "4",
+     "subject": "ticket 4",
+     "status": "On Hold",
+     "priority": "Low",
+     "site": "Westlawn",
+     "category": "Misc",
+     "assigned_to": null,
+     "assigned_id": null,
+     "requester": "Requester One",
+     "created": "2026-08-29T17:00:00",
+     "due": "2026-09-13T17:00:00",
+     "closed": null,
+     "updated": "2026-08-29T17:00:00",
+     "is_open": true,
+     "group": "Misc",
+     "sub": null,
+     "prio_rank": 3,
+     "status_kind": "hold",
+     "age_days": 40,
+     "overdue": true,
+     "over_days": 25,
+     "due_in_days": null,
+     "idle_days": 40
+    }
+   ]
+  }
+ ],
+ "stall_days": 7,
+ "assignees": [
+  {
+   "value": "7",
+   "name": "Tech A",
+   "count": 3
+  },
+  {
+   "value": "8",
+   "name": "Tech B",
+   "count": 1
+  },
+  {
+   "value": "unassigned",
+   "name": "Unassigned",
+   "count": 1
+  }
+ ],
+ "window_days": 70,
+ "fetched_at": "2026-10-08T17:00:00+00:00",
+ "stale": false,
+ "error": null,
+ "ticket_url": null
+}

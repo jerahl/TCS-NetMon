@@ -1,0 +1,384 @@
+{
+ "now": "2026-10-08T17:00:00+00:00",
+ "window_days": 70,
+ "window_truncated": false,
+ "school_year_start": "2026-08-01",
+ "totals": {
+  "open": 5,
+  "overdue": 3,
+  "overdue_pct": 60.0,
+  "urgent_overdue": 2,
+  "in_window": 7
+ },
+ "urgent": [
+  {
+   "ticket": "1",
+   "subject": "ticket 1",
+   "status": "Open",
+   "priority": "High",
+   "site": "Northridge",
+   "category": "Security Cameras > Recorder",
+   "assigned_to": "Tech A",
+   "assigned_id": "7",
+   "requester": "Requester One",
+   "created": "2026-09-08T17:00:00",
+   "due": "2026-09-18T17:00:00",
+   "closed": null,
+   "updated": "2026-09-08T17:00:00",
+   "is_open": true,
+   "group": "Security Cameras",
+   "sub": "Recorder",
+   "prio_rank": 1,
+   "status_kind": "open",
+   "age_days": 30,
+   "overdue": true,
+   "over_days": 20,
+   "due_in_days": null,
+   "idle_days": 30
+  },
+  {
+   "ticket": "2",
+   "subject": "ticket 2",
+   "status": "Open",
+   "priority": "High",
+   "site": "Northridge",
+   "category": "Security Cameras > Field",
+   "assigned_to": "Tech A",
+   "assigned_id": "7",
+   "requester": "Requester One",
+   "created": "2026-09-28T17:00:00",
+   "due": "2026-10-06T17:00:00",
+   "closed": null,
+   "updated": "2026-09-28T17:00:00",
+   "is_open": true,
+   "group": "Security Cameras",
+   "sub": "Field",
+   "prio_rank": 1,
+   "status_kind": "open",
+   "age_days": 10,
+   "overdue": true,
+   "over_days": 2,
+   "due_in_days": null,
+   "idle_days": 10
+  }
+ ],
+ "overdue_by_priority": [
+  {
+   "name": "High",
+   "count": 2
+  },
+  {
+   "name": "Medium",
+   "count": 0
+  },
+  {
+   "name": "Low",
+   "count": 1
+  }
+ ],
+ "overdue_by_site": [
+  {
+   "name": "Northridge",
+   "count": 2
+  },
+  {
+   "name": "Westlawn",
+   "count": 1
+  }
+ ],
+ "overdue_by_assignee": [
+  {
+   "name": "Tech A",
+   "count": 2
+  },
+  {
+   "name": "Unassigned",
+   "count": 1
+  }
+ ],
+ "week": {
+  "start": "2026-10-05T00:00:00+00:00",
+  "new": 3,
+  "by_day": [
+   {
+    "date": "2026-10-05",
+    "count": 1,
+    "partial": false
+   },
+   {
+    "date": "2026-10-06",
+    "count": 1,
+    "partial": false
+   },
+   {
+    "date": "2026-10-07",
+    "count": 1,
+    "partial": false
+   },
+   {
+    "date": "2026-10-08",
+    "count": 0,
+    "partial": true
+   }
+  ],
+  "closed_of_intake": 1,
+  "closed_pct": 33.3,
+  "still_open": 2,
+  "resolved": 2
+ },
+ "by_status": [
+  {
+   "name": "Open",
+   "count": 3
+  },
+  {
+   "name": "In Progress",
+   "count": 1
+  },
+  {
+   "name": "On Hold",
+   "count": 1
+  }
+ ],
+ "by_priority": [
+  {
+   "name": "High",
+   "open": 2,
+   "overdue": 2,
+   "pct": 40.0
+  },
+  {
+   "name": "Medium",
+   "open": 1,
+   "overdue": 0,
+   "pct": 20.0
+  },
+  {
+   "name": "Low",
+   "open": 2,
+   "overdue": 1,
+   "pct": 40.0
+  }
+ ],
+ "by_category": [
+  {
+   "name": "Classlink",
+   "count": 2,
+   "pct": 40.0
+  },
+  {
+   "name": "Security Cameras > Recorder",
+   "count": 1,
+   "pct": 20.0
+  },
+  {
+   "name": "Security Cameras > Field",
+   "count": 1,
+   "pct": 20.0
+  },
+  {
+   "name": "Misc",
+   "count": 1,
+   "pct": 20.0
+  }
+ ],
+ "by_site": [
+  {
+   "name": "Northridge",
+   "count": 3
+  },
+  {
+   "name": "Central High",
+   "count": 1
+  },
+  {
+   "name": "Westlawn",
+   "count": 1
+  }
+ ],
+ "top4_sites": {
+  "count": 5,
+  "pct": 100.0
+ },
+ "mtd": {
+  "start": "2026-10-01T00:00:00+00:00",
+  "end": "2026-10-08T17:00:01+00:00",
+  "new": 3,
+  "closed": 1,
+  "closed_pct": 33.3,
+  "still_open": 2,
+  "urgent": 0,
+  "priorities": [
+   {
+    "name": "Medium",
+    "count": 1,
+    "pct": 33.3
+   },
+   {
+    "name": "Low",
+    "count": 2,
+    "pct": 66.7
+   }
+  ],
+  "new_change_pct": 200.0,
+  "closed_change_pct": 0.0
+ },
+ "prior": {
+  "start": "2026-09-01T00:00:00+00:00",
+  "end": "2026-09-08T17:00:00+00:00",
+  "new": 1,
+  "closed": 1,
+  "closed_pct": 100.0,
+  "still_open": 0,
+  "urgent": 0,
+  "priorities": [
+   {
+    "name": "Low",
+    "count": 1,
+    "pct": 100.0
+   }
+  ]
+ },
+ "mtd_types": [
+  {
+   "name": "Classlink",
+   "count": 3,
+   "pct": 100.0,
+   "prior": 0,
+   "change": 3
+  }
+ ],
+ "weeks": [
+  {
+   "start": "2026-08-01",
+   "new": 0,
+   "closed": 0,
+   "closed_pct": null,
+   "still_open": 0,
+   "resolved": 0,
+   "partial": false
+  },
+  {
+   "start": "2026-08-08",
+   "new": 0,
+   "closed": 0,
+   "closed_pct": null,
+   "still_open": 0,
+   "resolved": 0,
+   "partial": false
+  },
+  {
+   "start": "2026-08-15",
+   "new": 0,
+   "closed": 0,
+   "closed_pct": null,
+   "still_open": 0,
+   "resolved": 0,
+   "partial": false
+  },
+  {
+   "start": "2026-08-22",
+   "new": 0,
+   "closed": 0,
+   "closed_pct": null,
+   "still_open": 0,
+   "resolved": 0,
+   "partial": false
+  },
+  {
+   "start": "2026-08-29",
+   "new": 1,
+   "closed": 1,
+   "closed_pct": 100.0,
+   "still_open": 0,
+   "resolved": 0,
+   "partial": false
+  },
+  {
+   "start": "2026-09-05",
+   "new": 1,
+   "closed": 0,
+   "closed_pct": 0.0,
+   "still_open": 1,
+   "resolved": 0,
+   "partial": false
+  },
+  {
+   "start": "2026-09-12",
+   "new": 0,
+   "closed": 0,
+   "closed_pct": null,
+   "still_open": 0,
+   "resolved": 0,
+   "partial": false
+  },
+  {
+   "start": "2026-09-19",
+   "new": 0,
+   "closed": 0,
+   "closed_pct": null,
+   "still_open": 0,
+   "resolved": 0,
+   "partial": false
+  },
+  {
+   "start": "2026-09-26",
+   "new": 2,
+   "closed": 1,
+   "closed_pct": 50.0,
+   "still_open": 1,
+   "resolved": 1,
+   "partial": false
+  },
+  {
+   "start": "2026-10-03",
+   "new": 3,
+   "closed": 1,
+   "closed_pct": 33.3,
+   "still_open": 2,
+   "resolved": 2,
+   "partial": true
+  }
+ ],
+ "ytd": {
+  "new": 7,
+  "closed": 3,
+  "closed_pct": 42.9,
+  "still_open": 4
+ },
+ "summary": [
+  "The help desk holds 5 open tickets, and 3 of them (60.0%) are past their SLA target \u2014 2 High or Critical.",
+  "Intake this week is 3 so far against a school-year peak of 2 in the week of 2026-09-26; 1 of this week's tickets are already closed.",
+  "Northridge carries the most open work (3); the top four sites hold 5 (100.0%).",
+  "Tech A is assigned 2 of the 3 overdue tickets."
+ ],
+ "actions": [
+  {
+   "title": "Escalate the oldest overdue High/Critical tickets",
+   "detail": "#1 Northridge, 20d past target, Tech A; #2 Northridge, 2d past target, Tech A \u2014 confirm status or close out.",
+   "refs": [
+    "1",
+    "2"
+   ]
+  },
+  {
+   "title": "Review Classlink as a category",
+   "detail": "2 open (most of any category).",
+   "refs": []
+  },
+  {
+   "title": "Triage Northridge and Central High",
+   "detail": "3 and 1 open; the top four sites hold 100.0% of the backlog \u2014 candidates for onsite visits.",
+   "refs": []
+  },
+  {
+   "title": "Clear the long tail",
+   "detail": "Review the 1 on-hold / awaiting-approval tickets for blockers; sweep the 1 overdue low tickets for ones that can close.",
+   "refs": []
+  }
+ ],
+ "fetched_at": "2026-10-08T17:00:00+00:00",
+ "stale": false,
+ "error": null,
+ "ticket_url": null
+}

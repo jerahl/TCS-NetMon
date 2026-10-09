@@ -22,6 +22,7 @@ const NAV = {
   voip: "#/voip",
   nac: "#/nac",
   events: "#/events",
+  helpdesk: "#/helpdesk",
   tickets: "#/tickets",
   problems: "#/problems",
   issues: "#/issues",
@@ -161,6 +162,7 @@ export function Nav({ active, collapsed = false, onToggle }) {
           but is not a help desk concept. */}
       <div className="nav-section">
         <div className="nav-label">Helpdesk</div>
+        {item("helpdesk", NAV.helpdesk, "chart", "Dashboard")}
         {item("tickets", NAV.tickets, "events", "Tickets")}
         {item("problems", NAV.problems, "alert", "Problems")}
         {item("issues", NAV.issues, "events", "Issues", counts?.issues)}

@@ -227,6 +227,8 @@ _FIELDS: dict[str, tuple[str, ...]] = {
     "assigned_to": ("assignedToName", "assignedTo", "assignedToUserName", "technicianName",
                     "assignedTechnician"),
     "assigned_id": ("assignedToUserID", "assignedToUserId"),
+    # Probe 2026-10-08: export rows carry `submittedBy` (the requester).
+    "requester": ("submittedBy", "submittedByName", "requesterName", "requester"),
     "created": ("createdDate", "dateCreated", "createDate", "submittedDate"),
     "updated": ("lastModifiedDate", "modifiedDate", "updatedDate", "lastUpdatedDate",
                 "lastActivityDate"),
@@ -261,6 +263,7 @@ def normalize_ticket(row: dict, *, with_description: bool = False) -> dict | Non
         "category": field(row, "category"),
         "assigned_to": field(row, "assigned_to", 200),
         "assigned_id": _ref(_ci(row, *_FIELDS["assigned_id"])),
+        "requester": field(row, "requester", 200),
         "created": field(row, "created", 40),
         "updated": field(row, "updated", 40),
         "due": field(row, "due", 40),
