@@ -57,7 +57,7 @@ class SettingDef:
     label: str
     description: str = ""
     attr: str | None = None  # dataclass attribute for TYPED_SECTIONS
-    map_role: tuple[str, str] | None = None  # ("role_values"|"group_values", role)
+    map_role: tuple[str, str] | None = None  # ("role_values"|"group_values"|"user_values", role)
     restart: bool = False    # False => a settings "Apply" picks it up; True => service restart
     min: int | None = None
     max: int | None = None
@@ -108,6 +108,14 @@ REGISTRY: list[SettingDef] = [
        map_role=("group_values", "operator")),
     _d("auth.saml_group_viewer", "str", "", "Group ids → viewer",
        map_role=("group_values", "viewer")),
+    _d("auth.saml_user_admin", "str", "", "Usernames → admin",
+       "Comma-separated usernames (SAML NameID) granting admin. A bare name also "
+       "matches the local part of an email NameID; case-insensitive.",
+       map_role=("user_values", "admin")),
+    _d("auth.saml_user_operator", "str", "", "Usernames → operator",
+       map_role=("user_values", "operator")),
+    _d("auth.saml_user_viewer", "str", "", "Usernames → viewer",
+       map_role=("user_values", "viewer")),
 
     # --- poller (fping/snmpget executable paths stay file-only) ---
     _d("poller.enabled", "bool", False, "Enable native poller", attr="enabled"),

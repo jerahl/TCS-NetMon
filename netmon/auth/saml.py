@@ -63,8 +63,27 @@ def build_settings(cfg: AuthConfig) -> dict[str, Any]:
     return settings
 
 
-def role_from_attributes(attributes: dict[str, list], cfg: AuthConfig) -> Role | None:
-    """Highest NetMon role granted by the assertion's role/group_ids claims.
+def _user_matches(name_id: str, cfg: AuthConfig, role_name: str) -> list[str]:
+    """Configured usernames for ``role_name`` that match ``name_id``.
+
+    Case-insensitive. An entry containing ``@`` must equal the whole NameID; a
+    bare entry also matches the local part of an email NameID, so ``jsmith``
+    grants ``jsmith@district.org``.
+    """
+    nid = (name_id or "").strip().lower()
+    if not nid:
+        return []
+    local = nid.split("@", 1)[0]
+    return sorted(
+        u for u in cfg.user_values.get(role_name, set())
+        if u.lower() == nid or ("@" not in u and u.lower() == local)
+    )
+
+
+def role_from_attributes(attributes: dict[str, list], cfg: AuthConfig,
+                         name_id: str = "") -> Role | None:
+    """Highest NetMon role granted by the assertion's role/group_ids claims
+    or by the NameID appearing in a ``saml_user_*`` list.
 
     Pure — no I/O. ``attributes`` is the OneLogin ``get_attributes()`` shape:
     ``{attr_name: [values]}``.
@@ -76,18 +95,21 @@ def role_from_attributes(attributes: dict[str, list], cfg: AuthConfig) -> Role |
     for role_name in ROLES:  # low → high; last match wins
         grants = cfg.role_values.get(role_name, set())
         ggrants = cfg.group_values.get(role_name, set())
-        if (role_vals & grants) or (group_vals & ggrants):
+        if ((role_vals & grants) or (group_vals & ggrants)
+                or _user_matches(name_id, cfg, role_name)):
             best = Role(role_name)
     return best
 
 
-def explain_role_mapping(attributes: dict[str, list], cfg: AuthConfig) -> dict[str, Any]:
+def explain_role_mapping(attributes: dict[str, list], cfg: AuthConfig,
+                         name_id: str = "") -> dict[str, Any]:
     """Diagnostic breakdown of how ``attributes`` map to a NetMon role.
 
     Pure — no I/O. Powers the ``saml_debug`` ACS view: it names the claim
     attributes NetMon looks at, the values it actually saw for each, which
     configured grant each matched, and the resulting role (mirrors
     ``role_from_attributes`` exactly). ``matches`` is ordered viewer→admin.
+    ``name_id`` is checked against the ``saml_user_*`` lists.
     """
     role_vals = [str(v) for v in attributes.get(cfg.role_attr, []) if v is not None]
     group_vals = [str(v) for v in attributes.get(cfg.group_attr, []) if v is not None]
@@ -96,10 +118,12 @@ def explain_role_mapping(attributes: dict[str, list], cfg: AuthConfig) -> dict[s
     for role_name in ROLES:  # low → high
         via_role = sorted(set(role_vals) & cfg.role_values.get(role_name, set()))
         via_group = sorted(set(group_vals) & cfg.group_values.get(role_name, set()))
-        if via_role or via_group:
-            matches.append({"role": role_name, "via_role": via_role, "via_group": via_group})
+        via_user = _user_matches(name_id, cfg, role_name)
+        if via_role or via_group or via_user:
+            matches.append({"role": role_name, "via_role": via_role,
+                            "via_group": via_group, "via_user": via_user})
 
-    mapped = role_from_attributes(attributes, cfg)
+    mapped = role_from_attributes(attributes, cfg, name_id)
     return {
         "role_attr": cfg.role_attr,
         "group_attr": cfg.group_attr,

@@ -95,6 +95,12 @@ saml_group_attr = group_ids
 # Or map by group id:
 # saml_group_admin = 1001
 # saml_group_operator = 1002
+# Or grant individuals by username — matched case-insensitively against the
+# assertion NameID; a bare name also matches an email NameID's local part
+# (jsmith grants jsmith@district.org). Also editable at #/settings → Single sign-on.
+# saml_user_admin = jsmith
+# saml_user_operator = kdoe, mlee@district.org
+# saml_user_viewer =
 #
 # DIAGNOSTIC — discover what ClassLink actually releases. When true, the ACS
 # endpoint (POST /auth/saml/acs) validates the assertion then renders a page

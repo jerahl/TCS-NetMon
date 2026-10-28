@@ -86,6 +86,32 @@ def test_explain_role_mapping_unmapped_user():
     assert report["role_values_seen"] == ["Nobody"]
 
 
+def test_role_from_username_list():
+    cfg = AuthConfig(role_values={"viewer": {"Staff"}},
+                     user_values={"admin": {"JSmith"}, "operator": {"kdoe@tcs.org"}})
+    # A bare username matches the NameID exactly or its email local part,
+    # case-insensitively.
+    assert role_from_attributes({}, cfg, "jsmith") is Role.admin
+    assert role_from_attributes({}, cfg, "jsmith@tcs.org") is Role.admin
+    # An entry with @ must match the whole NameID.
+    assert role_from_attributes({}, cfg, "KDoe@tcs.org") is Role.operator
+    assert role_from_attributes({}, cfg, "kdoe@other.org") is None
+    assert role_from_attributes({}, cfg, "kdoe") is None
+    # Highest role wins across claims and username lists.
+    assert role_from_attributes({"role": ["Staff"]}, cfg, "jsmith") is Role.admin
+    assert role_from_attributes({"role": ["Staff"]}, cfg, "nobody") is Role.viewer
+    # No NameID → username lists never match.
+    assert role_from_attributes({}, cfg) is None
+
+
+def test_explain_role_mapping_reports_username_match():
+    cfg = AuthConfig(user_values={"operator": {"jsmith"}})
+    report = explain_role_mapping({}, cfg, "JSmith@tcs.org")
+    assert report["mapped_role"] == "operator"
+    assert report["matches"] == [{"role": "operator", "via_role": [],
+                                  "via_group": [], "via_user": ["jsmith"]}]
+
+
 def test_saml_debug_page_lists_attributes_and_verdict(tmp_path):
     cfg = load_config(write_config(tmp_path, dev_bypass=False,
                                    extra_auth="saml_role_admin = Administrator"))
@@ -261,6 +287,16 @@ def test_complete_login_denies_unmapped_user(tmp_path):
     cfg = load_config(write_config(tmp_path, dev_bypass=False, extra_auth="saml_role_admin = Administrator"))
     with pytest.raises(SamlError):
         complete_login({"role": ["Guest"]}, "mallory", cfg, SessionStore(3600), Response())
+
+
+def test_complete_login_grants_role_by_username(tmp_path):
+    cfg = load_config(write_config(tmp_path, dev_bypass=False,
+                                   extra_auth="saml_user_operator = jsmith, kdoe"))
+    assert cfg.auth.user_values == {"operator": {"jsmith", "kdoe"}}
+    role = complete_login({"role": ["Guest"]}, "jsmith@tcs", cfg, SessionStore(3600), Response())
+    assert role is Role.operator
+    with pytest.raises(SamlError):
+        complete_login({"role": ["Guest"]}, "mallory@tcs", cfg, SessionStore(3600), Response())
 
 
 def test_sp_metadata_generates_xml(tmp_path):

@@ -59,7 +59,7 @@ def _request_data(request: Request, post_data: dict) -> dict:
 def complete_login(attributes: dict[str, list], name_id: str, cfg: Config,
                    sessions: SessionStore, response: Response) -> Role:
     """Map SAML claims → role, mint a session, set the cookie. Testable."""
-    role = saml.role_from_attributes(attributes, cfg.auth)
+    role = saml.role_from_attributes(attributes, cfg.auth, name_id)
     if role is None:
         raise saml.SamlError(f"user {name_id!r} maps to no NetMon role")
     groups = [str(v) for v in attributes.get(cfg.auth.group_attr, [])]
@@ -140,7 +140,8 @@ def saml_debug_page(
 
     Shown by the ACS when ``[auth] saml_debug=true`` instead of issuing a
     session — a read-only diagnostic so the admin can see exactly what
-    ClassLink releases and fill in the ``saml_role_*`` / ``saml_group_*`` maps.
+    ClassLink releases and fill in the ``saml_role_*`` / ``saml_group_*`` /
+    ``saml_user_*`` maps.
     Every value comes from the IdP and is untrusted, so escape everything.
     """
     e = html.escape
@@ -158,12 +159,13 @@ def saml_debug_page(
                      'attributes. Check the ClassLink app\'s attribute release '
                      'configuration.</td></tr>')
 
-    report = saml.explain_role_mapping(attributes, cfg.auth)
+    report = saml.explain_role_mapping(attributes, cfg.auth, name_id or "")
     if report["mapped_role"]:
         vias = ", ".join(
             f'{m["role"]}'
             + (f' via {cfg.auth.role_attr}={m["via_role"]}' if m["via_role"] else "")
             + (f' via {cfg.auth.group_attr}={m["via_group"]}' if m["via_group"] else "")
+            + (f' via saml_user_{m["role"]}={m["via_user"]}' if m["via_user"] else "")
             for m in report["matches"]
         )
         verdict = (
@@ -177,7 +179,8 @@ def saml_debug_page(
             f'<code>[auth] saml_role_{{viewer|operator|admin}}</code> (matched '
             f'against attribute <code>{e(cfg.auth.role_attr)}</code>) or '
             f'<code>saml_group_*</code> (against '
-            f'<code>{e(cfg.auth.group_attr)}</code>).</p>'
+            f'<code>{e(cfg.auth.group_attr)}</code>), or add the NameID to '
+            f'<code>saml_user_{{viewer|operator|admin}}</code>.</p>'
         )
 
     meta_rows = "".join(
