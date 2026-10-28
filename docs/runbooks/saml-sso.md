@@ -58,6 +58,20 @@ by tenant and by how the app is configured in the ClassLink console. The
    saml_group_operator = 1002
    ```
 
+   or by username, for individuals whose ClassLink role/group doesn't fit
+   (matched case-insensitively against the **NameID** shown on the debug page;
+   a bare name also matches an email NameID's local part, so `jsmith` admits
+   `jsmith@district.org`, while an entry with `@` must match exactly):
+
+   ```ini
+   saml_user_admin    = jsmith
+   saml_user_operator = kdoe, mlee@district.org
+   ```
+
+   All three maps combine — a user gets the highest role any of them grants.
+   The `saml_user_*` lists are also editable at `#/settings` (Single sign-on section) and
+   take effect on Apply, no restart.
+
 5. Set `saml_debug = false` and restart. Sign in via ClassLink again — you
    should now land in `/ui/` with the expected role. Confirm with
    `GET /auth/me`.

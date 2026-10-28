@@ -92,6 +92,10 @@ class AuthConfig:
     # netmon role -> the claim values / group_ids that grant it.
     role_values: dict[str, set[str]] = field(default_factory=dict)
     group_values: dict[str, set[str]] = field(default_factory=dict)
+    # netmon role -> usernames granted it directly, matched case-insensitively
+    # against the assertion NameID (a bare name also matches an email's local
+    # part). Grants individuals access without a ClassLink role/group change.
+    user_values: dict[str, set[str]] = field(default_factory=dict)
     # Diagnostic: when true, the ACS endpoint renders the received assertion's
     # attributes (names/values) + the role-mapping verdict instead of logging
     # the user in. Lets an admin discover what ClassLink actually releases so
@@ -506,13 +510,17 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
 
     role_values: dict[str, set[str]] = {}
     group_values: dict[str, set[str]] = {}
+    user_values: dict[str, set[str]] = {}
     for role in ROLES:
         rv = _csv_set(f"saml_role_{role}")
         gv = _csv_set(f"saml_group_{role}")
+        uv = _csv_set(f"saml_user_{role}")
         if rv:
             role_values[role] = rv
         if gv:
             group_values[role] = gv
+        if uv:
+            user_values[role] = uv
 
     local_role = parser.get("auth", "local_role", fallback="admin").strip()
     if local_role not in ROLES:
@@ -531,6 +539,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         group_attr=parser.get("auth", "saml_group_attr", fallback="group_ids").strip(),
         role_values=role_values,
         group_values=group_values,
+        user_values=user_values,
         saml_debug=_as_bool(parser.get("auth", "saml_debug", fallback="false")),
         local_user=parser.get("auth", "local_user", fallback="").strip(),
         local_password_hash=parser.get("auth", "local_password_hash", fallback="").strip(),

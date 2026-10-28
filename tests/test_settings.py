@@ -106,6 +106,7 @@ def test_overlay_typed_sections_and_role_maps(tmp_path):
             "poller.ping_interval_s": "30",
             "engine.shadow": "false",
             "auth.saml_role_admin": "District Admin, Netadmin",
+            "auth.saml_user_viewer": "jsmith, kdoe",
         },
         base.security.settings_key,
     )
@@ -115,6 +116,7 @@ def test_overlay_typed_sections_and_role_maps(tmp_path):
     assert cfg.poller.ping_interval_s == 30
     assert cfg.engine.shadow is False
     assert cfg.auth.role_values["admin"] == {"District Admin", "Netadmin"}
+    assert cfg.auth.user_values["viewer"] == {"jsmith", "kdoe"}
     # Untouched sections/values ride through from the file config.
     assert cfg.poller.snmp_interval_s == base.poller.snmp_interval_s
     assert cfg.db == base.db
