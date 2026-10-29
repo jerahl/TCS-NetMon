@@ -333,9 +333,12 @@ with `error` set. In the table its last good values stay, `updated_at` holds
 the last successful read and `checked_at` the last attempt, so an unanswered
 camera is visibly stale rather than reading as "VCA off".
 
-**Unverified live as of this commit.** Parsing is fixture-tested against the
-reference's documented reply shape only. The first `--camera` run against a
-real camera settles it; record the result here.
+**Verified live 2026-10-29 on alb-cam-44** (CPP7.3, 7.83.0027): line 1 →
+mode 1 ("profile 1"), name "profile #1", engine `viproc_sea`, running. One thing
+the reference does not say: a p_unicode reply puts `<len>` before `<str>`, and
+the string is a **hex dump of UTF-16BE bytes**, NUL-padded
+(`00 70 00 72 … 00 31 00 00 …`). `bosch.parse_unicode` decodes it; the
+firmware path's `parse_version` is left as it was proven.
 
 ## Next session
 

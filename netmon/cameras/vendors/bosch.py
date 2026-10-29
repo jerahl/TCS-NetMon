@@ -213,7 +213,7 @@ VCA_READS = (
     # (field, command, type, how the answer is carried)
     ("viproc_id", "0x0803", "T_DWORD", "dec"),       # CONF_VIPROC_ID, 0 = no VCA
     ("mode", "0x0a65", "T_OCTET", "dec"),            # CONF_VIPROC_MODE
-    ("profile_name", "0x0a40", "P_UNICODE", "str"),  # CONF_VIPROC_CONFIG_NAME
+    ("profile_name", "0x0a40", "P_UNICODE", "unicode"),  # CONF_VIPROC_CONFIG_NAME
     ("engine", "0x0804", "P_STRING", "str"),         # CONF_VIPROC_DLL_NAME
     ("running", "0x0a96", "F_FLAG", "dec"),          # CONF_VCA_TASK_RUNNING_STATE
 )
@@ -224,6 +224,25 @@ VCA_READS = (
 VCA_MODES = {0: "vca", 0xFD: "off", 0xFE: "scheduler", 0xFF: "script"}
 
 _RESULT_DEC = re.compile(r"<result>\s*(?:<hex>[^<]*</hex>\s*)?<dec>\s*(-?\d+)\s*</dec>", re.S)
+
+
+#: p_unicode replies carry a `<len>` before `<str>`, and the string is a hex dump
+#: of UTF-16BE bytes padded with NULs — seen live on alb-cam-44 2026-10-29:
+#: `<result><len>32</len><str>00 70 00 72 … 00 31 00 00 …</str>` = "profile #1".
+_RESULT_ANY_STR = re.compile(r"<result>.*?<str>(.*?)</str>", re.S)
+_HEX_DUMP = re.compile(r"(?:[0-9a-fA-F]{2}\s*)+")
+
+
+def parse_unicode(xml: str) -> str | None:
+    """A p_unicode answer, decoded from the camera's UTF-16BE hex dump."""
+    m = _RESULT_ANY_STR.search(xml or "")
+    if not m:
+        return None
+    raw = m.group(1).strip()
+    if raw and _HEX_DUMP.fullmatch(raw):
+        data = bytes.fromhex("".join(raw.split()))
+        raw = data[: len(data) - len(data) % 2].decode("utf-16-be", "replace")
+    return raw.replace("\x00", "").strip() or None
 
 
 def parse_dec(xml: str) -> int | None:
@@ -247,7 +266,7 @@ def vca_read_requests(base_url: str, line: int = 1) -> list[dict]:
     Described rather than sent, like :func:`version_read_request`, so the I/O
     stays with the caller and can be driven by a fake transport.
     """
-    parsers = {"dec": parse_dec, "str": parse_version}
+    parsers = {"dec": parse_dec, "str": parse_version, "unicode": parse_unicode}
     return [{"field": field, "method": "GET",
              "url": rcp_read_url(base_url, command, type_=type_, num=line),
              "parse": parsers[carried]}

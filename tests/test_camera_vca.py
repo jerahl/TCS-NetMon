@@ -27,10 +27,16 @@ def _str(s):
     return f"<rcp><payload /><result><str>{s}</str></result></rcp>"
 
 
+def _unicode(s):
+    # The live shape: a <len> first, then UTF-16BE bytes as a NUL-padded hex dump.
+    dump = " ".join(f"{b:02x}" for b in s.encode("utf-16-be") + bytes(8))
+    return f"<rcp><payload /><result><len>32</len><str>{dump}\n</str></result></rcp>"
+
+
 ERR = "<rcp><payload /><result><err>0x40</err></result></rcp>"
 
 #: What a camera on profile 2 answers, by command.
-PROFILE_2 = {"0x0803": _dec(1), "0x0a65": _dec(2), "0x0a40": _str("Hallway"),
+PROFILE_2 = {"0x0803": _dec(1), "0x0a65": _dec(2), "0x0a40": _unicode("Hallway"),
              "0x0804": _str("IVA"), "0x0a96": _dec(1)}
 
 
@@ -112,6 +118,14 @@ def test_parse_dec_reads_the_result_not_the_command():
             "<result><hex>0xfd</hex><dec>253</dec></result></rcp>")
     assert bosch.parse_dec(body) == 253
     assert bosch.parse_dec(ERR) is None
+
+
+def test_unicode_profile_name_as_the_camera_sends_it():
+    live = ("<rcp><payload></payload><result>\n\t\t\t<len>32</len>\n\t\t\t<str>"
+            "00 70 00 72 00 6f 00 66  00 69 00 6c 00 65 00 20  00 23 00 31 00 00 00 00  "
+            "00 00 00 00 00 00 00 00 \n</str></result></rcp>")
+    assert bosch.parse_unicode(live) == "profile #1"
+    assert bosch.parse_unicode(ERR) is None
 
 
 def test_mode_labels_follow_the_reference():
