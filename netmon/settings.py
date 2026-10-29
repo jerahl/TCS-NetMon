@@ -109,8 +109,9 @@ REGISTRY: list[SettingDef] = [
     _d("auth.saml_group_viewer", "str", "", "Group ids → viewer",
        map_role=("group_values", "viewer")),
     _d("auth.saml_user_admin", "str", "", "Usernames → admin",
-       "Comma-separated usernames (SAML NameID) granting admin. A bare name also "
-       "matches the local part of an email NameID; case-insensitive.",
+       "Comma-separated usernames granting admin, matched against the "
+       "saml_user_attr claim (default login_id) and the NameID. A bare name "
+       "also matches the local part of an email; case-insensitive.",
        map_role=("user_values", "admin")),
     _d("auth.saml_user_operator", "str", "", "Usernames → operator",
        map_role=("user_values", "operator")),

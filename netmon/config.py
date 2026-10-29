@@ -94,9 +94,13 @@ class AuthConfig:
     role_values: dict[str, set[str]] = field(default_factory=dict)
     group_values: dict[str, set[str]] = field(default_factory=dict)
     # netmon role -> usernames granted it directly, matched case-insensitively
-    # against the assertion NameID (a bare name also matches an email's local
-    # part). Grants individuals access without a ClassLink role/group change.
+    # against the assertion NameID and the `user_attr` claim (a bare name also
+    # matches an email's local part). Grants individuals access without a
+    # ClassLink role/group change.
     user_values: dict[str, set[str]] = field(default_factory=dict)
+    # Claim carrying the username. ClassLink's NameID is its numeric user id
+    # (e.g. 10018762), so a saml_user_* list can only match on this.
+    user_attr: str = "login_id"
     # Diagnostic: when true, the ACS endpoint renders the received assertion's
     # attributes (names/values) + the role-mapping verdict instead of logging
     # the user in. Lets an admin discover what ClassLink actually releases so
@@ -633,6 +637,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         role_values=role_values,
         group_values=group_values,
         user_values=user_values,
+        user_attr=parser.get("auth", "saml_user_attr", fallback="login_id").strip(),
         saml_debug=_as_bool(parser.get("auth", "saml_debug", fallback="false")),
         local_user=parser.get("auth", "local_user", fallback="").strip(),
         local_password_hash=parser.get("auth", "local_password_hash", fallback="").strip(),

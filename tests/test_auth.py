@@ -104,6 +104,20 @@ def test_role_from_username_list():
     assert role_from_attributes({}, cfg) is None
 
 
+def test_username_list_matches_the_login_id_claim():
+    # ClassLink's NameID is its numeric id; the username arrives as login_id.
+    cfg = AuthConfig(user_values={"operator": {"ehammond"}})
+    assert role_from_attributes({}, cfg, "10018762") is None
+    assert role_from_attributes({"login_id": ["EHammond"]}, cfg, "10018762") is Role.operator
+    report = explain_role_mapping({"login_id": ["ehammond"]}, cfg, "10018762")
+    assert report["matches"] == [{"role": "operator", "via_role": [],
+                                  "via_group": [], "via_user": ["ehammond"]}]
+    # The claim name is configurable.
+    cfg = AuthConfig(user_values={"viewer": {"ehammond"}}, user_attr="uid")
+    assert role_from_attributes({"login_id": ["ehammond"]}, cfg, "1") is None
+    assert role_from_attributes({"uid": ["ehammond"]}, cfg, "1") is Role.viewer
+
+
 def test_explain_role_mapping_reports_username_match():
     cfg = AuthConfig(user_values={"operator": {"jsmith"}})
     report = explain_role_mapping({}, cfg, "JSmith@tcs.org")
