@@ -142,16 +142,23 @@ class VendorWriteUnavailable(Exception):
     """This profile cannot perform the write on this device."""
 
 
-def rcp_read_url(base_url: str, command: str, *, type_: str = "P_OCTET") -> str:
+def rcp_read_url(base_url: str, command: str, *, type_: str = "P_OCTET",
+                 num: int | None = None) -> str:
     """One RCP+ **read**. `direction=READ` is what keeps it a read.
 
     The command is a caller-supplied hex string only in the sense that *this
     module* supplies it — callers outside pass a named operation, never a raw
     code, so no request path can be steered from an API body.
+
+    ``num`` selects the video line for per-line commands (the VCA reads); it is
+    left off for device-wide ones, which is how every read before it was sent.
     """
     if not re.fullmatch(r"0x[0-9a-fA-F]{4}", command):
         raise ValueError(f"not an RCP+ command code: {command!r}")
-    return f"{base_url.rstrip('/')}/rcp.xml?command={command}&type={type_}&direction=READ"
+    url = f"{base_url.rstrip('/')}/rcp.xml?command={command}&type={type_}&direction=READ"
+    if num is not None:
+        url += f"&num={int(num)}"
+    return url
 
 
 def parse_rcp_payload(xml: str) -> str | None:
@@ -194,6 +201,57 @@ def platform_probe_requests(base_url: str) -> list[dict]:
     return [{"platform": platform,
              "url": rcp_read_url(base_url, command, type_=type_)}
             for command, type_, platform in PLATFORM_MARKERS]
+
+
+#: VCA (video content analysis) configuration — per video line, all `Read` at
+#: access level "minimal" and available on every CPP generation, from *RCP+
+#: Reference, Firmware 9.80* §2.731-2.795. Read for a fleet summary of which
+#: cameras run analytics and on which profile; the full tagged configuration
+#: (CONF_VIPROC_TAGGED_CONFIG, 0x0a42) is a binary tag list and is deliberately
+#: not read until it can be checked against a real camera.
+VCA_READS = (
+    # (field, command, type, how the answer is carried)
+    ("viproc_id", "0x0803", "T_DWORD", "dec"),       # CONF_VIPROC_ID, 0 = no VCA
+    ("mode", "0x0a65", "T_OCTET", "dec"),            # CONF_VIPROC_MODE
+    ("profile_name", "0x0a40", "P_UNICODE", "str"),  # CONF_VIPROC_CONFIG_NAME
+    ("engine", "0x0804", "P_STRING", "str"),         # CONF_VIPROC_DLL_NAME
+    ("running", "0x0a96", "F_FLAG", "dec"),          # CONF_VCA_TASK_RUNNING_STATE
+)
+
+#: CONF_VIPROC_MODE values, verbatim from the reference's table. Profiles 1-32
+#: are the "manual" range; 0 is listed only as "vca", so it is labelled that and
+#: nothing more specific.
+VCA_MODES = {0: "vca", 0xFD: "off", 0xFE: "scheduler", 0xFF: "script"}
+
+_RESULT_DEC = re.compile(r"<result>\s*(?:<hex>[^<]*</hex>\s*)?<dec>\s*(-?\d+)\s*</dec>", re.S)
+
+
+def parse_dec(xml: str) -> int | None:
+    """A numeric answer — `<result><hex>…</hex><dec>…</dec>` — or None."""
+    m = _RESULT_DEC.search(xml or "")
+    return int(m.group(1)) if m else None
+
+
+def vca_mode_label(mode: int | None) -> str | None:
+    """The reference's name for a CONF_VIPROC_MODE value."""
+    if mode is None:
+        return None
+    if 1 <= mode <= 32:
+        return f"profile {mode}"
+    return VCA_MODES.get(mode, f"unknown (0x{mode:02x})")
+
+
+def vca_read_requests(base_url: str, line: int = 1) -> list[dict]:
+    """The GETs that summarise one video line's VCA configuration.
+
+    Described rather than sent, like :func:`version_read_request`, so the I/O
+    stays with the caller and can be driven by a fake transport.
+    """
+    parsers = {"dec": parse_dec, "str": parse_version}
+    return [{"field": field, "method": "GET",
+             "url": rcp_read_url(base_url, command, type_=type_, num=line),
+             "parse": parsers[carried]}
+            for field, command, type_, carried in VCA_READS]
 
 
 def answered(xml: str) -> bool:

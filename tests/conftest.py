@@ -497,6 +497,24 @@ CREATE TABLE cameras (
 )
 """
 
+# Per-line VCA configuration read from the camera (migration 039).
+CAMERA_VCA_DDL_SQLITE = """
+CREATE TABLE camera_vca (
+    device_id INTEGER NOT NULL,
+    line INTEGER NOT NULL,
+    viproc_id INTEGER,
+    mode INTEGER,
+    mode_label TEXT,
+    profile_name TEXT,
+    engine TEXT,
+    running INTEGER,
+    error TEXT,
+    checked_at TIMESTAMP,
+    updated_at TIMESTAMP,
+    PRIMARY KEY (device_id, line)
+)
+"""
+
 # Milestone camera groups + membership (migration 026).
 CAMERA_GROUPS_DDL_SQLITE = """
 CREATE TABLE camera_groups (
@@ -885,6 +903,7 @@ def create_core_tables(engine) -> None:
             DDI_SCOPES_DDL_SQLITE,
             RECORDING_SERVERS_DDL_SQLITE,
             CAMERAS_DDL_SQLITE,
+            CAMERA_VCA_DDL_SQLITE,
             CAMERA_GROUPS_DDL_SQLITE,
             CAMERA_GROUP_MEMBERS_DDL_SQLITE,
             TRUNKS_DDL_SQLITE,

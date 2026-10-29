@@ -776,7 +776,8 @@ def _cli_refresh_milestone(engine: Engine, cfg: Any, *, apply: bool) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """``python -m netmon.cameras.runner --reconcile-firmware [--apply]``.
+    """``python -m netmon.cameras.runner --reconcile-firmware [--apply]``, or
+    ``--pull-vca [--camera NAME] [--apply]`` for the VCA read (spec 13 §11).
 
     A one-shot, because the drift it repairs is historical: once
     `record_observed_firmware` is in place, new flashes record themselves.
@@ -792,18 +793,31 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--refresh-milestone", action="store_true",
                         help="ask Milestone to re-detect cameras whose VMS-cached "
                              "firmware disagrees with the registry")
+    parser.add_argument("--pull-vca", action="store_true",
+                        help="read each Bosch camera's VCA configuration (read-only)")
+    parser.add_argument("--camera", default=None,
+                        help="with --pull-vca: only the camera with this name")
+    parser.add_argument("--lines", type=int, default=1,
+                        help="with --pull-vca: video lines to read per camera")
+    parser.add_argument("--concurrency", type=int, default=10,
+                        help="with --pull-vca: cameras read at once")
     parser.add_argument("--apply", action="store_true",
                         help="actually do it (default: report only)")
     parser.add_argument("--config", default=None)
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
-    if not (args.reconcile_firmware or args.refresh_milestone):
-        parser.error("choose --reconcile-firmware and/or --refresh-milestone")
+    if not (args.reconcile_firmware or args.refresh_milestone or args.pull_vca):
+        parser.error("choose --reconcile-firmware, --refresh-milestone or --pull-vca")
     cfg = load_config(args.config)
     engine = _db.make_engine(cfg.db.url)
     from netmon import settings as _settings
     cfg = _settings.overlay_config(cfg, engine)   # effective config, as the app sees it
+
+    if args.pull_vca:
+        from netmon.cameras import vca
+        return vca.cli(engine, cfg, camera=args.camera, lines=max(1, args.lines),
+                       concurrency=args.concurrency, apply=args.apply)
 
     if args.refresh_milestone:
         rc = _cli_refresh_milestone(engine, cfg, apply=args.apply)

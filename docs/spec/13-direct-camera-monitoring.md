@@ -295,6 +295,48 @@ surface as alerts, not as a new state dimension, unless the owner wants otherwis
   NetMon (vs. left to Milestone's own event/alarm path via D5 WebSocket)? If the
   D5 alarm feed covers it, the 1-minute motion poll may be droppable entirely.
 
+## 11. VCA configuration read — RCP+ (2026-10-29)
+
+Asked for by the owner: "have NetMon pull the VCA config on the cameras". Scope
+chosen 2026-10-29: a **summary** per video line, from an **opt-in one-shot**, not
+a scheduled sweep.
+
+**Read-only by construction.** Five RCP+ commands, every one `direction=READ`,
+access level "minimal", available on CPP6/7/7.3, CPP13 and CPP14/15/16
+(*RCP+ Reference, Firmware 9.80*, `docs/RCP_doc_9_80_0106.pdf`). No new write,
+so no new sign-off; the request URLs come from the vendor profile, never input.
+
+| Field | Command | Code | Type | Notes |
+|---|---|---|---|---|
+| `viproc_id` | CONF_VIPROC_ID | 0x0803 | t_dword | 0 = no VCA on the line |
+| `mode` | CONF_VIPROC_MODE | 0x0a65 | t_octet | 1–32 profile · 0xFD off · 0xFE scheduler · 0xFF script · 0 "vca" |
+| `profile_name` | CONF_VIPROC_CONFIG_NAME | 0x0a40 | p_unicode | active profile's name |
+| `engine` | CONF_VIPROC_DLL_NAME | 0x0804 | p_string | selected VCA component |
+| `running` | CONF_VCA_TASK_RUNNING_STATE | 0x0a96 | f_flag | 0 = engine short of CPU |
+
+Numbers come back in `<result><dec>`, strings in `<result><str>`, and an unknown
+command as HTTP 200 with `<result><err>0x40</err>` (the reference's CGI section,
+and what §8 of spec 20 saw live).
+
+**Not read:** CONF_VIPROC_TAGGED_CONFIG (0x0a42), the full per-profile rule set.
+It is a binary tag list and is not decoded until it can be checked against a
+real camera; a raw backup was offered and not chosen.
+
+**Run:** `python -m netmon.cameras.runner --pull-vca [--camera NAME] [--lines N]
+[--concurrency 10] [--apply]`. Without `--apply` it prints a report and writes
+nothing; with it, rows land in `camera_vca` (migration 039). Bosch cameras only
+(the profile that has `vca_read_requests`); `[camera_ops]`'s account and connect
+timeout, with a 15 s read timeout. Needs no `[camera_ops]` flag.
+
+**Failure handling (§4 rule 5).** A camera that refuses or times out gets a row
+with `error` set. In the table its last good values stay, `updated_at` holds
+the last successful read and `checked_at` the last attempt, so an unanswered
+camera is visibly stale rather than reading as "VCA off".
+
+**Unverified live as of this commit.** Parsing is fixture-tested against the
+reference's documented reply shape only. The first `--camera` run against a
+real camera settles it; record the result here.
+
 ## Next session
 
 - Awaiting ⛔ **D10** sign-off (spec 11 §6). Nothing is coded until then; the
