@@ -63,40 +63,46 @@ def build_settings(cfg: AuthConfig) -> dict[str, Any]:
     return settings
 
 
-def _user_matches(name_id: str, cfg: AuthConfig, role_name: str) -> list[str]:
-    """Configured usernames for ``role_name`` that match ``name_id``.
+def _user_ids(attributes: dict[str, list], cfg: AuthConfig, name_id: str) -> list[str]:
+    """Every identity a ``saml_user_*`` entry may match: the NameID, plus the
+    ``user_attr`` claim — ClassLink's NameID is a numeric id, so the username
+    only ever arrives as ``login_id``."""
+    ids = [name_id] + [str(v) for v in attributes.get(cfg.user_attr, []) if v is not None]
+    return [i.strip().lower() for i in ids if i and i.strip()]
 
-    Case-insensitive. An entry containing ``@`` must equal the whole NameID; a
-    bare entry also matches the local part of an email NameID, so ``jsmith``
-    grants ``jsmith@district.org``.
+
+def _user_matches(ids: list[str], cfg: AuthConfig, role_name: str) -> list[str]:
+    """Configured usernames for ``role_name`` that match any of ``ids``.
+
+    Case-insensitive. An entry containing ``@`` must equal a whole id; a bare
+    entry also matches the local part of an email id, so ``jsmith`` grants
+    ``jsmith@district.org``.
     """
-    nid = (name_id or "").strip().lower()
-    if not nid:
-        return []
-    local = nid.split("@", 1)[0]
     return sorted(
         u for u in cfg.user_values.get(role_name, set())
-        if u.lower() == nid or ("@" not in u and u.lower() == local)
+        if any(u.lower() == i or ("@" not in u and u.lower() == i.split("@", 1)[0])
+               for i in ids)
     )
 
 
 def role_from_attributes(attributes: dict[str, list], cfg: AuthConfig,
                          name_id: str = "") -> Role | None:
     """Highest NetMon role granted by the assertion's role/group_ids claims
-    or by the NameID appearing in a ``saml_user_*`` list.
+    or by the NameID / ``user_attr`` claim appearing in a ``saml_user_*`` list.
 
     Pure — no I/O. ``attributes`` is the OneLogin ``get_attributes()`` shape:
     ``{attr_name: [values]}``.
     """
     role_vals = {str(v) for v in attributes.get(cfg.role_attr, []) if v is not None}
     group_vals = {str(v) for v in attributes.get(cfg.group_attr, []) if v is not None}
+    ids = _user_ids(attributes, cfg, name_id)
 
     best: Role | None = None
     for role_name in ROLES:  # low → high; last match wins
         grants = cfg.role_values.get(role_name, set())
         ggrants = cfg.group_values.get(role_name, set())
         if ((role_vals & grants) or (group_vals & ggrants)
-                or _user_matches(name_id, cfg, role_name)):
+                or _user_matches(ids, cfg, role_name)):
             best = Role(role_name)
     return best
 
@@ -109,16 +115,17 @@ def explain_role_mapping(attributes: dict[str, list], cfg: AuthConfig,
     attributes NetMon looks at, the values it actually saw for each, which
     configured grant each matched, and the resulting role (mirrors
     ``role_from_attributes`` exactly). ``matches`` is ordered viewer→admin.
-    ``name_id`` is checked against the ``saml_user_*`` lists.
+    ``name_id`` and the ``user_attr`` claim are checked against ``saml_user_*``.
     """
     role_vals = [str(v) for v in attributes.get(cfg.role_attr, []) if v is not None]
     group_vals = [str(v) for v in attributes.get(cfg.group_attr, []) if v is not None]
+    ids = _user_ids(attributes, cfg, name_id)
 
     matches: list[dict[str, Any]] = []
     for role_name in ROLES:  # low → high
         via_role = sorted(set(role_vals) & cfg.role_values.get(role_name, set()))
         via_group = sorted(set(group_vals) & cfg.group_values.get(role_name, set()))
-        via_user = _user_matches(name_id, cfg, role_name)
+        via_user = _user_matches(ids, cfg, role_name)
         if via_role or via_group or via_user:
             matches.append({"role": role_name, "via_role": via_role,
                             "via_group": via_group, "via_user": via_user})

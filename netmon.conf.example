@@ -96,8 +96,11 @@ saml_group_attr = group_ids
 # saml_group_admin = 1001
 # saml_group_operator = 1002
 # Or grant individuals by username — matched case-insensitively against the
-# assertion NameID; a bare name also matches an email NameID's local part
-# (jsmith grants jsmith@district.org). Also editable at #/settings → Single sign-on.
+# saml_user_attr claim and the assertion NameID; a bare name also matches an
+# email's local part (jsmith grants jsmith@district.org). ClassLink's NameID is
+# its numeric user id, so the username has to come from the claim.
+# Also editable at #/settings → Single sign-on.
+# saml_user_attr = login_id
 # saml_user_admin = jsmith
 # saml_user_operator = kdoe, mlee@district.org
 # saml_user_viewer =

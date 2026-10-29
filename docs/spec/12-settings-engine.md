@@ -48,7 +48,8 @@ str/int/bool/secret, default, label, description, bounds, restart flag). Keys
 mirror the INI layout: `poller.ping_interval_s`, `xiq.api_token`,
 `engine.shadow`, `auth.saml_role_admin`, … Sections: web (session TTL), auth
 (SAML IdP/SP + role/group/username mapping — `saml_user_*` grants
-individuals by NameID; SP key is a secret), poller (incl.
+individuals by the `saml_user_attr` claim, default `login_id`, or NameID —
+ClassLink's NameID is a numeric id; SP key is a secret), poller (incl.
 `snmp_community` secret), snmp_inventory, engine (incl. `shadow` — flipping it
 off starts real email and is called out in the UI), and the five sources
 (enabled, URLs, intervals, credentials as secrets).

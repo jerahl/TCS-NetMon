@@ -179,7 +179,8 @@ def saml_debug_page(
             f'<code>[auth] saml_role_{{viewer|operator|admin}}</code> (matched '
             f'against attribute <code>{e(cfg.auth.role_attr)}</code>) or '
             f'<code>saml_group_*</code> (against '
-            f'<code>{e(cfg.auth.group_attr)}</code>), or add the NameID to '
+            f'<code>{e(cfg.auth.group_attr)}</code>), or add the username '
+            f'(<code>{e(cfg.auth.user_attr)}</code> or NameID) to '
             f'<code>saml_user_{{viewer|operator|admin}}</code>.</p>'
         )
 
