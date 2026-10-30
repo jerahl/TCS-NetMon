@@ -62,7 +62,7 @@ def complete_login(attributes: dict[str, list], name_id: str, cfg: Config,
     role = saml.role_from_attributes(attributes, cfg.auth, name_id)
     if role is None:
         raise saml.SamlError(f"user {name_id!r} maps to no NetMon role")
-    groups = [str(v) for v in attributes.get(cfg.auth.group_attr, [])]
+    groups = saml.claim_values(attributes, cfg.auth.group_attr)
     _issue_session(name_id, role, groups, cfg, sessions, response)
     return role
 
