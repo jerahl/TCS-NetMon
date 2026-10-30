@@ -104,6 +104,18 @@ def test_role_from_username_list():
     assert role_from_attributes({}, cfg) is None
 
 
+def test_comma_joined_group_claim_is_split():
+    # What ClassLink actually sends: every group in one attribute value.
+    cfg = AuthConfig(group_attr="group_names",
+                     group_values={"operator": {"IT Users"}, "viewer": {"IT Staff"}})
+    attrs = {"group_names": ["ClassLink Admins,CO-Everyone,GetHelp_Admin,IT Staff"]}
+    assert role_from_attributes(attrs, cfg, "10018762") is Role.viewer
+    assert explain_role_mapping(attrs, cfg)["matches"] == [
+        {"role": "viewer", "via_role": [], "via_group": ["IT Staff"], "via_user": []}]
+    # A partial name is not a match.
+    assert role_from_attributes({"group_names": ["IT Staff Assistants"]}, cfg) is None
+
+
 def test_username_list_matches_the_login_id_claim():
     # ClassLink's NameID is its numeric id; the username arrives as login_id.
     cfg = AuthConfig(user_values={"operator": {"ehammond"}})

@@ -63,6 +63,21 @@ def build_settings(cfg: AuthConfig) -> dict[str, Any]:
     return settings
 
 
+def claim_values(attributes: dict[str, list], attr: str) -> list[str]:
+    """An attribute's values, with comma-joined ones split apart.
+
+    ClassLink releases `group_names` as ONE value —
+    "ClassLink Admins,CO-Everyone,GetHelp_Admin,IT Staff" — rather than one
+    value per group, so matching the raw value against "IT Staff" never hits.
+    """
+    out: list[str] = []
+    for v in attributes.get(attr, []):
+        if v is None:
+            continue
+        out.extend(p.strip() for p in str(v).split(",") if p.strip())
+    return out
+
+
 def _user_ids(attributes: dict[str, list], cfg: AuthConfig, name_id: str) -> list[str]:
     """Every identity a ``saml_user_*`` entry may match: the NameID, plus the
     ``user_attr`` claim — ClassLink's NameID is a numeric id, so the username
@@ -93,8 +108,8 @@ def role_from_attributes(attributes: dict[str, list], cfg: AuthConfig,
     Pure — no I/O. ``attributes`` is the OneLogin ``get_attributes()`` shape:
     ``{attr_name: [values]}``.
     """
-    role_vals = {str(v) for v in attributes.get(cfg.role_attr, []) if v is not None}
-    group_vals = {str(v) for v in attributes.get(cfg.group_attr, []) if v is not None}
+    role_vals = set(claim_values(attributes, cfg.role_attr))
+    group_vals = set(claim_values(attributes, cfg.group_attr))
     ids = _user_ids(attributes, cfg, name_id)
 
     best: Role | None = None
@@ -117,8 +132,8 @@ def explain_role_mapping(attributes: dict[str, list], cfg: AuthConfig,
     ``role_from_attributes`` exactly). ``matches`` is ordered viewer→admin.
     ``name_id`` and the ``user_attr`` claim are checked against ``saml_user_*``.
     """
-    role_vals = [str(v) for v in attributes.get(cfg.role_attr, []) if v is not None]
-    group_vals = [str(v) for v in attributes.get(cfg.group_attr, []) if v is not None]
+    role_vals = claim_values(attributes, cfg.role_attr)
+    group_vals = claim_values(attributes, cfg.group_attr)
     ids = _user_ids(attributes, cfg, name_id)
 
     matches: list[dict[str, Any]] = []
