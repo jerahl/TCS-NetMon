@@ -67,6 +67,14 @@ consulted only *after* Milestone has independently said the device is down —
 which is what the `ping_up` branch does, and why it branches toward a VMS
 reconnect rather than a power cycle.
 
+## Escalation
+
+A live `alert` node opens a real `crit` alert under the `automation_escalation`
+rule and emails through `netmon.engine.notify` — `[engine] shadow`, SMTP
+settings and maintenance windows apply as for any alert. The rule is
+`managed_by = 'automation'`, so the alert engine never evaluates it; the runner
+closes the alert once the device is no longer down. See spec 22 §6b.
+
 ## Failure modes
 
 * **A graph that no longer validates** is skipped and logged as an error; it

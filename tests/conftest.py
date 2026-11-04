@@ -81,7 +81,8 @@ CREATE TABLE alert_rules (
     severity TEXT NOT NULL DEFAULT 'warn',
     min_duration_s INTEGER NOT NULL DEFAULT 0,
     target TEXT,
-    enabled INTEGER NOT NULL DEFAULT 1
+    enabled INTEGER NOT NULL DEFAULT 1,
+    managed_by TEXT NOT NULL DEFAULT 'engine'
 )
 """
 

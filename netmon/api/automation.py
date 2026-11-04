@@ -247,7 +247,8 @@ def set_workflow_state(workflow_id: int, body: ToggleBody,
 def seed_default(engine: Engine = Depends(get_engine),
                  user=Depends(require_role(Role.admin))) -> dict:
     created = wf_seed.install(engine, actor=_actor(user))
-    return {"created": created, "name": wf_seed.WORKFLOW_NAME}
+    upgraded = False if created else wf_seed.upgrade(engine)
+    return {"created": created, "upgraded": upgraded, "name": wf_seed.WORKFLOW_NAME}
 
 
 # ───────────────────────── runs ─────────────────────────
@@ -420,7 +421,7 @@ async def approve_proposal(proposal_id: int, body: DecisionBody, request: Reques
         "decided_at = :at WHERE id = :id",
         {"by": _actor(user), "at": datetime.now(timezone.utc), "id": proposal_id},
     )
-    _close_run(engine, row, f"approved and executed by {_actor(user)}")
+    _release_after_approval(engine, row, f"approved and executed by {_actor(user)}")
     log.warning("proposal %s (%s) approved and executed by %s",
                 proposal_id, action, _actor(user))
     return {"id": proposal_id, "status": "executed", "result": result}
@@ -477,9 +478,37 @@ def _close_run(engine: Engine, proposal: dict, message: str) -> None:
         return
     db.execute(
         engine,
-        "UPDATE workflow_runs SET status = 'done', message = :m, finished_at = :now "
-        "WHERE id = :id AND status = 'awaiting_approval'",
+        "UPDATE workflow_runs SET status = 'done', message = :m, finished_at = :now, "
+        "resume_node = NULL WHERE id = :id AND status = 'awaiting_approval'",
         {"m": message[:500], "now": datetime.now(timezone.utc), "id": proposal["run_id"]},
+    )
+
+
+def _release_after_approval(engine: Engine, proposal: dict, message: str) -> None:
+    """Hand the run back to the engine if anything is wired after the action.
+
+    The runner stored the follow-up node (e.g. "wait 5 minutes" after a PoE
+    cycle) as the run's cursor when it proposed. Only now that the action has
+    actually executed is it honest to continue: the run is parked as `waiting`
+    with `resume_at = now`, and the next automation cycle resumes it there. A
+    run with nothing after the action closes as before.
+    """
+    run_id = proposal.get("run_id")
+    if not run_id:
+        return
+    run = db.fetch_one(engine, "SELECT status, resume_node FROM workflow_runs WHERE id = :id",
+                       {"id": run_id})
+    node = str((run or {}).get("resume_node") or "")
+    if not run or run["status"] != "awaiting_approval" or not node:
+        _close_run(engine, proposal, message)
+        return
+    now = datetime.now(timezone.utc)
+    db.execute(
+        engine,
+        "UPDATE workflow_runs SET status = 'waiting', resume_at = :now, message = :m, "
+        "finished_at = NULL "
+        "WHERE id = :id AND status = 'awaiting_approval'",
+        {"m": f"{message}; continuing at '{node}'"[:500], "now": now, "id": run_id},
     )
 
 

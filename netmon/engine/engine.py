@@ -44,6 +44,42 @@ def _to_dt(value: Any) -> datetime | None:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+def maintenance_active(engine: Engine, device_id: int, now: datetime) -> bool:
+    """Is a maintenance window covering this device, its site, or its type?
+
+    Module-level so the automation runner's escalations are suppressed by
+    exactly the same windows as engine alerts.
+    """
+    dev = db.fetch_one(engine, "SELECT site, device_type FROM devices WHERE id = :id",
+                       {"id": device_id})
+    if not dev:
+        return False
+    rows = db.fetch_all(
+        engine,
+        "SELECT scope_type, scope_value FROM maintenance_windows "
+        "WHERE starts_at <= :now AND ends_at >= :now",
+        {"now": now},
+    )
+    for w in rows:
+        if w["scope_type"] == "device" and w["scope_value"] == str(device_id):
+            return True
+        if w["scope_type"] == "site" and w["scope_value"] == (dev.get("site") or ""):
+            return True
+        if w["scope_type"] == "device_type" and w["scope_value"] == dev["device_type"]:
+            return True
+    return False
+
+
+def open_alert_id(engine: Engine, device_id: int, rule_id: int) -> int | None:
+    row = db.fetch_one(
+        engine,
+        "SELECT id FROM alerts WHERE device_id = :d AND rule_id = :r AND closed_at IS NULL "
+        "ORDER BY id DESC LIMIT 1",
+        {"d": device_id, "r": rule_id},
+    )
+    return int(row["id"]) if row else None
+
+
 class AlertEngine:
     name = "engine"
 
@@ -59,7 +95,11 @@ class AlertEngine:
         return db.fetch_all(
             self.engine,
             "SELECT id, name, dimension, device_types, `condition`, severity, "
-            "min_duration_s, target FROM alert_rules WHERE enabled = 1",
+            "min_duration_s, target FROM alert_rules WHERE enabled = 1 "
+            # Automation-managed rules are opened and closed by the workflow
+            # runner (migration 040); evaluating them here would close its
+            # alerts on the next cycle.
+            "AND managed_by = 'engine'",
         )
 
     def _states(self, dimension: str, device_types: str | None = None) -> list[dict[str, Any]]:
@@ -100,33 +140,10 @@ class AlertEngine:
         return _to_dt(row["t"]) if row and row["t"] else _to_dt(fallback)
 
     def _maintenance_active(self, device_id: int, now: datetime) -> bool:
-        dev = db.fetch_one(self.engine, "SELECT site, device_type FROM devices WHERE id = :id",
-                           {"id": device_id})
-        if not dev:
-            return False
-        rows = db.fetch_all(
-            self.engine,
-            "SELECT scope_type, scope_value FROM maintenance_windows "
-            "WHERE starts_at <= :now AND ends_at >= :now",
-            {"now": now},
-        )
-        for w in rows:
-            if w["scope_type"] == "device" and w["scope_value"] == str(device_id):
-                return True
-            if w["scope_type"] == "site" and w["scope_value"] == (dev.get("site") or ""):
-                return True
-            if w["scope_type"] == "device_type" and w["scope_value"] == dev["device_type"]:
-                return True
-        return False
+        return maintenance_active(self.engine, device_id, now)
 
     def _open_alert_id(self, device_id: int, rule_id: int) -> int | None:
-        row = db.fetch_one(
-            self.engine,
-            "SELECT id FROM alerts WHERE device_id = :d AND rule_id = :r AND closed_at IS NULL "
-            "ORDER BY id DESC LIMIT 1",
-            {"d": device_id, "r": rule_id},
-        )
-        return int(row["id"]) if row else None
+        return open_alert_id(self.engine, device_id, rule_id)
 
     # --- cycle ---------------------------------------------------------------
 

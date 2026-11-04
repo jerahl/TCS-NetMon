@@ -70,6 +70,23 @@ CAMERA_WORKFLOW: dict[str, Any] = {
         {"id": "poe", "kind": "action", "label": "Cycle PoE on the remembered port",
          "position": {"x": 1000, "y": 300},
          "config": {"action": "poe_cycle"}},
+        # PoE is disruptive, so the run parks at `poe` until an operator approves
+        # the proposal; approval resumes it here (spec 22 §6a). The wait gives
+        # the camera time to boot and Milestone time to reconnect before the
+        # re-check, so a slow boot is not mistaken for a failed cycle.
+        {"id": "poe_settle", "kind": "wait", "label": "Wait 5 minutes",
+         "position": {"x": 1260, "y": 300},
+         "config": {"seconds": 300}},
+        {"id": "poe_recheck", "kind": "branch", "label": "Still down?",
+         "position": {"x": 1500, "y": 300},
+         "config": {"predicate": "still_down"}},
+        {"id": "poe_failed", "kind": "alert", "label": "Escalate: PoE cycle did not help",
+         "position": {"x": 1760, "y": 240},
+         "config": {"summary": "{device} at {site} is still down 5 minutes after its PoE "
+                               "port was cycled — needs a site visit"}},
+        {"id": "poe_recovered", "kind": "stop", "label": "Recovered",
+         "position": {"x": 1760, "y": 380},
+         "config": {}},
         {"id": "no_port", "kind": "alert", "label": "Escalate: no confirmed port",
          "position": {"x": 760, "y": 500},
          "config": {"summary": "{device} at {site} is down and NetMon has no confirmed "
@@ -79,7 +96,7 @@ CAMERA_WORKFLOW: dict[str, Any] = {
          "config": {"summary": "{device} at {site} is down, and so is the switch its "
                                "port is on — the camera is probably not the fault"}},
         {"id": "end", "kind": "stop", "label": "Done",
-         "position": {"x": 1260, "y": 420},
+         "position": {"x": 1260, "y": 520},
          "config": {}},
     ],
     "edges": [
@@ -96,7 +113,11 @@ CAMERA_WORKFLOW: dict[str, Any] = {
         {"source": "have_port", "target": "no_port", "when": "false"},
         {"source": "switch_ok", "target": "poe", "when": "true"},
         {"source": "switch_ok", "target": "switch_down", "when": "false"},
-        {"source": "poe", "target": "end"},
+        {"source": "poe", "target": "poe_settle"},
+        {"source": "poe_settle", "target": "poe_recheck"},
+        {"source": "poe_recheck", "target": "poe_failed", "when": "true"},
+        {"source": "poe_recheck", "target": "poe_recovered", "when": "false"},
+        {"source": "poe_failed", "target": "end"},
         {"source": "no_port", "target": "end"},
         {"source": "switch_down", "target": "end"},
     ],
@@ -108,8 +129,26 @@ DESCRIPTION = (
     "ping the VMS connection is the likely fault, so ask Milestone to re-detect it and "
     "only propose a camera reboot if that does not help. If it answers nothing, propose "
     "a PoE cycle — but only on a port that was confirmed safe while the camera was "
-    "healthy, and only when that port's switch is itself up."
+    "healthy, and only when that port's switch is itself up. Once the cycle is approved "
+    "and run, wait 5 minutes and re-check; if the camera is still down, escalate."
 )
+
+#: SHA-256 of every default graph shipped before this one, canonicalised as
+#: `_digest` does. A stored row matching one of these was never edited by the
+#: owner, so `upgrade()` may replace it; anything else is theirs and is left
+#: alone.
+_SUPERSEDED_DIGESTS = frozenset({
+    # 22.2 — PoE arm ended at the proposal, no post-cycle re-check.
+    "a7f233ad552e51126f0e6fbdf07fbad2c73b42a9e8b9c6134fb10f5c9e2402c1",
+})
+
+
+def _digest(doc: Any) -> str:
+    import hashlib
+    if isinstance(doc, (str, bytes)):
+        doc = json.loads(doc)
+    return hashlib.sha256(
+        json.dumps(doc, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def install(engine: Engine, *, actor: str = "netmon-seed") -> bool:
@@ -130,5 +169,33 @@ def install(engine: Engine, *, actor: str = "netmon-seed") -> bool:
         "VALUES (:n, :t, :d, :g, 0, 1, 1, :by)",
         {"n": WORKFLOW_NAME, "t": TITLE, "d": DESCRIPTION,
          "g": json.dumps(CAMERA_WORKFLOW), "by": actor},
+    )
+    return True
+
+
+def upgrade(engine: Engine) -> bool:
+    """Bring an *unedited* seeded workflow up to the current default graph.
+
+    Only replaces a graph whose digest matches a previously shipped default, so
+    an owner's edits are never overwritten. `enabled` and `shadow` are not
+    touched — a graph change must not take anything live. Returns True if the
+    row was upgraded.
+    """
+    gr.parse(CAMERA_WORKFLOW)
+    row = db.fetch_one(engine, "SELECT id, graph, version FROM workflows WHERE name = :n",
+                       {"n": WORKFLOW_NAME})
+    if not row:
+        return False
+    try:
+        current = _digest(row["graph"])
+    except ValueError:
+        return False  # unparseable: the owner's problem to see, not ours to paper over
+    if current not in _SUPERSEDED_DIGESTS:
+        return False
+    db.execute(
+        engine,
+        "UPDATE workflows SET graph = :g, description = :d, version = :v WHERE id = :id",
+        {"g": json.dumps(CAMERA_WORKFLOW), "d": DESCRIPTION,
+         "v": int(row.get("version") or 1) + 1, "id": row["id"]},
     )
     return True

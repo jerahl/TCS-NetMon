@@ -153,6 +153,42 @@ trigger: source_status = down for >= 15m, device_type = camera
              -> wait 5m, re-check; still down? alert, do not retry
 ```
 
+### 6a. After a PoE cycle: wait, re-check, escalate
+
+A disruptive action never runs from the engine, so the post-cycle steps cannot
+simply follow it in the same evaluation. Instead, when the runner proposes a
+disruptive action it stores the node wired after it as the run's
+`resume_node` (status `awaiting_approval`, no `resume_at`). Approving the
+proposal executes the action and then parks the run as `waiting` with
+`resume_at = now`; the next automation cycle resumes it at that node — here
+`poe_settle` (wait 5m) → `poe_recheck` (`still_down`) → `poe_failed` (escalate)
+or `poe_recovered`. Dismissing, expiring or a failed execution closes the run
+without continuing, so a "still down" escalation can never be raised about a
+cycle that did not happen. There is no retry: the escalate arm ends the run.
+
+`seed.upgrade()` (called at startup and by `POST /api/automation/seed`)
+replaces a stored default graph with the current one **only** if its digest
+matches a previously shipped default — an owner-edited graph is left alone,
+and `enabled`/`shadow` are never touched.
+
+### 6b. Escalate opens a real alert
+
+An `alert` node in a **live** workflow opens a `crit` alert under the
+`automation_escalation` rule (migration `040`) and notifies through the alert
+engine's notifier — so `[engine] shadow`, the SMTP settings, `default_target`
+(or the rule's own `target`) and maintenance windows all apply exactly as for
+engine alerts. In a shadow workflow it only records `would_run`.
+
+* `alert_rules.managed_by = 'automation'` keeps the alert engine from
+  evaluating the rule (it would otherwise close the alert on its next cycle).
+* One open alert per device: a repeat escalation refreshes `last_seen_at` and
+  sends nothing.
+* The runner closes the alert each cycle once the device's state no longer
+  matches the rule's condition (`source_status` ≠ `down`). `blind`/`unknown` is
+  not a recovery and leaves it open.
+* Rule missing or disabled → the step is recorded `failed` and logged at ERROR;
+  disabling the rule also lets the engine's orphan sweep close open ones.
+
 Note what the ping-down branch does **not** do: it does not resolve the port
 live, and it does not act on 211 cameras that merely ignore ICMP, because ICMP
 is only consulted *after* Milestone has independently said the device is down.
@@ -187,6 +223,11 @@ per-kind node renderers, an inspector driven entirely by `/api/automation/meta`
 guard panel, the branch-arm editor, the approval queue and the run trail with
 the shadow report. Route `#/automation`, nav entry, 3 render-checks including a
 graph round-trip.
+
+**Built 2026-11-04:** §6a — post-PoE wait 5m → re-check → escalate on the
+default camera graph; runs resume after an approved disruptive action;
+`seed.upgrade()` for unedited default graphs. §6b — escalate nodes open a real
+alert and notify (migration `040`, `alert_rules.managed_by`).
 
 **Start 22.4 with:**
 

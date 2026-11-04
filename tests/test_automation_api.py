@@ -312,3 +312,41 @@ def test_run_detail_returns_its_steps(tmp_path):
     assert body["device"] == "MLK-CAM-1"
     assert len(body["steps"]) == 1
     assert body["steps"][0]["node_id"] == "trigger"
+
+
+def test_approval_resumes_a_run_with_a_follow_up(tmp_path, monkeypatch):
+    """§6a: an approved PoE cycle hands the run back to the engine at the node
+    wired after it, instead of closing it."""
+    from netmon.api import automation as auto_api
+
+    async def fake_dispatch(*a, **k):
+        return {"ok": True}
+    monkeypatch.setattr(auto_api, "_dispatch", fake_dispatch)
+    client, url = _client(tmp_path)
+    pid, run_id = _proposal(url)
+    engine = db.make_engine(url)
+    db.execute(engine, "UPDATE workflow_runs SET resume_node = 'poe_settle' WHERE id = :i",
+               {"i": run_id})
+    with client as c:
+        assert c.post(f"/api/automation/proposals/{pid}/approve", json={}).status_code == 200
+    run = db.fetch_one(engine, "SELECT status, resume_node, resume_at FROM workflow_runs "
+                               "WHERE id = :i", {"i": run_id})
+    assert run["status"] == "waiting"
+    assert run["resume_node"] == "poe_settle"
+    assert run["resume_at"] is not None
+    engine.dispose()
+
+
+def test_dismissal_never_runs_the_follow_up(tmp_path):
+    client, url = _client(tmp_path)
+    pid, run_id = _proposal(url)
+    engine = db.make_engine(url)
+    db.execute(engine, "UPDATE workflow_runs SET resume_node = 'poe_settle' WHERE id = :i",
+               {"i": run_id})
+    with client as c:
+        assert c.post(f"/api/automation/proposals/{pid}/dismiss", json={}).status_code == 200
+    run = db.fetch_one(engine, "SELECT status, resume_node FROM workflow_runs WHERE id = :i",
+                       {"i": run_id})
+    assert run["status"] == "done"
+    assert run["resume_node"] is None
+    engine.dispose()

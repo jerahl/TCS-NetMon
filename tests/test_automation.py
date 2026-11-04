@@ -642,3 +642,253 @@ def test_an_unimplemented_non_disruptive_action_refuses_loudly(engine):
     step = [s for s in steps(engine) if s["node_id"] == "a"][0]
     assert step["decision"] == "failed"
     assert "no automated implementation" in step["detail"]
+
+
+# ───────────────────────── post-PoE wait, re-check, escalate (§6a) ─────────────────────────
+
+def _a_poe_candidate(engine):
+    dev = a_broken_camera(engine)
+    sw = add_device(engine, "sw-1", device_type="switch")
+    set_state(engine, sw, "ping", "up")
+    remember_port(engine, dev, sw, age_s=3600)
+    return dev
+
+
+def _approve(engine):
+    """What the approval endpoint does to the run once the PoE cycle has run."""
+    from netmon.api.automation import _release_after_approval
+    proposal = db.fetch_one(engine, "SELECT * FROM action_proposals")
+    db.execute(engine, "UPDATE action_proposals SET status = 'executed'")
+    _release_after_approval(engine, dict(proposal), "approved and executed by test")
+
+
+def test_a_poe_proposal_remembers_where_to_continue(engine):
+    install_workflow(engine, shadow=0)
+    _a_poe_candidate(engine)
+    asyncio.run(runner_for(engine).run_once())
+    run = db.fetch_one(engine, "SELECT status, resume_node, resume_at FROM workflow_runs")
+    assert run["status"] == "awaiting_approval"
+    assert run["resume_node"] == "poe_settle"
+    # Not eligible for the resume sweep until a human approves.
+    assert run["resume_at"] is None
+
+
+def test_an_approved_poe_cycle_waits_then_escalates_if_still_down(engine):
+    install_workflow(engine, shadow=0)
+    _a_poe_candidate(engine)
+    r = runner_for(engine)
+    asyncio.run(r.run_once())
+    _approve(engine)
+
+    asyncio.run(r.run_once())  # resumes at poe_settle and parks for 5m
+    run = db.fetch_one(engine, "SELECT status, resume_node, finished_at FROM workflow_runs")
+    assert run["status"] == "waiting"
+    assert run["resume_node"] == "poe_recheck"
+    assert run["finished_at"] is None
+
+    db.execute(engine, "UPDATE workflow_runs SET resume_at = :t",
+               {"t": NOW - timedelta(minutes=1)})
+    asyncio.run(r.run_once())
+    visited = [s["node_id"] for s in steps(engine)]
+    assert visited[-3:] == ["poe_recheck", "poe_failed", "end"]
+    assert db.fetch_one(engine, "SELECT status FROM workflow_runs")["status"] == "done"
+    # Escalate, never retry: still exactly one PoE proposal.
+    assert len(db.fetch_all(engine, "SELECT id FROM action_proposals")) == 1
+
+
+def test_an_approved_poe_cycle_that_worked_stops_as_recovered(engine):
+    install_workflow(engine, shadow=0)
+    dev = _a_poe_candidate(engine)
+    r = runner_for(engine)
+    asyncio.run(r.run_once())
+    _approve(engine)
+    asyncio.run(r.run_once())
+
+    db.execute(engine, "UPDATE device_state SET value = 'up' "
+                       "WHERE device_id = :d AND dimension = 'source_status'", {"d": dev})
+    db.execute(engine, "UPDATE workflow_runs SET resume_at = :t",
+               {"t": NOW - timedelta(minutes=1)})
+    asyncio.run(r.run_once())
+    visited = [s["node_id"] for s in steps(engine)]
+    assert "poe_recovered" in visited
+    assert "poe_failed" not in visited
+
+
+def test_shadow_poe_names_the_follow_up_but_does_not_park(engine):
+    install_workflow(engine, shadow=1)
+    _a_poe_candidate(engine)
+    asyncio.run(runner_for(engine).run_once())
+    poe = [s for s in steps(engine) if s["node_id"] == "poe"][0]
+    assert "continues at 'poe_settle'" in poe["detail"]
+    run = db.fetch_one(engine, "SELECT status, resume_node FROM workflow_runs")
+    assert run["status"] == "done"
+    assert run["resume_node"] is None
+
+
+def test_seed_upgrade_replaces_only_an_unedited_default(engine):
+    import copy
+    from netmon.automation.seed import _SUPERSEDED_DIGESTS, _digest
+    old = copy.deepcopy(seed.CAMERA_WORKFLOW)
+    old["nodes"] = [n for n in old["nodes"]
+                    if n["id"] not in ("poe_settle", "poe_recheck", "poe_failed",
+                                       "poe_recovered")]
+    for n in old["nodes"]:
+        if n["id"] == "end":
+            n["position"] = {"x": 1260, "y": 420}
+    old["edges"] = [e for e in old["edges"]
+                    if e["source"] not in ("poe", "poe_settle", "poe_recheck", "poe_failed")]
+    old["edges"].insert(old["edges"].index(
+        {"source": "no_port", "target": "end"}), {"source": "poe", "target": "end"})
+    assert _digest(old) in _SUPERSEDED_DIGESTS, "legacy fixture drifted from the shipped graph"
+
+    install_workflow(engine, doc=old)
+    db.execute(engine, "UPDATE workflows SET enabled = 1, shadow = 1")
+    assert seed.upgrade(engine) is True
+    row = db.fetch_one(engine, "SELECT graph, enabled, shadow, version FROM workflows")
+    assert _digest(row["graph"]) == _digest(seed.CAMERA_WORKFLOW)
+    assert (row["enabled"], row["shadow"], row["version"]) == (1, 1, 2)
+    assert seed.upgrade(engine) is False  # already current
+
+    # An owner-edited graph is never overwritten.
+    edited = copy.deepcopy(old)
+    edited["nodes"][0]["label"] = "mine"
+    db.execute(engine, "UPDATE workflows SET graph = :g", {"g": json.dumps(edited)})
+    assert seed.upgrade(engine) is False
+
+
+# ───────────────────────── escalation opens a real alert (§6b) ─────────────────────────
+
+from netmon.config import EngineConfig  # noqa: E402
+
+
+def _escalation_rule(engine, enabled=1):
+    db.execute(engine, "INSERT INTO alert_rules (name, dimension, `condition`, severity, "
+                       "min_duration_s, enabled, managed_by) VALUES "
+                       "('automation_escalation', 'source_status', "
+                       "'{\"op\":\"eq\",\"value\":\"down\"}', 'crit', 0, :e, 'automation')",
+               {"e": enabled})
+
+
+def _escalated_run(engine, engine_cfg=None):
+    """Drive a live run through an approved PoE cycle to the escalate node."""
+    install_workflow(engine, shadow=0)
+    dev = _a_poe_candidate(engine)
+    r = WorkflowRunner(engine, AutomationConfig(), action_enabled=lambda k: True,
+                       engine_cfg=engine_cfg)
+    asyncio.run(r.run_once())
+    _approve(engine)
+    asyncio.run(r.run_once())
+    db.execute(engine, "UPDATE workflow_runs SET resume_at = :t",
+               {"t": NOW - timedelta(minutes=1)})
+    asyncio.run(r.run_once())
+    return dev, r
+
+
+def test_escalate_opens_a_crit_alert_and_logs_the_notification(engine):
+    _escalation_rule(engine)
+    dev, _ = _escalated_run(engine)
+    alert = db.fetch_one(engine, "SELECT id, device_id, closed_at FROM alerts")
+    assert alert["device_id"] == dev and alert["closed_at"] is None
+    note = db.fetch_one(engine, "SELECT alert_id, shadow, payload_summary FROM notifications")
+    assert note["alert_id"] == alert["id"]
+    assert note["shadow"] == 1  # default [engine] shadow: logged, not mailed
+    assert "still down 5 minutes after its PoE port was cycled" in note["payload_summary"]
+    step = [s for s in steps(engine) if s["node_id"] == "poe_failed"][0]
+    assert step["decision"] == "taken"
+    assert f"alert #{alert['id']} opened" in step["detail"]
+
+
+def test_escalate_emails_when_the_engine_is_live(engine, monkeypatch):
+    from netmon.engine import notify
+    sent = []
+    monkeypatch.setattr(notify, "_send_email",
+                        lambda cfg, target, summary: sent.append((target, summary)))
+    _escalation_rule(engine)
+    cfg = EngineConfig(shadow=False, smtp_host="smtp.test", smtp_from="netmon@test",
+                       default_target="noc@test")
+    _escalated_run(engine, engine_cfg=cfg)
+    assert len(sent) == 1
+    assert sent[0][0] == "noc@test"
+    assert "cam-broken" in sent[0][1]
+    assert db.fetch_one(engine, "SELECT shadow FROM notifications")["shadow"] == 0
+
+
+def test_escalate_respects_maintenance(engine, monkeypatch):
+    from netmon.engine import notify
+    sent = []
+    monkeypatch.setattr(notify, "_send_email", lambda *a: sent.append(a))
+    _escalation_rule(engine)
+    db.execute(engine, "INSERT INTO maintenance_windows (scope_type, scope_value, starts_at, "
+                       "ends_at, created_by) VALUES ('site', 'MLK', :a, :b, 't')",
+               {"a": NOW - timedelta(hours=1), "b": NOW + timedelta(hours=1)})
+    # G9 would refuse the PoE proposal inside a window, so open the window
+    # after the cycle was proposed — the realistic case is a window opened by
+    # whoever went to site.
+    install_workflow(engine, shadow=0)
+    db.execute(engine, "UPDATE maintenance_windows SET starts_at = :f", {"f": NOW + timedelta(hours=2)})
+    dev = _a_poe_candidate(engine)
+    cfg = EngineConfig(shadow=False, smtp_host="h", smtp_from="f", default_target="t")
+    r = WorkflowRunner(engine, AutomationConfig(), action_enabled=lambda k: True, engine_cfg=cfg)
+    asyncio.run(r.run_once())
+    _approve(engine)
+    asyncio.run(r.run_once())
+    db.execute(engine, "UPDATE maintenance_windows SET starts_at = :f", {"f": NOW - timedelta(hours=1)})
+    db.execute(engine, "UPDATE workflow_runs SET resume_at = :t", {"t": NOW - timedelta(minutes=1)})
+    asyncio.run(r.run_once())
+    assert sent == []
+    assert "suppressed" in db.fetch_one(engine, "SELECT payload_summary FROM notifications")[
+        "payload_summary"]
+
+
+def test_a_second_escalation_does_not_notify_twice(engine):
+    _escalation_rule(engine)
+    dev, r = _escalated_run(engine)
+    ctx = Context.build(engine, AutomationConfig(), workflow_id=1, workflow_name="w",
+                        device_id=dev, trigger_dimension="source_status", trigger_value="down")
+    decision, detail = r._escalate(ctx, "again")
+    assert decision == "taken" and "already open" in detail
+    assert len(db.fetch_all(engine, "SELECT id FROM alerts")) == 1
+    assert len(db.fetch_all(engine, "SELECT id FROM notifications")) == 1
+
+
+def test_the_escalation_closes_when_the_camera_recovers(engine):
+    _escalation_rule(engine)
+    dev, r = _escalated_run(engine)
+    db.execute(engine, "UPDATE device_state SET value = 'blind' "
+                       "WHERE device_id = :d AND dimension = 'source_status'", {"d": dev})
+    asyncio.run(r.run_once())
+    assert db.fetch_one(engine, "SELECT closed_at FROM alerts")["closed_at"] is None, \
+        "a blind source is not a recovery"
+    db.execute(engine, "UPDATE device_state SET value = 'up' "
+                       "WHERE device_id = :d AND dimension = 'source_status'", {"d": dev})
+    asyncio.run(r.run_once())
+    assert db.fetch_one(engine, "SELECT closed_at FROM alerts")["closed_at"] is not None
+
+
+def test_the_alert_engine_leaves_automation_alerts_alone(engine):
+    from netmon.engine.engine import AlertEngine
+    _escalation_rule(engine)
+    _escalated_run(engine)
+    # _run_cycle directly: run_once hops threads, and an in-memory SQLite
+    # database does not follow it.
+    AlertEngine(engine, EngineConfig())._run_cycle()
+    alerts = db.fetch_all(engine, "SELECT closed_at FROM alerts")
+    assert len(alerts) == 1 and alerts[0]["closed_at"] is None
+
+
+def test_escalation_without_the_rule_fails_loudly(engine):
+    _escalated_run(engine)
+    step = [s for s in steps(engine) if s["node_id"] == "poe_failed"][0]
+    assert step["decision"] == "failed"
+    assert "rule is missing" in step["detail"]
+    assert db.fetch_all(engine, "SELECT id FROM alerts") == []
+
+
+def test_a_shadow_workflow_opens_no_alert(engine):
+    _escalation_rule(engine)
+    install_workflow(engine, shadow=1)
+    a_broken_camera(engine)  # no remembered port -> no_port escalation
+    asyncio.run(runner_for(engine).run_once())
+    step = [s for s in steps(engine) if s["node_id"] == "no_port"][0]
+    assert step["decision"] == "would_run"
+    assert db.fetch_all(engine, "SELECT id FROM alerts") == []

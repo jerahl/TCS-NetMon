@@ -35,9 +35,17 @@ from netmon.actions import ACTIONS, ActionSpec, AuditedAction, action_or_refuse
 from netmon.automation import graph as gr
 from netmon.automation.context import Context
 from netmon.automation.guards import Refusal, check_all
+from netmon.config import EngineConfig
+from netmon.engine import rules as alert_rules
+from netmon.engine.engine import maintenance_active, open_alert_id
+from netmon.engine.notify import record_notification
 from netmon.state import REACHABILITY_FLAGS_SQL, device_down
 
 log = logging.getLogger("netmon.automation")
+
+#: The alert rule every workflow `alert` node opens its alert under (migration
+#: 040). `managed_by = 'automation'`, so the alert engine never evaluates it.
+ESCALATION_RULE = "automation_escalation"
 
 #: A branch predicate: given the run context, is it true? None means "cannot
 #: tell", which the runner treats as false and records as such — an unanswerable
@@ -85,9 +93,15 @@ class WorkflowRunner:
 
     def __init__(self, engine: Engine, cfg: Any,
                  action_enabled: Callable[[str], bool] | None = None,
-                 milestone_factory: Callable[[], Any] | None = None) -> None:
+                 milestone_factory: Callable[[], Any] | None = None,
+                 engine_cfg: EngineConfig | None = None) -> None:
         self.engine = engine
         self.cfg = cfg
+        #: SMTP settings and the `[engine] shadow` switch. Escalation email goes
+        #: through the alert engine's notifier, so it is shadowed, suppressed by
+        #: maintenance and addressed exactly like every other alert. Defaults to
+        #: shadow, so a runner built without it can never send mail.
+        self.engine_cfg = engine_cfg or EngineConfig()
         self.interval_s = float(getattr(cfg, "interval_s", 300))
         self.timeout_s = max(120.0, self.interval_s)
         # Injected so the guards never have to know the shape of `[actions]`
@@ -169,6 +183,7 @@ class WorkflowRunner:
         # the trigger scan considers starting another run for it (W9).
         runs = await self._resume_due()
         self._expire_proposals()
+        self._close_recovered_escalations()
         for wf in self._workflows():
             try:
                 graph = gr.parse(wf["graph"])
@@ -358,9 +373,14 @@ class WorkflowRunner:
 
         if node.kind == "alert":
             summary = str(node.config.get("summary") or "")
-            self._step(state, node, "would_run" if state.shadow else "taken",
-                       f"alert: {summary.format(device=ctx.name, site=ctx.site)}"
-                       if "{" in summary else f"alert: {summary}")
+            text = (summary.format(device=ctx.name, site=ctx.site)
+                    if "{" in summary else summary)
+            if state.shadow:
+                self._step(state, node, "would_run",
+                           f"would open a crit alert and notify: {text}")
+            else:
+                decision, detail = self._escalate(ctx, text)
+                self._step(state, node, decision, f"{detail}: {text}")
             return _first(graph.next_ids(node.id))
 
         if node.kind == "action":
@@ -390,16 +410,27 @@ class WorkflowRunner:
         if spec.disruptive:
             # Spec 22 W2. There is no live branch below this line: the runner
             # cannot fire a disruptive action, in shadow or out of it.
+            #
+            # Whatever is wired after it (e.g. wait -> re-check -> escalate) is
+            # not abandoned: the node is stored as the run's cursor and the
+            # approval endpoint resumes the run there once the action has
+            # actually been carried out. A dismissed or failed proposal closes
+            # the run instead, so a follow-up never runs after a cycle that
+            # never happened.
             rationale = self._rationale(ctx, spec, target)
+            after = _first(graph.next_ids(node.id))
+            then = f"; once it has run, continues at '{after}'" if after else ""
             if state.shadow:
                 self._step(state, node, "would_run",
                            f"would propose {spec.label} on {target} for approval — "
-                           f"{rationale}")
+                           f"{rationale}{then}")
             else:
                 self._propose(ctx, state, spec, target, params, rationale)
                 self._step(state, node, "awaiting_approval",
-                           f"{spec.label} on {target} is queued for approval — {rationale}")
+                           f"{spec.label} on {target} is queued for approval — "
+                           f"{rationale}{then}")
                 state.awaiting = True
+                state.resume_node = after
             return None
 
         if state.shadow:
@@ -530,6 +561,98 @@ class WorkflowRunner:
             audit.ok("Milestone asked to re-detect the camera", http_status=status_code)
             return audit.audit_id, "ok", "Milestone asked to re-detect the camera"
 
+    # --- escalation ----------------------------------------------------------
+
+    def _escalation_rule(self) -> dict[str, Any] | None:
+        return db.fetch_one(
+            self.engine,
+            "SELECT id, dimension, `condition`, severity, target, enabled "
+            "FROM alert_rules WHERE name = :n AND managed_by = 'automation'",
+            {"n": ESCALATION_RULE},
+        )
+
+    def _escalate(self, ctx: Context, text: str) -> tuple[str, str]:
+        """Open (or refresh) a real alert for this device and notify.
+
+        One open alert per device under the escalation rule, as for every
+        other rule: a second escalation for a device that already has one
+        refreshes `last_seen_at` and sends nothing, so a camera cannot page
+        the NOC once per run. Returns ``(step decision, detail)``.
+        """
+        rule = self._escalation_rule()
+        if rule is None or not rule["enabled"]:
+            # Loud, not silent: an escalation nobody hears about is the failure
+            # this node exists to prevent.
+            why = ("the 'automation_escalation' alert rule is missing (migration 040 "
+                   "not applied?)" if rule is None
+                   else "the 'automation_escalation' alert rule is disabled")
+            log.error("workflow %s: could not escalate %s — %s",
+                      ctx.workflow_name, ctx.name, why)
+            return "failed", f"no alert opened — {why}"
+
+        now = datetime.now(timezone.utc)
+        rule_id = int(rule["id"])
+        existing = open_alert_id(self.engine, ctx.device_id, rule_id)
+        if existing is not None:
+            db.execute(self.engine, "UPDATE alerts SET last_seen_at = :now WHERE id = :id",
+                       {"now": now, "id": existing})
+            return "taken", f"alert #{existing} already open, not notified again"
+
+        db.execute(self.engine,
+                   "INSERT INTO alerts (device_id, rule_id, opened_at, last_seen_at) "
+                   "VALUES (:d, :r, :now, :now)",
+                   {"d": ctx.device_id, "r": rule_id, "now": now})
+        alert_id = open_alert_id(self.engine, ctx.device_id, rule_id) or 0
+        suppressed = maintenance_active(self.engine, ctx.device_id, now)
+        target = rule.get("target") or self.engine_cfg.default_target
+        try:
+            record_notification(
+                self.engine, self.engine_cfg, alert_id=alert_id, target=target,
+                summary=f"{text} (workflow {ctx.workflow_name}, run #{ctx.run_id})",
+                suppressed=suppressed,
+            )
+        except Exception as exc:  # noqa: BLE001 — the alert is open; say the mail failed
+            log.exception("workflow %s: alert #%s opened but notification failed",
+                          ctx.workflow_name, alert_id)
+            return "failed", f"alert #{alert_id} opened, but the email failed: {exc!r}"
+        if suppressed:
+            how = "notification suppressed by a maintenance window"
+        elif self.engine_cfg.shadow:
+            how = "notification logged only ([engine] shadow is on)"
+        else:
+            how = f"emailed {target or '(no target configured)'}"
+        return "taken", f"alert #{alert_id} opened, {how}"
+
+    def _close_recovered_escalations(self) -> int:
+        """Close escalation alerts whose device no longer matches the rule.
+
+        The alert engine does this for its own rules; automation-managed rules
+        are invisible to it, so without this an escalation would stay open
+        after the camera came back. A device with no state row for the rule's
+        dimension is left open — not knowing is not the same as recovered.
+        """
+        rows = db.fetch_all(
+            self.engine,
+            "SELECT a.id, s.value, r.`condition` AS cond "
+            "FROM alerts a JOIN alert_rules r ON r.id = a.rule_id "
+            "JOIN device_state s ON s.device_id = a.device_id AND s.dimension = r.dimension "
+            "WHERE a.closed_at IS NULL AND r.managed_by = 'automation' AND r.enabled = 1",
+        )
+        now = datetime.now(timezone.utc)
+        closed = 0
+        for row in rows:
+            value = str(row.get("value") or "")
+            # A blind or unknown source is not a recovery.
+            if value in ("", "blind", "unknown") or alert_rules.evaluate(row["cond"], value):
+                continue
+            db.execute(self.engine, "UPDATE alerts SET closed_at = :now WHERE id = :id",
+                       {"now": now, "id": row["id"]})
+            closed += 1
+        if closed:
+            log.info("automation: closed %d escalation alert(s) whose device recovered",
+                     closed)
+        return closed
+
     # --- run bookkeeping -----------------------------------------------------
 
     def _open_run(self, wf: dict[str, Any], device_id: int, reason: str,
@@ -586,7 +709,10 @@ class WorkflowRunner:
             {"s": status, "m": message[:500],
              "fin": None if status == "waiting" else datetime.now(timezone.utc),
              "rat": state.resume_at if status == "waiting" else None,
-             "rnode": state.resume_node if status == "waiting" else None,
+             # An awaiting run keeps its cursor (with no resume_at) so approval
+             # knows where to continue; `_resume_due` only picks up `waiting`.
+             "rnode": (state.resume_node
+                       if status in ("waiting", "awaiting_approval") else None),
              "id": run_id},
         )
 

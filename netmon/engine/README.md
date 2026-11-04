@@ -43,3 +43,11 @@ notifications + opened/closed alerts for the parallel-run diff against Zabbix.
 `source_blind`, `device_source_down` (002); `device_down`,
 `config_backup_stale`, `camera_not_recording`, `trunk_unregistered` (003).
 Collector-staleness (over `collector_health`) is a deferred follow-up.
+
+## Automation-managed rules
+
+Rules with `managed_by = 'automation'` (migration 040 — today only
+`automation_escalation`) are skipped by `_rules()`. The workflow runner opens
+and closes their alerts and sends their notifications through
+`record_notification`, so shadow and maintenance behave identically. See
+`docs/spec/22-automation-workflows.md` §6b.

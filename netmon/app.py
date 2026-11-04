@@ -212,6 +212,16 @@ def register_tasks(app: FastAPI, cfg: Config, engine) -> None:
     if cfg.automation.enabled:
         from netmon.automation.portmemory import PortMemory
         from netmon.automation.runner import WorkflowRunner
+        from netmon.automation import seed as wf_seed
+
+        # Pick up improvements to the default camera graph — only if the stored
+        # copy was never edited; enabled/shadow are never touched.
+        try:
+            if wf_seed.upgrade(engine):
+                log.warning("automation: upgraded the unedited %s workflow to the "
+                            "current default graph", wf_seed.WORKFLOW_NAME)
+        except Exception:
+            log.exception("automation: default workflow upgrade check failed")
 
         # The sampler runs whenever the engine does, and is the reason the
         # engine can act at all: it records each powered device's access port
@@ -236,7 +246,8 @@ def register_tasks(app: FastAPI, cfg: Config, engine) -> None:
 
         workflows = WorkflowRunner(engine, cfg.automation,
                                    action_enabled=_action_enabled,
-                                   milestone_factory=_milestone_factory(cfg))
+                                   milestone_factory=_milestone_factory(cfg),
+                                   engine_cfg=cfg.engine)
         supervisor.register("automation", workflows.run_guarded,
                             interval_s=workflows.interval_s, timeout_s=workflows.timeout_s)
         log.info("automation engine enabled: %ss (per-workflow enabled/shadow flags "
