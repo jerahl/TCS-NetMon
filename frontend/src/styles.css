@@ -2275,6 +2275,26 @@ table.grid.kv td:first-child { color: var(--muted); width: 160px; }
 .port.down .led { background: var(--info); box-shadow: 0 0 3px var(--info); }
 .port.down.searching .led { animation: led-pulse 1.4s infinite; }
 
+/* Delivering PoE with no link (switches.jsx poeNoLink): flash amber. Wins
+   over the down/disabled body colours; the err outline still shows on top. */
+.port.poe-nolink .body,
+.swport-legend .poe-nolink-swatch {
+  background: var(--warn);
+  border-color: var(--warn);
+  animation: poe-nolink-flash 1s ease-in-out infinite;
+}
+.port.poe-nolink { border-color: var(--warn); }
+.port.poe-nolink .led { background: #0a0d14; box-shadow: none; }
+.swport-member-head .m-stats.poe-nolink-count { color: var(--warn); font-weight: 600; }
+@keyframes poe-nolink-flash {
+  0%, 100% { opacity: 1; box-shadow: 0 0 6px var(--warn); }
+  50% { opacity: 0.25; box-shadow: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .port.poe-nolink .body,
+  .swport-legend .poe-nolink-swatch { animation: none; }
+}
+
 .port.disabled .body { background: #1a1e28; }
 .port.disabled .led { background: #3a425a; box-shadow: none; }
 

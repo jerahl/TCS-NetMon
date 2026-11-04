@@ -142,19 +142,26 @@ const SPEED_CLASS = (mbps) =>
 
 // ───────── faceplate ─────────
 
+// Powering something that never brought a link up: a hung camera/AP, or a
+// cable with good power pairs and bad data pairs. Worth a glance from across
+// the room, so the cell flashes amber.
+const poeNoLink = (p) => !!p.poe_delivering && p.oper_state !== "up";
+
 function PortCell({ p, selected, onClick }) {
   const state = p.oper_state || "unknown";
   const cls = [
     "port", state,
     state === "up" ? SPEED_CLASS(p.speed_mbps || 0) : "",
     p.poe_delivering ? "poe" : "",
+    poeNoLink(p) ? "poe-nolink" : "",
     (p.err_in_delta || p.err_out_delta) ? "err" : "",
     selected ? "selected" : "",
   ].filter(Boolean).join(" ");
   const bits = [`${p.name || p.ifindex}`, state];
   if (state === "up") bits.push(fmtSpeed(p.speed_mbps));
   if (p.is_sfp === 1) bits.push("SFP/fiber");
-  if (p.poe_delivering) bits.push("PoE");
+  if (poeNoLink(p)) bits.push(`PoE delivering${p.poe_watts ? ` ${p.poe_watts} W` : ""} with no link`);
+  else if (p.poe_delivering) bits.push("PoE");
   if (p.err_in_delta || p.err_out_delta) bits.push("errors");
   return (
     <div className={cls + (p.is_sfp === 1 ? " sfp" : "")} onClick={onClick} title={bits.join(" · ")}>
@@ -173,6 +180,7 @@ function MemberGrid({ member, ports, selected, onSelect }) {
   const cols = Math.max(1, odds.length, evens.length);
   const up = ports.filter((p) => p.oper_state === "up").length;
   const poe = ports.filter((p) => p.poe_delivering).length;
+  const noLink = ports.filter(poeNoLink).length;
   const sfp = ports.filter((p) => p.is_sfp === 1).length;
   return (
     <div className="swport-member">
@@ -182,6 +190,11 @@ function MemberGrid({ member, ports, selected, onSelect }) {
           <span className="up">{up} up</span> / <span className="down">{ports.length - up} down</span>
         </span>
         {poe > 0 && <span className="m-stats">⚡ {poe} PoE on</span>}
+        {noLink > 0 && (
+          <span className="m-stats poe-nolink-count" title="delivering PoE with no link">
+            ⚡ {noLink} powered, no link
+          </span>
+        )}
         {sfp > 0 && <span className="m-stats" title="fiber / SFP ports">◆ {sfp} SFP</span>}
       </div>
       {[odds, evens].map((row, i) => (
@@ -917,6 +930,7 @@ export function SwitchesPage({ id, query }) {
                       <span className="item"><span className="swatch" style={{ background: "#1a1e28" }} /> Disabled</span>
                       <span className="item"><span className="swatch" style={{ background: "transparent", border: "1px dashed var(--line)" }} /> Absent</span>
                       <span className="item"><span className="dot-led" style={{ background: "var(--warn)", boxShadow: "0 0 4px var(--warn)" }} /> PoE</span>
+                      <span className="item"><span className="swatch poe-nolink-swatch" /> PoE, no link</span>
                       <span className="item"><span className="dot-led" style={{ background: "var(--err)", boxShadow: "0 0 4px var(--err)" }} /> Errors</span>
                     </div>
                     {memberKeys.map((m) => (
