@@ -298,3 +298,16 @@ def test_037_separates_expected_from_actual():
     for col in ("expected", "actual", "verdict", "rollback"):
         assert col in sql, f"missing {col}"
     assert "role" in sql, "change_devices must distinguish target from baseline"
+
+
+def test_041_drops_on_update_for_partially_written_inventory_tables():
+    """Partial writers (_write_poe/_write_sfp/_write_entity, camera identity)
+    must not move `updated_at`; MariaDB's ON UPDATE did, in the server's time
+    zone, making fresh rows look six hours stale (ALB-NewGym, 2026-11-04)."""
+    import re
+    mig = next(m for m in discover_migrations() if m.version == "041")
+    stmts = [s for s in parse_statements(mig.path.read_text()) if s.strip()]
+    for table in ("switch_ports", "stack_members", "cameras"):
+        stmt = next(s for s in stmts if re.search(rf"ALTER TABLE {table}\b", s))
+        assert "MODIFY updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP" in stmt
+        assert "ON UPDATE" not in stmt.upper()
