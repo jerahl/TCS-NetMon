@@ -289,3 +289,55 @@ def test_xiq_and_rconfig_reject_non_positive_ids():
         asyncio.run(rc.deploy_snippet(0, 4, {}))
     with pytest.raises(RConfigError):
         asyncio.run(rc.deploy_snippet(1, 0, {}))
+
+
+# ───────────────────────── PoE snippet port format ─────────────────────────
+
+def _stack(url, device_id, slots):
+    engine = db.make_engine(url)
+    with engine.begin() as conn:
+        for slot in slots:
+            conn.execute(text("INSERT INTO stack_members (device_id, slot) VALUES (:d, :s)"),
+                         {"d": device_id, "s": slot})
+    engine.dispose()
+
+
+def _sent_port(tmp_path, monkeypatch, slots):
+    """POST a PoE cycle for 1:12 on BHS-Core-1 and return the port rConfig got."""
+    from netmon.collectors import rconfig_client
+
+    sent = {}
+
+    async def resolve(self, **kw):
+        return 7
+
+    async def deploy(self, device_id, snippet_id, variables):
+        sent.update(variables)
+        return "deployed", 200
+
+    monkeypatch.setattr(rconfig_client.RConfigClient, "resolve_device_id", resolve)
+    monkeypatch.setattr(rconfig_client.RConfigClient, "deploy_snippet", deploy)
+    url = _db_url(tmp_path)
+    _seed(url)
+    _stack(url, 2, slots)
+    with TestClient(_app(_conf(tmp_path, actions_extra="poe_cycle = true\n"))) as c:
+        r = c.post("/api/actions/poe-cycle", json={"device_id": 2, "port": "1:12"})
+        assert r.status_code == 200, r.text
+    assert "snippet port" in _audit(url)[-1]["message"]
+    return sent["port"]
+
+
+def test_poe_on_a_stack_sends_slot_and_port(tmp_path, monkeypatch):
+    assert _sent_port(tmp_path, monkeypatch, [1, 2, 3]) == "1:12"
+
+
+def test_poe_on_a_standalone_switch_sends_the_bare_port(tmp_path, monkeypatch):
+    assert _sent_port(tmp_path, monkeypatch, [1]) == "12"
+
+
+def test_poe_with_no_stack_rows_is_treated_as_standalone(tmp_path, monkeypatch):
+    assert _sent_port(tmp_path, monkeypatch, []) == "12"
+
+
+def test_a_lone_member_outside_slot_1_is_treated_as_a_stack(tmp_path, monkeypatch):
+    assert _sent_port(tmp_path, monkeypatch, [2]) == "1:12"

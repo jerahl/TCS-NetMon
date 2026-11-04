@@ -28,7 +28,11 @@ Five properties, all enforced in code rather than by convention:
 3. **Arguments are validated even though the snippet is trusted.** A PoE cycle
    checks that the port actually exists on that switch. The rConfig snippet is
    reviewable in rConfig; its `port`/`member` substitutions come from NetMon, so
-   they get checked.
+   they get checked. The `port` sent depends on the switch: a **stack** (more
+   than one `stack_members` row, or a lone member outside slot 1) gets
+   `slot:port` as stored (`1:14`); a **standalone** switch gets the bare port
+   (`14`), because EXOS names even standalone ports `1:N` over SNMP. The audit
+   row's message records the port actually sent.
 4. **No retries, ever.** A state-changing call that times out may already have
    landed. Re-sending could reboot an AP twice, so the UI reports *unknown* and
    asks you to re-check.

@@ -223,6 +223,7 @@ async def _poe_cycle_impl(body: PoeCycleBody, request: Request, engine: Engine, 
         _require_enabled(cfg, "poe_cycle")
         dev = _device(engine, body.device_id, want_type="switch")
         _port_belongs(engine, body.device_id, body.port)
+        snippet_port = _snippet_port(engine, body.device_id, body.port)
         s = (cfg.sources.get("rconfig").settings if cfg.sources.get("rconfig") else {})
         if not (s.get("url") or "").strip():
             raise ActionRefused("rConfig is not configured")
@@ -240,12 +241,14 @@ async def _poe_cycle_impl(body: PoeCycleBody, request: Request, engine: Engine, 
                     "it cannot run the PoE snippet against it")
             msg, status = await client.deploy_snippet(
                 rc_id, cfg.actions.poe_snippet_id,
-                {"port": str(body.port), "member": str(body.member)},
+                {"port": snippet_port, "member": str(body.member)},
             )
         except RConfigError as exc:
             audit.failed(str(exc))
             raise HTTPException(status_code=502, detail=f"rConfig: {exc}") from exc
-        audit.ok(msg, http_status=status)
+        # Record what the switch was actually sent, which differs from the
+        # stored port name on a standalone switch.
+        audit.ok(f"{msg} (snippet port {snippet_port})", http_status=status)
         return {"ok": True, "action": "poe_cycle", "target": f"{dev['name']} port {body.port}",
                 "message": msg}
 
@@ -351,6 +354,34 @@ def _port_belongs(engine: Engine, device_id: int, port: str) -> None:
         raise ActionRefused(
             f"port {port!r} is not a known port on device {device_id} "
             "(run an SNMP inventory sweep first, or check the port name)")
+
+
+def _is_stack(engine: Engine, device_id: int) -> bool:
+    """True when the switch is a stack.
+
+    Every EXOS switch names its ports `slot:port` over SNMP — standalone ones
+    as `1:N` — so the port name cannot tell us. Stack membership can: more
+    than one `stack_members` row is a stack. A lone member in a slot other
+    than 1 is treated as a stack too, since a standalone switch is always
+    slot 1 and the other members are more likely missing from the sweep.
+    """
+    rows = db.fetch_all(engine, "SELECT slot FROM stack_members WHERE device_id = :d",
+                        {"d": device_id})
+    if len(rows) > 1:
+        return True
+    return bool(rows) and _as_int(str(rows[0].get("slot"))) not in (1, -1)
+
+
+def _snippet_port(engine: Engine, device_id: int, port: str) -> str:
+    """The port as the rConfig PoE snippet expects it.
+
+    A stack takes `slot:port` (unchanged); a standalone switch takes the bare
+    port number, so `1:14` is sent as `14`.
+    """
+    port = str(port).strip()
+    if ":" not in port or _is_stack(engine, device_id):
+        return port
+    return port.split(":", 1)[1]
 
 
 def _as_int(v: str) -> int:
