@@ -14,6 +14,7 @@ import httpx
 log = logging.getLogger("netmon.collectors.rconfig")
 
 TIMEOUT = 30.0
+DEPLOY_WAIT_TIMEOUT = 55.0  # under nginx proxy_read_timeout (60s)
 PER_PAGE = 100
 MAX_PAGES = 20  # 2000-device ceiling, per the reference
 
@@ -96,14 +97,23 @@ class RConfigClient:
 
         Ids are validated as positive ints so neither can carry a path fragment.
         Never retried — a deploy that timed out may have run.
+
+        rConfig V8.4 contract: variables go in ``dynamic_vars`` (an unknown key
+        is ignored, which would run the snippet with its placeholders
+        unsubstituted). ``wait: true`` makes rConfig send immediately and
+        return the device's outcome; a device-side failure still comes back
+        as HTTP 200, so the per-device ``status`` is checked here.
         """
         if not isinstance(device_id, int) or isinstance(device_id, bool) or device_id <= 0:
             raise RConfigError(f"deploy_snippet needs a positive device id, got {device_id!r}")
         if not isinstance(snippet_id, int) or isinstance(snippet_id, bool) or snippet_id <= 0:
             raise RConfigError(f"deploy_snippet needs a positive snippet id, got {snippet_id!r}")
         headers = {"apitoken": self._token, "Accept": "application/json"}
-        body = {"devices": [device_id], "dynamicVariables": dynamic_vars or {}}
-        async with httpx.AsyncClient(base_url=self._url, timeout=self._timeout,
+        body = {"devices": [device_id], "dynamic_vars": dynamic_vars or {}, "wait": True}
+        # wait=true holds the request open for the device session, so allow
+        # more than the read timeout (but stay under nginx's 60s proxy_read_timeout).
+        timeout = max(self._timeout, DEPLOY_WAIT_TIMEOUT)
+        async with httpx.AsyncClient(base_url=self._url, timeout=timeout,
                                      verify=self._verify) as client:
             try:
                 resp = await client.post(f"/api/v1/snippets/{snippet_id}/deploy",
@@ -113,11 +123,45 @@ class RConfigClient:
         if resp.status_code >= 400:
             raise RConfigError(
                 f"rConfig HTTP {resp.status_code} deploying snippet {snippet_id}: {resp.text[:240]}")
-        msg = ""
         try:
             data = resp.json() or {}
-            if isinstance(data, dict):
-                msg = str(data.get("message") or data.get("status") or "")
         except ValueError:
-            pass
-        return (msg or "snippet deployed", resp.status_code)
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        msg = str(data.get("message") or data.get("status") or "")
+        return (_deploy_outcome(data, device_id, msg), resp.status_code)
+
+
+#: Per-device statuses rConfig V8.4 returns for a ``wait: true`` deploy.
+DEPLOY_OK = ("success", "success_with_warnings")
+DEPLOY_UNVERIFIED = ("not_checked",)
+
+
+def _deploy_outcome(data: dict, device_id: int, msg: str) -> str:
+    """Turn a ``wait: true`` deploy response into a message, or raise.
+
+    ``failed`` / ``connection_failed`` / ``no_output`` (or anything unknown)
+    raise RConfigError carrying rConfig's reason. A response with no
+    per-device results (an older rConfig that ignored ``wait``) is accepted
+    with a note that the outcome was not reported.
+    """
+    inner = data.get("data")
+    results = inner.get("results") if isinstance(inner, dict) else None
+    if not isinstance(results, list) or not results:
+        return f"{msg or 'snippet deployed'} (device outcome not reported)"
+    row = next((r for r in results if isinstance(r, dict)
+                and str(r.get("device_id")) == str(device_id)), None)
+    if row is None:
+        row = results[0] if isinstance(results[0], dict) else {}
+    status = str(row.get("status") or "").strip().lower()
+    reason = str(row.get("reason") or "").strip()
+    if status in DEPLOY_OK:
+        return f"device: {status}" + (f" — {reason}" if reason else "")
+    if status in DEPLOY_UNVERIFIED:
+        return "device: sent, outcome not checked by rConfig (no error patterns on template)"
+    detail = reason or msg or "no reason given"
+    failed_line = str(row.get("failed_line") or "").strip()
+    if failed_line and failed_line not in detail:
+        detail += f" [line: {failed_line}]"
+    raise RConfigError(f"rConfig snippet {status or 'unknown status'} on device: {detail}"[:400])

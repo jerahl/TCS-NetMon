@@ -105,3 +105,75 @@ def test_last_backup_prefers_a_real_backup_field_over_row_mtime():
     # And a real backup field wins regardless of dict insertion order.
     reordered = {"last_backup_at": "2026-07-01T00:00:00Z", "updated_at": "2026-07-28T12:00:00Z"}
     assert _last_backup(reordered).day == 1
+
+
+# --- snippet deploy (rConfig V8.4: dynamic_vars + wait) ---------------------
+
+import json as _json
+
+import httpx as _httpx
+import pytest as _pytest
+
+from netmon.collectors import rconfig_client as _rcc
+
+_REAL_ASYNC_CLIENT = _httpx.AsyncClient
+
+
+def _deploy_with(monkeypatch, payload, status=200):
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        seen["body"] = _json.loads(request.content)
+        seen["token"] = request.headers.get("apitoken")
+        return _httpx.Response(status, json=payload)
+
+    def fake_client(*a, **kw):
+        kw["transport"] = _httpx.MockTransport(handler)
+        return _REAL_ASYNC_CLIENT(*a, **kw)
+
+    monkeypatch.setattr(_rcc.httpx, "AsyncClient", fake_client)
+    c = _rcc.RConfigClient(url="https://rc.example", token="t0k")
+    return c, seen
+
+
+def test_deploy_sends_dynamic_vars_and_wait(monkeypatch):
+    payload = {"success": True, "message": "Snippet sent to 1 device(s)",
+               "data": {"results": [{"device_id": 7, "status": "success"}]}}
+    c, seen = _deploy_with(monkeypatch, payload)
+    msg, code = asyncio.run(c.deploy_snippet(7, 4, {"port": "41", "member": "3"}))
+    assert seen["path"] == "/api/v1/snippets/4/deploy"
+    assert seen["token"] == "t0k"
+    assert seen["body"] == {"devices": [7], "dynamic_vars": {"port": "41", "member": "3"},
+                            "wait": True}
+    assert "dynamicVariables" not in seen["body"]
+    assert code == 200 and "success" in msg
+
+
+@_pytest.mark.parametrize("status", ["failed", "connection_failed", "no_output", "weird"])
+def test_deploy_device_failure_raises(monkeypatch, status):
+    payload = {"success": True, "message": "Snippet sent to 1 device(s): 1 failed",
+               "data": {"results": [{"device_id": 7, "status": status,
+                                     "reason": "Device rejected it",
+                                     "failed_line": "disable inline-power ports 3:41"}]}}
+    c, _ = _deploy_with(monkeypatch, payload)
+    with _pytest.raises(RConfigError) as ei:
+        asyncio.run(c.deploy_snippet(7, 4, {"port": "41"}))
+    assert status in str(ei.value) and "Device rejected it" in str(ei.value)
+
+
+def test_deploy_not_checked_and_legacy_responses(monkeypatch):
+    c, _ = _deploy_with(monkeypatch, {"success": True, "message": "ok",
+                                      "data": {"results": [{"device_id": 7,
+                                                            "status": "not_checked"}]}})
+    msg, _ = asyncio.run(c.deploy_snippet(7, 4, {}))
+    assert "not checked" in msg
+    c, _ = _deploy_with(monkeypatch, {"success": True, "message": "queued", "data": "queued"})
+    msg, _ = asyncio.run(c.deploy_snippet(7, 4, {}))
+    assert "outcome not reported" in msg
+
+
+def test_deploy_http_error_raises(monkeypatch):
+    c, _ = _deploy_with(monkeypatch, {"message": "Forbidden"}, status=403)
+    with _pytest.raises(RConfigError, match="HTTP 403"):
+        asyncio.run(c.deploy_snippet(7, 4, {}))

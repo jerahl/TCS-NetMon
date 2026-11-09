@@ -10,7 +10,7 @@ in the system is read-only and stays that way.
 |---|---|---|---|
 | Reevaluate Access | PacketFence | `POST /api/v1/node/<mac>/reevaluate_access` | PacketFence page |
 | Restart Port | PacketFence | `POST /api/v1/node/<mac>/restart_switchport` | Switches → port detail |
-| Cycle PoE | rConfig | `POST /api/v1/snippets/4/deploy` | Switches → port detail |
+| Cycle PoE | rConfig | `POST /api/v1/snippets/4/deploy` `{"devices":[id],"dynamic_vars":{…},"wait":true}` | Switches → port detail |
 | Reboot AP | ExtremeCloud IQ | `POST /devices/:reboot` `{"ids":[id]}` | AP Detail |
 
 Every attempt writes a row to `action_audit` **before** the call leaves, and the
@@ -113,6 +113,10 @@ masked, because a mask still leaks the length.
 | `409` "not a device rConfig knows" | the switch isn't in rConfig, or its IP differs | rConfig knows 153 devices; match is IP-first then exact name |
 | `403` | role below `min_role` | `GET /api/actions` reports `your_role` and `min_role` |
 | Amber "may still have been carried out" | source timed out | check the device; do **not** click again reflexively |
+| rConfig `401` | token predates rConfig V8.4.0 (old tokens were invalidated, not migrated) | issue a new token in rConfig Settings → REST API with `devices.read` + `snippets.write`; paste into NetMon Settings → rConfig |
+| rConfig `403` | token lacks the ability for that endpoint | same as above — check the token's abilities |
+| "rConfig snippet failed on device: …" | the switch rejected a snippet line (deploy runs with `wait: true`, so the device outcome is checked) | the reason/line is in the message and audit row; some lines before the failed one may have been applied |
+| XIQ `403 AUTH_ACCESS_DENIED` on reboot | XIQ token can read but lacks reboot permission | issue an XIQ token with device reboot permission from an operator/admin account |
 | No buttons at all | `[actions] enabled = false`, or you are a viewer | `GET /api/actions` |
 
 ## 6. Reversibility (CLAUDE.md §4.3)
