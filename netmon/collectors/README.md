@@ -24,8 +24,16 @@ Ported from `reference/lib/XIQFleetClient.php`.
   `total_pages` drain). Bearer token (`[xiq] api_token`).
 - **Writes:** `device_state` dimension `source_status` per matched device —
   `up` (connected, ok) / `down` (not connected, crit) / `unknown` (XIQ isn't
-  managing it, see below) / `blind` (source unreachable, warn). Backfills empty
-  `devices.mgmt_ip` from XIQ `ip_address`.
+  managing it, see below) / `blind` (source unreachable, warn).
+- **Syncs `devices.mgmt_ip`** (`_sync_mgmt_ips`). XIQ's `ip_address` is
+  authoritative while the device is managed + connected; NetMon's IP is
+  updated to match (DHCP moves APs, and a stale IP made the poller ping the
+  wrong AP). Another device still holding that IP is cleared to NULL if XIQ
+  shows it disconnected; a holder XIQ isn't watching blocks the move (logged).
+  Two connected devices claiming one IP: neither changes (logged). A
+  disconnected device keeps its IP; an empty one is backfilled with XIQ's
+  last-known IP only if no other enabled device holds it. Every change is
+  logged as `xiq: <name> mgmt_ip <old> -> <new> (<reason>)`.
 - **`device_admin_state` gates up/down** (`source_state`): XIQ reports
   `connected: false` for every device it is not actively managing
   (`UNMANAGED` / `NEW` / `BOOTSTRAP`), so only `MANAGED` devices get a real

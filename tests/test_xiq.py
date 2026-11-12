@@ -132,7 +132,7 @@ def test_xiq_collector_writes_source_status_and_backfills_ip(tmp_path):
     evs = db.fetch_all(engine, "SELECT old_value,new_value FROM state_events ORDER BY id")
     assert {(e["old_value"], e["new_value"]) for e in evs} == {("unknown", "up"), ("unknown", "down")}
 
-    # mgmt_ip backfilled from XIQ where empty; existing value untouched.
+    # mgmt_ip filled from XIQ (connected); a disconnected device keeps its own.
     ips = {r["xiq_device_id"]: r["mgmt_ip"] for r in db.fetch_all(engine, "SELECT xiq_device_id, mgmt_ip FROM devices")}
     assert ips["100001"] == "192.0.2.11"
     assert ips["100002"] == "192.0.2.2"
@@ -655,3 +655,87 @@ def test_clients_cycle_records_the_radio_and_leaves_wired_null(tmp_path):
             assert r["radio"] is None, "a wired client is not on a radio"
         else:
             assert r["radio"] in ("wifi0", "wifi1")
+
+
+# --- mgmt_ip sync: XIQ is authoritative while the device is connected -------
+
+def _ip_db(tmp_path, rows):
+    engine = db.make_engine(f"sqlite:///{tmp_path / 'xiqip.db'}")
+    create_core_tables(engine)
+    with engine.begin() as conn:
+        for name, ip, xid in rows:
+            conn.execute(text(
+                "INSERT INTO devices (name, site, device_type, mgmt_ip, snmp_capable, enabled, xiq_device_id) "
+                "VALUES (:n, 'S', 'ap', :ip, 0, 1, :x)"), {"n": name, "ip": ip, "x": xid})
+    return engine
+
+
+def _ips(engine):
+    return {r["name"]: r["mgmt_ip"] for r in db.fetch_all(engine, "SELECT name, mgmt_ip FROM devices")}
+
+
+def _run(engine, xiq_rows):
+    fake = FakeXiq()
+    fake.rows = xiq_rows
+    asyncio.run(XiqCollector(engine, fake, detail_enabled=False, clients_enabled=False,
+                             ssids_enabled=False).run_once())
+
+
+def test_connected_device_ip_corrected_and_stale_holder_cleared(tmp_path):
+    # NMS case: A111 is down in XIQ but NetMon still has .30, which DHCP gave
+    # to KITCHEN (connected). KITCHEN gets .30; A111 is cleared so the poller
+    # stops pinging the kitchen AP on its behalf.
+    e = _ip_db(tmp_path, [("A111", "10.0.0.30", "1"), ("KITCHEN", "10.0.0.5", "2")])
+    _run(e, [{"id": 1, "connected": False, "ip_address": "10.0.0.22"},
+             {"id": 2, "connected": True, "ip_address": "10.0.0.30"}])
+    ips = _ips(e)
+    assert ips["KITCHEN"] == "10.0.0.30"
+    # cleared, then backfilled with its last-known IP since nobody holds .22
+    assert ips["A111"] == "10.0.0.22"
+
+
+def test_disconnected_device_keeps_its_ip(tmp_path):
+    e = _ip_db(tmp_path, [("AP", "10.0.0.9", "1")])
+    _run(e, [{"id": 1, "connected": False, "ip_address": "10.0.0.50"}])
+    assert _ips(e)["AP"] == "10.0.0.9"
+
+
+def test_unmanaged_device_is_not_authoritative(tmp_path):
+    e = _ip_db(tmp_path, [("AP", "10.0.0.9", "1")])
+    _run(e, [{"id": 1, "connected": True, "device_admin_state": "UNMANAGED",
+              "ip_address": "10.0.0.50"}])
+    assert _ips(e)["AP"] == "10.0.0.9"
+
+
+def test_swap_between_two_connected_aps(tmp_path):
+    e = _ip_db(tmp_path, [("A", "10.0.0.1", "1"), ("B", "10.0.0.2", "2")])
+    _run(e, [{"id": 1, "connected": True, "ip_address": "10.0.0.2"},
+             {"id": 2, "connected": True, "ip_address": "10.0.0.1"}])
+    ips = _ips(e)
+    assert ips == {"A": "10.0.0.2", "B": "10.0.0.1"}
+
+
+def test_holder_not_watched_by_xiq_blocks_the_move(tmp_path):
+    e = _ip_db(tmp_path, [("AP", "10.0.0.9", "1")])
+    with e.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO devices (name, site, device_type, mgmt_ip, snmp_capable, enabled) "
+            "VALUES ('PRINTER','S','other','10.0.0.50',0,1)"))
+    _run(e, [{"id": 1, "connected": True, "ip_address": "10.0.0.50"}])
+    ips = _ips(e)
+    assert ips["AP"] == "10.0.0.9" and ips["PRINTER"] == "10.0.0.50"
+
+
+def test_two_connected_devices_claiming_one_ip_change_nothing(tmp_path):
+    e = _ip_db(tmp_path, [("A", "10.0.0.1", "1"), ("B", "10.0.0.2", "2")])
+    _run(e, [{"id": 1, "connected": True, "ip_address": "10.0.0.7"},
+             {"id": 2, "connected": True, "ip_address": "10.0.0.7"}])
+    assert _ips(e) == {"A": "10.0.0.1", "B": "10.0.0.2"}
+
+
+def test_backfill_skipped_when_last_known_ip_is_taken(tmp_path):
+    e = _ip_db(tmp_path, [("DOWN", None, "1"), ("OTHER", "10.0.0.22", "2")])
+    _run(e, [{"id": 1, "connected": False, "ip_address": "10.0.0.22"},
+             {"id": 2, "connected": False, "ip_address": "10.0.0.22"}])
+    ips = _ips(e)
+    assert ips["DOWN"] is None and ips["OTHER"] == "10.0.0.22"

@@ -437,9 +437,89 @@ class XiqCollector(Collector):
     def _registry(self) -> list[dict[str, Any]]:
         return db.fetch_all(
             self.engine,
-            "SELECT id, xiq_device_id, mgmt_ip, device_type FROM devices "
+            "SELECT id, name, xiq_device_id, mgmt_ip, device_type FROM devices "
             "WHERE enabled = 1 AND xiq_device_id IS NOT NULL AND xiq_device_id <> ''",
         )
+
+    def _sync_mgmt_ips(self, registry: list[dict[str, Any]],
+                       fleet: dict[str, XiqDevice]) -> int:
+        """Keep ``devices.mgmt_ip`` in step with XIQ. Returns rows changed.
+
+        XIQ's ``ip_address`` is authoritative only while XIQ reports the device
+        managed and connected (``source_state`` → up): that is a live
+        observation. For a disconnected device it is merely the last address
+        XIQ saw, which DHCP may since have handed to another AP.
+
+        * Connected device, IP differs → set it to XIQ's IP. Before that, any
+          *other* device still holding that IP is cleared to NULL if XIQ shows
+          it not connected (its address was reassigned; leaving it makes the
+          poller ping the wrong AP and report a down AP as up). A holder XIQ
+          is not watching (no xiq id, absent from the fleet) is never touched —
+          the update is skipped and logged instead.
+        * Two connected devices claiming one IP → neither changes; logged.
+        * Device with no mgmt_ip, not connected → backfilled with XIQ's last
+          known IP only if no other enabled device holds it.
+        """
+        state: dict[int, tuple[str, XiqDevice]] = {}
+        for r in registry:
+            dev = fleet.get(str(r["xiq_device_id"]))
+            if dev is not None:
+                state[int(r["id"])] = (source_state(dev)[0], dev)
+
+        want: dict[int, str] = {}
+        claims: dict[str, list[int]] = {}
+        for dev_id, (value, dev) in state.items():
+            ip = (dev.ip_address or "").strip()
+            if value == "up" and ip:
+                want[dev_id] = ip
+                claims.setdefault(ip, []).append(dev_id)
+        for ip, ids in claims.items():
+            if len(ids) > 1:
+                log.warning("xiq: %d connected devices report ip %s (ids %s); not syncing them",
+                            len(ids), ip, ids)
+                for i in ids:
+                    want.pop(i, None)
+
+        current = {int(r["id"]): (r.get("mgmt_ip") or "").strip()
+                   for r in db.fetch_all(self.engine,
+                                         "SELECT id, mgmt_ip FROM devices WHERE enabled = 1")}
+        names = {int(r["id"]): r.get("name") or str(r["id"]) for r in registry}
+        changed = 0
+
+        def _set(dev_id: int, ip: str | None, why: str) -> None:
+            nonlocal changed
+            db.execute(self.engine, "UPDATE devices SET mgmt_ip = :ip WHERE id = :id",
+                       {"ip": ip, "id": dev_id})
+            log.info("xiq: %s mgmt_ip %s -> %s (%s)", names.get(dev_id, dev_id),
+                     current.get(dev_id) or "-", ip or "NULL", why)
+            current[dev_id] = ip or ""
+            changed += 1
+
+        for dev_id, ip in want.items():
+            if current.get(dev_id) == ip:
+                continue
+            holders = [h for h, hip in current.items() if hip == ip and h != dev_id]
+            # A holder that is itself moving to a different XIQ-confirmed IP
+            # is not a conflict (address swaps between APs).
+            blocking = [h for h in holders if not (h in want and want[h] != ip)]
+            unjudgeable = [h for h in blocking if h not in state or state[h][0] == "up"]
+            if unjudgeable:
+                log.warning("xiq: not moving %s to %s — held by device id(s) %s that XIQ "
+                            "does not show as disconnected", names.get(dev_id, dev_id), ip,
+                            unjudgeable)
+                continue
+            for h in blocking:
+                _set(h, None, f"ip now belongs to connected {names.get(dev_id, dev_id)}")
+            _set(dev_id, ip, "connected in XIQ")
+
+        for dev_id, (value, dev) in state.items():
+            ip = (dev.ip_address or "").strip()
+            if value == "up" or not ip or current.get(dev_id):
+                continue
+            if any(hip == ip for h, hip in current.items() if h != dev_id):
+                continue
+            _set(dev_id, ip, "backfill, last known in XIQ")
+        return changed
 
     async def run_once(self) -> int:
         registry = self._registry()
@@ -477,14 +557,9 @@ class XiqCollector(Collector):
                 continue
             value, severity = source_state(dev)
             write_state(self.engine, int(r["id"]), DIMENSION, value, severity, "xiq")
-            if not r.get("mgmt_ip") and dev.ip_address:
-                db.execute(
-                    self.engine,
-                    "UPDATE devices SET mgmt_ip = :ip "
-                    "WHERE id = :id AND (mgmt_ip IS NULL OR mgmt_ip = '')",
-                    {"ip": dev.ip_address, "id": int(r["id"])},
-                )
             written += 1
+
+        self._sync_mgmt_ips(registry, fleet)
 
         # A successful fetch means XIQ IS reachable, so nothing is truly
         # "blind". Present devices cleared to up/down above; also clear a STALE
