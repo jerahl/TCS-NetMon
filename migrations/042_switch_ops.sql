@@ -26,7 +26,9 @@
 -- is written, so the sweep never re-derives a port from names that may have
 -- changed in between.
 --
--- alert_rules.managed_by gains 'switch_ops': the alert engine evaluates only
+-- The rule's dimension is 'reachability' (alert_rules.dimension is an ENUM; a
+-- port left down makes whatever is on it unreachable). It is never evaluated
+-- against device_state: alert_rules.managed_by gains 'switch_ops', and the alert engine evaluates only
 -- 'engine' rules (engine.py `_rules`), so this rule is opened and closed by the
 -- restore sweep alone, exactly as 'automation' rules are by the workflow runner.
 --
@@ -64,5 +66,5 @@ ALTER TABLE alert_rules
 
 INSERT INTO alert_rules (name, dimension, device_types, `condition`, severity,
                          min_duration_s, enabled, managed_by)
-VALUES ('switch_port_restore', 'switch_ops', 'switch',
+VALUES ('switch_port_restore', 'reachability', 'switch',
         '{"op":"eq","value":"overdue"}', 'crit', 0, 1, 'switch_ops');

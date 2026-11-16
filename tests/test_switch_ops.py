@@ -629,3 +629,15 @@ def test_api_live_port_joins_packetfence_identity(tmp_path, engine):
         r = c.get("/api/switch-ops/live/1/1012")
         assert r.status_code == 200, r.text
         assert r.json()["fdb"]["macs"][0]["computername"] == "CAM-GYM-1"
+
+
+def test_migration_042_rule_dimension_is_a_valid_enum_value():
+    """alert_rules.dimension is a MariaDB ENUM; SQLite tests would not notice a
+    value outside it (found on the first deploy, 2026-11-16)."""
+    import re
+    from netmon.migrate import discover_migrations
+    allowed = {"ping", "snmp", "source_status", "config_backup", "recording", "trunk",
+               "reachability"}
+    sql = next(m for m in discover_migrations() if m.version == "042").path.read_text()
+    dim = re.search(r"VALUES \('switch_port_restore', '([a-z_]+)'", sql).group(1)
+    assert dim in allowed
