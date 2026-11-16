@@ -3,6 +3,7 @@ import { getJSON } from "../api.js";
 import { Card, Dot, Loading, ErrorMsg, SourceBadge, sevColor } from "../primitives.jsx";
 import { SshButton } from "../ssh.jsx";
 import { ActionButton, ActionAudit } from "../actions.jsx";
+import { SwitchOpButton, LivePort } from "../switchops.jsx";
 import { ageOf } from "../format.js";
 import { macMatches } from "../macmatch.js";
 import { HistoryChart } from "../history.jsx";
@@ -305,12 +306,19 @@ function PortDetail({ switchId, ifindex }) {
                 <button type="button" className="btn btn-sm" disabled
                         title={detail.poe_cycle?.reason || "unavailable"}>Cycle PoE</button>
               )}
+              {/* Spec 26: NetMon's own SNMP writes. Rendered only when
+                  [switch_ops] is enabled; refusals come from the server. */}
+              <SwitchOpButton switchId={switchId} ifindex={p.ifindex} portName={p.name}
+                              action="snmp_poe_cycle" label="Cycle PoE (SNMP)" />
+              <SwitchOpButton switchId={switchId} ifindex={p.ifindex} portName={p.name}
+                              action="snmp_port_bounce" label="Bounce port" />
             </div>
             <div className="pd-val" />
           </div>
           {detail.poe_cycle?.warn && (
             <div className="msg error" style={{ fontSize: 11 }}>⚠ {detail.poe_cycle.warn}</div>
           )}
+          <LivePort switchId={switchId} ifindex={p.ifindex} />
           {detail.poe_cycle?.available && detail.poe_cycle?.unverified && (
             <div className="msg" style={{ fontSize: 11 }}>
               PoE state for this port has not been swept, so NetMon cannot confirm

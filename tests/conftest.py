@@ -871,6 +871,27 @@ HELPDESK_DDL_SQLITE = (
 )
 
 
+SWITCH_PORT_RESTORES_DDL_SQLITE = """
+CREATE TABLE switch_port_restores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id INTEGER NOT NULL,
+    ifindex INTEGER NOT NULL,
+    port TEXT NOT NULL,
+    action TEXT NOT NULL,
+    restore_oid TEXT NOT NULL,
+    restore_value INTEGER NOT NULL,
+    deadline TIMESTAMP NOT NULL,
+    actor TEXT NOT NULL,
+    audit_id INTEGER,
+    created_at TIMESTAMP NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at TIMESTAMP,
+    last_error TEXT,
+    UNIQUE (device_id, ifindex, action)
+)
+"""
+
+
 def create_core_tables(engine) -> None:
     """Create the tables the poller / collectors / engine / API touch (SQLite)."""
     from sqlalchemy import text
@@ -913,6 +934,7 @@ def create_core_tables(engine) -> None:
             SETTINGS_AUDIT_DDL_SQLITE,
             STATE_SAMPLES_DDL_SQLITE,
             ACTION_AUDIT_DDL_SQLITE,
+            SWITCH_PORT_RESTORES_DDL_SQLITE,
             *CAMERA_OPS_DDL_SQLITE,
             *AUTOMATION_DDL_SQLITE,
             *ISSUES_DDL_SQLITE,

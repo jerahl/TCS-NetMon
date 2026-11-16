@@ -31,7 +31,7 @@ from netmon.api import (
     actions, alerts, auth_routes, automation, camera_ops, changes, ddi,
     devices, events,
     health, helpdesk, history as history_api, issues, nac, registry, search, settings, sites,
-    status, summary, surveillance, switches, voip, wireless,
+    status, summary, surveillance, switch_ops, switches, voip, wireless,
 )
 from netmon.auth.sessions import DbSessionStore, SessionStore
 from netmon.engine.engine import AlertEngine
@@ -350,6 +350,7 @@ def create_app(
     app.include_router(history_api.router)
     app.include_router(events.router)
     app.include_router(switches.router)
+    app.include_router(switch_ops.router)
     app.include_router(wireless.router)
     app.include_router(surveillance.router)
     app.include_router(voip.router)

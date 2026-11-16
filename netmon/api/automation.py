@@ -437,6 +437,31 @@ async def _dispatch(action: str, params: dict, row: dict, request: Request,
         port = params.get("port")
         if not device_id or not port:
             raise ActionRefused("this proposal carries no switch/port to act on")
+        so = request.app.state.config.switch_ops
+        if so.automation_poe_method == "snmp":
+            # Spec 26: NetMon's own SNMP PoE reset. Falls back to the rConfig
+            # snippet only when SNMP is *unavailable* (feature off, no
+            # credentials, switch lacks the object) — never past a policy
+            # refusal such as the per-port cooldown, which a second path
+            # would otherwise walk straight through.
+            from netmon.api import switch_ops as so_api
+            from netmon.switchops import ops as so_ops
+            from netmon.switchops.ports import Unavailable
+            try:
+                res = await so_ops.run_port_action(
+                    engine, so, so_api.writer(request), so_api.reader(request),
+                    action="snmp_poe_cycle", device_id=int(device_id), port=str(port),
+                    actor=_actor(user), role=_role(user))
+            except Unavailable as exc:
+                if not so.rconfig_fallback:
+                    raise
+                log.warning("SNMP PoE cycle unavailable (%s); falling back to rConfig", exc)
+            else:
+                if not res.get("ok"):
+                    # Same contract as the rConfig path: a send that failed is a
+                    # 502, not an "executed" proposal.
+                    raise HTTPException(status_code=502, detail=f"SNMP: {res.get('message')}")
+                return res
         body = actions_api.PoeCycleBody(device_id=int(device_id), port=str(port),
                                         member=int(params.get("member") or 1))
         return await actions_api._poe_cycle_impl(body, request, engine, user)

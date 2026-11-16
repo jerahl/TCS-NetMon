@@ -49,7 +49,7 @@ class ActionRefused(ActionError):
 @dataclass(frozen=True)
 class ActionSpec:
     key: str
-    source: str          # xiq | packetfence | rconfig | camera | milestone
+    source: str          # xiq | packetfence | rconfig | camera | milestone | switch
     label: str
     # What it does to the device, in one line, for the audit trail and the UI's
     # confirmation prompt. Written plainly on purpose: an operator about to
@@ -114,6 +114,22 @@ ACTIONS: dict[str, ActionSpec] = {
         key="camera_reboot", source="camera", label="Reboot camera",
         effect="Restarts the camera itself; it stops recording for roughly a minute "
                "and comes back with the same configuration.",
+        disruptive=True,
+    ),
+    # Spec 26, owner sign-off 2026-11-16: NetMon's own SNMP SETs to a switch,
+    # replacing the rConfig snippet route where rConfig cannot or will not.
+    # Governed by [switch_ops] (default off, dry-run on) rather than [actions],
+    # so they are not advertised by GET /api/actions; see /api/switch-ops.
+    "snmp_poe_cycle": ActionSpec(
+        key="snmp_poe_cycle", source="switch", label="Cycle PoE (SNMP)",
+        effect="NetMon resets PoE on this switch port over SNMP — anything powered by it "
+               "loses power and reboots.",
+        disruptive=True,
+    ),
+    "snmp_port_bounce": ActionSpec(
+        key="snmp_port_bounce", source="switch", label="Bounce port (SNMP)",
+        effect="NetMon sets this switch port administratively down for a few seconds and "
+               "back up — the device on it loses link and re-negotiates.",
         disruptive=True,
     ),
     "ap_reboot": ActionSpec(

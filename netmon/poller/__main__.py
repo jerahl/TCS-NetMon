@@ -62,7 +62,26 @@ def main(argv: list[str] | None = None) -> int:
                 await poller.run_snmp()
                 await asyncio.sleep(cfg.poller.snmp_interval_s)
 
-        tasks = []
+        async def restore_loop() -> None:
+            # Spec 26: put back any switch port a crashed or interrupted
+            # [switch_ops] action left down. Runs in this process, not the web
+            # one, so a netmon.service crash mid-bounce is still covered — and
+            # regardless of [switch_ops] enabled/dry_run, because restoring is
+            # the safe direction.
+            from netmon.switchops.ops import restore_sweep
+            from netmon.switchops.snmp import SnmpWriter
+            writer = SnmpWriter(cfg.switch_ops)
+            log = logging.getLogger("netmon.switchops.restore")
+            while True:
+                try:
+                    n = await restore_sweep(engine, cfg.switch_ops, writer, cfg.engine)
+                    if n:
+                        log.warning("restore sweep handled %d overdue port restore(s)", n)
+                except Exception:  # noqa: BLE001 — keep sweeping; the next pass retries
+                    log.exception("restore sweep failed")
+                await asyncio.sleep(cfg.switch_ops.restore_sweep_s)
+
+        tasks = [asyncio.create_task(restore_loop())]
         if do_ping:
             tasks.append(asyncio.create_task(ping_loop()))
         if do_snmp:

@@ -111,7 +111,7 @@ def list_actions(request: Request, _user=Depends(require_role(Role.viewer))) -> 
     user = getattr(request.state, "user", None)
     out = []
     for spec in ACTIONS.values():
-        if spec.source in ("camera", "milestone"):
+        if spec.source in ("camera", "milestone", "switch"):
             # Camera-hardware writes (S8/D11) and the Milestone hardware
             # refresh share this registry so the audit trail stays in one
             # table, but they are not operator row-actions: they are
@@ -119,7 +119,8 @@ def list_actions(request: Request, _user=Depends(require_role(Role.viewer))) -> 
             # [actions]. Advertising one here would put "update firmware" next
             # to "bounce this port" on a device page, one click from a truck
             # roll — and `_flag` would read a config key that does not exist
-            # and answer False forever.
+            # and answer False forever. Switch SNMP actions (spec 26) are
+            # governed by [switch_ops] and advertised by /api/switch-ops.
             continue
         enabled = _flag(cfg, spec.key)
         reason = ""

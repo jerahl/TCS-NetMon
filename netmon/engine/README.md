@@ -51,3 +51,7 @@ Rules with `managed_by = 'automation'` (migration 040 — today only
 and closes their alerts and sends their notifications through
 `record_notification`, so shadow and maintenance behave identically. See
 `docs/spec/22-automation-workflows.md` §6b.
+
+Rules with `managed_by = 'switch_ops'` (migration 042 — `switch_port_restore`)
+are opened and closed by the switch-ops restore sweep in netmon-poller
+(`netmon/switchops/ops.py`), never by this engine. See `docs/spec/26-switch-ops.md` §4.

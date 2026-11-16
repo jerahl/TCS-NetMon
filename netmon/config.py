@@ -448,6 +448,66 @@ class AutomationConfig:
 
 
 @dataclass(frozen=True)
+class SwitchOpsConfig:
+    """Direct SNMP switch operations (spec 26; owner sign-off 2026-11-16).
+
+    NetMon's first SNMP SETs. Like `[camera_ops]` these go straight to
+    hardware, so the defaults are the cautious ones: everything off, dry-run
+    on. `enabled` is the master switch for the two write actions and the
+    restore sweep; `live_port` gates the read-only live port view separately,
+    because it writes nothing and can be proven on its own.
+
+    The write credential is a dedicated SNMPv3 authPriv user whose write view
+    covers only ifAdminStatus, ifAlias, pethPsePortAdminEnable and
+    extremePethPortResetPower. Its name and passphrases come from the process
+    environment (``/etc/netmon/netmon.env``), never from this file — the same
+    rule as the Help Desk key, so there is one place to rotate them.
+    """
+    enabled: bool = False
+    dry_run: bool = True
+    poe_cycle: bool = True
+    port_bounce: bool = True
+    live_port: bool = False
+    # Writes.
+    snmpset_path: str = "snmpset"
+    snmpget_path: str = "snmpget"
+    snmpbulkwalk_path: str = "snmpbulkwalk"
+    timeout_s: int = 3
+    auth_protocol: str = "SHA"
+    priv_protocol: str = "AES"
+    v3_user: str = field(default="", repr=False)
+    v3_auth_pass: str = field(default="", repr=False)
+    v3_priv_pass: str = field(default="", repr=False)
+    # PoE cycle: reset first, admin off/on as the fallback.
+    poe_off_wait_s: int = 10
+    # Port bounce: how long the port stays down.
+    bounce_down_s: int = 5
+    bounce_max_s: int = 30
+    # Read-back after a cycle/bounce.
+    verify_timeout_s: int = 90
+    verify_mac_return: bool = True
+    # Rate limits.
+    cooldown_s: int = 120
+    bulk_max_operator: int = 8
+    bulk_max_admin: int = 48
+    # Restore ledger: grace past the planned restore before the sweep acts.
+    restore_grace_s: int = 30
+    restore_sweep_s: int = 15
+    # Automation: which path the workflow's `poe_cycle` step takes.
+    automation_poe_method: str = "rconfig"   # rconfig | snmp
+    rconfig_fallback: bool = True
+    # Live port view.
+    live_interval_s: int = 5
+    live_fdb_interval_s: int = 15
+    live_ttl_s: int = 30
+    live_max_ports: int = 20
+
+    @property
+    def has_credentials(self) -> bool:
+        return bool(self.v3_user and self.v3_auth_pass and self.v3_priv_pass)
+
+
+@dataclass(frozen=True)
 class HelpdeskConfig:
     """Frontline Help Desk integration (docs/spec/25-helpdesk.md).
 
@@ -524,6 +584,7 @@ class Config:
     sources: dict[str, SourceToggle]
     path: str
     helpdesk: HelpdeskConfig = field(default_factory=HelpdeskConfig)
+    switch_ops: SwitchOpsConfig = field(default_factory=SwitchOpsConfig)
 
     def source_enabled(self, name: str) -> bool:
         src = self.sources.get(name)
@@ -806,6 +867,71 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         raise ConfigError("[helpdesk] credentials do not belong in netmon.conf — put "
                           "HD_API_KEY / HD_API_PASSPHRASE in /etc/netmon/netmon.env")
 
+    # --- [switch_ops] direct SNMP switch writes + live port view (spec 26) ---
+    def _so(key: str, default: str) -> str:
+        return parser.get("switch_ops", key, fallback=default).strip()
+
+    def _so_int(key: str, default: int, lo: int = 0) -> int:
+        try:
+            v = int(_so(key, str(default)))
+        except ValueError:
+            raise ConfigError(f"[switch_ops] {key} must be an integer") from None
+        if v < lo:
+            raise ConfigError(f"[switch_ops] {key} must be >= {lo}")
+        return v
+
+    switch_ops = SwitchOpsConfig(
+        enabled=_as_bool(_so("enabled", "false")),
+        dry_run=_as_bool(_so("dry_run", "true")),
+        poe_cycle=_as_bool(_so("poe_cycle", "true")),
+        port_bounce=_as_bool(_so("port_bounce", "true")),
+        live_port=_as_bool(_so("live_port", "false")),
+        snmpset_path=_so("snmpset_path", "snmpset"),
+        snmpget_path=_so("snmpget_path", "snmpget"),
+        snmpbulkwalk_path=_so("snmpbulkwalk_path", "snmpbulkwalk"),
+        timeout_s=_so_int("timeout_s", 3, 1),
+        auth_protocol=_so("auth_protocol", "SHA").upper(),
+        priv_protocol=_so("priv_protocol", "AES").upper(),
+        # Secrets: environment only (see SwitchOpsConfig).
+        v3_user=os.environ.get("NETMON_SNMP_RW_USER", "").strip(),
+        v3_auth_pass=os.environ.get("NETMON_SNMP_RW_AUTH", "").strip(),
+        v3_priv_pass=os.environ.get("NETMON_SNMP_RW_PRIV", "").strip(),
+        poe_off_wait_s=_so_int("poe_off_wait_s", 10, 1),
+        bounce_down_s=_so_int("bounce_down_s", 5, 1),
+        bounce_max_s=_so_int("bounce_max_s", 30, 1),
+        verify_timeout_s=_so_int("verify_timeout_s", 90, 5),
+        verify_mac_return=_as_bool(_so("verify_mac_return", "true")),
+        cooldown_s=_so_int("cooldown_s", 120, 0),
+        bulk_max_operator=_so_int("bulk_max_operator", 8, 1),
+        bulk_max_admin=_so_int("bulk_max_admin", 48, 1),
+        restore_grace_s=_so_int("restore_grace_s", 30, 5),
+        restore_sweep_s=_so_int("restore_sweep_s", 15, 5),
+        automation_poe_method=_so("automation_poe_method", "rconfig").lower(),
+        rconfig_fallback=_as_bool(_so("rconfig_fallback", "true")),
+        live_interval_s=_so_int("live_interval_s", 5, 2),
+        live_fdb_interval_s=_so_int("live_fdb_interval_s", 15, 5),
+        live_ttl_s=_so_int("live_ttl_s", 30, 10),
+        live_max_ports=_so_int("live_max_ports", 20, 1),
+    )
+    if switch_ops.bounce_max_s > 30:
+        # Hard ceiling: a "bounce" longer than this is an outage, not a bounce.
+        raise ConfigError("[switch_ops] bounce_max_s may not exceed 30")
+    if switch_ops.bounce_down_s > switch_ops.bounce_max_s:
+        raise ConfigError("[switch_ops] bounce_down_s exceeds bounce_max_s")
+    if switch_ops.auth_protocol not in ("SHA", "SHA-224", "SHA-256", "SHA-384", "SHA-512", "MD5"):
+        raise ConfigError("[switch_ops] auth_protocol must be SHA, SHA-224/256/384/512 or MD5")
+    if switch_ops.priv_protocol not in ("AES", "AES-192", "AES-256", "DES"):
+        raise ConfigError("[switch_ops] priv_protocol must be AES, AES-192, AES-256 or DES")
+    if switch_ops.automation_poe_method not in ("rconfig", "snmp"):
+        raise ConfigError("[switch_ops] automation_poe_method must be rconfig or snmp")
+    if switch_ops.bulk_max_admin < switch_ops.bulk_max_operator:
+        raise ConfigError("[switch_ops] bulk_max_admin must be >= bulk_max_operator")
+    for _k in ("user", "auth_pass", "priv_pass", "community"):
+        if parser.has_option("switch_ops", _k):
+            raise ConfigError("[switch_ops] credentials do not belong in netmon.conf — put "
+                              "NETMON_SNMP_RW_USER / NETMON_SNMP_RW_AUTH / NETMON_SNMP_RW_PRIV "
+                              "in /etc/netmon/netmon.env")
+
     # --- [issues] issue tracker (spec 24) ---
     issues = IssuesConfig(
         enabled=_as_bool(parser.get("issues", "enabled", fallback="true")),
@@ -962,4 +1088,4 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
                   snmp_inventory=snmp_inventory, engine=engine, history=history,
                   actions=actions, automation=automation, issues=issues, camera_snapshot=camera_snapshot,
                   camera_ops=camera_ops, sources=sources, path=conf_path,
-                  helpdesk=helpdesk)
+                  helpdesk=helpdesk, switch_ops=switch_ops)

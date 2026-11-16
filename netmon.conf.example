@@ -582,6 +582,39 @@ timeout_s = 120
 # Cameras on the VMS network carry self-signed certificates, as with snapshots.
 verify_ssl = false
 
+[switch_ops]
+# Direct SNMP switch operations (spec 26; runbook docs/runbooks/switch-ops.md).
+# NetMon's own SNMP SETs: PoE cycle and port bounce, plus a read-only live
+# port view. Off by default; dry_run logs the exact snmpset command and sends
+# nothing. Credentials are NOT read from this file: put NETMON_SNMP_RW_USER,
+# NETMON_SNMP_RW_AUTH and NETMON_SNMP_RW_PRIV in /etc/netmon/netmon.env (a
+# dedicated SNMPv3 authPriv user with a write view limited to ifAdminStatus,
+# ifAlias, pethPsePortAdminEnable and extremePethPortResetPower).
+enabled = false
+dry_run = true
+poe_cycle = true
+port_bounce = true
+live_port = false
+# auth_protocol = SHA
+# priv_protocol = AES
+# timeout_s = 3
+# poe_off_wait_s = 10       ; fallback PoE off/on hold
+# bounce_down_s = 5
+# bounce_max_s = 30         ; hard ceiling, config refuses more
+# verify_timeout_s = 90
+# verify_mac_return = true
+# cooldown_s = 120          ; per port, across SNMP and rConfig PoE paths
+# bulk_max_operator = 8
+# bulk_max_admin = 48
+# restore_grace_s = 30
+# restore_sweep_s = 15      ; netmon-poller.service
+# automation_poe_method = rconfig   ; rconfig | snmp
+# rconfig_fallback = true   ; only when SNMP is unavailable, never past a cooldown
+# live_interval_s = 5
+# live_fdb_interval_s = 15
+# live_ttl_s = 30
+# live_max_ports = 20
+
 [camera_snapshot]
 # Camera still-image proxy (spec 11 D7, approved 2026-07-28; built spec 20 S4).
 #
