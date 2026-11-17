@@ -301,7 +301,7 @@ export function CamerasView({ groups, cams, activeId, collapsed, onToggle, onAll
       </div>
 
       <div className="switch-layout">
-        <div className="card host-nav">
+        <div className="card host-nav cam-nav-card">
           <div className="host-nav-tools">
             <span>{shown.length.toLocaleString()} of {cams.length.toLocaleString()} cameras ·{" "}
               {groups.length} groups</span>
@@ -333,6 +333,7 @@ export function CamerasView({ groups, cams, activeId, collapsed, onToggle, onAll
             <input type="text" placeholder="filter cameras…" value={q}
                    onChange={(e) => onQ(e.target.value)} style={{ width: "100%" }} />
           </div>
+          <div className="cam-nav-list">
           {groups.length === 0 ? (
             <div className="host-nav-hint">
               No camera groups cached. The Milestone collector walks
@@ -355,6 +356,7 @@ export function CamerasView({ groups, cams, activeId, collapsed, onToggle, onAll
               )}
             </React.Fragment>
           )}
+          </div>
         </div>
 
         <div className="sw-main">
