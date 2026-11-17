@@ -7018,3 +7018,18 @@ kbd.k { font-family: var(--mono); font-size: 10px; background: var(--bg-2); bord
   .hdd-grid2 { grid-template-columns: 1fr; }
   .hdb-drawer { width: 100vw; padding: 6px; }
 }
+
+/* Cameras page: the group tree scrolls on its own so a long fleet doesn't
+   drag the camera wall off-screen. Card sticks under the sticky topbar; the
+   filter tools stay pinned and only .cam-nav-list scrolls. */
+.cam-nav-card {
+  position: sticky; top: 56px;
+  max-height: calc(100vh - 68px);
+  display: flex; flex-direction: column;
+}
+.cam-nav-card > .host-nav-tools { flex-shrink: 0; }
+.cam-nav-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+@media (max-width: 1280px) {
+  /* single-column layout: not sticky, but keep the tree bounded */
+  .cam-nav-card { position: static; max-height: 60vh; }
+}
