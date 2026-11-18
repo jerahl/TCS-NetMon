@@ -23,8 +23,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -452,15 +453,119 @@ def flatten_camera_groups(roots: list[dict], reg: dict[str, dict], now: datetime
     return groups, members
 
 
+_GUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+# A camera view item names its camera twice — `<iteminfo cameraid="…">` and
+# `<property name="cameraid" value="…">` (confirmed live 2026-11-18).
+_CAMERAID_RE = re.compile(
+    r'cameraid\s*=\s*"([0-9a-fA-F-]{36})"'
+    r'|name\s*=\s*"cameraid"\s+value\s*=\s*"([0-9a-fA-F-]{36})"', re.IGNORECASE)
+
+
+def view_camera_ids(view: dict, known: set[str]) -> set[str]:
+    """Lower-cased camera GUIDs a Smart Client view shows.
+
+    Two passes over each ``viewItemDefinitionXml``. The explicit ``cameraid``
+    attribute covers the ordinary camera tile. Other tile types (carousel,
+    hotspot, map) name cameras in shapes we have not seen on this estate, so
+    any GUID in the XML that is a *known camera* also counts — the item's own
+    id, ``smartClientId`` and the all-zero ``livestreamid`` can never match one.
+    """
+    out: set[str] = set()
+    items = view.get("viewItem")
+    if isinstance(items, dict):
+        items = [items]
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        xml = str(item.get("viewItemDefinitionXml") or "")
+        if not xml:
+            continue
+        for a, b in _CAMERAID_RE.findall(xml):
+            out.add((a or b).lower())
+        for g in _GUID_RE.findall(xml):
+            if g.lower() in known:
+                out.add(g.lower())
+    out.discard("00000000-0000-0000-0000-000000000000")
+    return out
+
+
+def flatten_camera_views(roots: list[dict], reg: dict[str, dict], now: datetime,
+                         ) -> tuple[list[dict], list[dict]]:
+    """Walk the view-group tree → (`camera_views` rows, `camera_view_members` rows).
+
+    ``roots`` is what :meth:`MilestoneClient.view_groups` returns. ``camera_count``
+    is every camera the view shows, including ones the registry never imported;
+    membership rows cover registry cameras only (the same convention as
+    :func:`flatten_camera_groups`).
+    """
+    cams = {k.lower(): v for k, v in reg.items()
+            if str(v.get("device_type") or "camera") == "camera"}
+    known = set(cams)
+    views: list[dict] = []
+    members: list[dict] = []
+    seen_views: set[str] = set()
+    seen_members: set[tuple[str, int]] = set()
+
+    def visit(node: dict, top: str, parent_path: str) -> None:
+        name = str(node.get("displayName") or node.get("name") or node.get("id") or "")
+        path = f"{parent_path}/{name}" if parent_path else name
+        top = top or name
+        for v in node.get("views") or []:
+            if not isinstance(v, dict):
+                continue
+            vid = str(v.get("id") or "")
+            if not vid or vid in seen_views:
+                continue
+            seen_views.add(vid)
+            vname = str(v.get("displayName") or v.get("name") or vid)
+            ids = view_camera_ids(v, known)
+            views.append({
+                "id": vid,
+                "name": vname[:128],
+                "top_group": top[:128],
+                "path": f"{path}/{vname}"[:512],
+                "camera_count": len(ids),
+                "updated_at": now,
+            })
+            for cid in ids:
+                r = cams.get(cid)
+                if r is None:
+                    continue
+                key = (vid, int(r["id"]))
+                if key in seen_members:
+                    continue
+                seen_members.add(key)
+                members.append({"view_id": vid, "device_id": int(r["id"]),
+                                "updated_at": now})
+        for sub in node.get("viewGroups") or []:
+            if isinstance(sub, dict):
+                visit(sub, top, path)
+
+    for g in roots or []:
+        if isinstance(g, dict):
+            visit(g, "", "")
+    return views, members
+
+
 class MilestoneCollector(Collector):
     name = "milestone"
 
     def __init__(self, engine: Engine, client: MilestoneClient, interval_s: float = 120.0,
                  ess_enabled: bool = True, blind_after_failures: int = 3,
                  identity_batch: int = 150, identity_concurrency: int = 6,
-                 ess_open_timeout: float = 30.0) -> None:
+                 ess_open_timeout: float = 30.0, views_enabled: bool = True,
+                 views_interval_s: float = 900.0) -> None:
         super().__init__(engine)
         self.client = client
+        # Smart Client views (migration 043). ~410 GETs per walk, and views
+        # change when someone edits a layout, not every two minutes — so the
+        # walk runs on its own slower clock. Disableable without a deploy (§4.3);
+        # turning it off leaves the last walk visibly stale, never empty.
+        self.views_enabled = views_enabled
+        self.views_interval_s = max(0.0, float(views_interval_s))
+        self._views_due: datetime | None = None
+        self._views_stats: dict[str, Any] = {}
         # Passed to every ESS connect. Tunable without a deploy because the
         # gateway's handshake latency is a property of the VMS, not of NetMon —
         # see MilestoneEss.open_timeout for the measurement that set the default.
@@ -517,7 +622,10 @@ class MilestoneCollector(Collector):
                    # per-cycle snapshot was to edit the code. It matters now that
                    # `ess_live` can carry camera status on its own.
                    ess_enabled=str(s.get("ess_enabled", "true")).strip().lower()
-                   in ("1", "true", "yes", "on"))
+                   in ("1", "true", "yes", "on"),
+                   views_enabled=str(s.get("views_enabled", "true")).strip().lower()
+                   in ("1", "true", "yes", "on"),
+                   views_interval_s=float(s.get("views_interval_s") or 900))
 
     def _by_milestone_id(self) -> dict[str, dict]:
         rows = db.fetch_all(
@@ -788,6 +896,46 @@ class MilestoneCollector(Collector):
         self._etypes = {str(t.get("id")): str(t.get("name") or "") for t in rows}
         return self._etypes
 
+    async def _refresh_views(self, registry: dict[str, dict], now: datetime,
+                             degraded: list[str]) -> int:
+        """Walk Smart Client views when due and replace `camera_views` /
+        `camera_view_members` (migration 043).
+
+        Runs after the inventory writes for the same reason the group walk does:
+        a failing walk costs only the view data. A failed walk is retried next
+        cycle and leaves the previous rows in place; a walk that comes back with
+        no views at all is treated as a failure too — "nothing is in any view"
+        is a claim this must never make by accident (§4.5).
+        """
+        if not self.views_enabled:
+            return 0
+        if self._views_due is not None and now < self._views_due:
+            return 0
+        try:
+            tree = await self.client.view_groups()
+        except MilestoneError as exc:
+            degraded.append("views")
+            log.warning("milestone viewGroups walk failed — view membership will "
+                        "be stale, not empty: %s", exc)
+            return 0
+        view_rows, member_rows = flatten_camera_views(tree, registry, now)
+        if not view_rows:
+            degraded.append("views")
+            log.warning("milestone viewGroups walk returned no views — keeping the "
+                        "previous view membership")
+            return 0
+        self._views_due = now + timedelta(seconds=self.views_interval_s)
+        written = db.replace_rows(self.engine, "camera_views", ["id"], view_rows)
+        written += db.replace_rows(self.engine, "camera_view_members",
+                                   ["view_id", "device_id"], member_rows)
+        self._views_stats = {
+            "camera_views": len(view_rows),
+            "view_memberships": len(member_rows),
+            "cameras_in_views": len({m["device_id"] for m in member_rows}),
+            "views_walked_at": now.isoformat(),
+        }
+        return written
+
     async def run_once(self) -> int:
         registry = self._by_milestone_id()
         try:
@@ -1052,6 +1200,8 @@ class MilestoneCollector(Collector):
             written += db.replace_rows(self.engine, "camera_group_members",
                                        ["group_id", "device_id"], member_rows)
 
+        written += await self._refresh_views(registry, now, degraded)
+
         # Environment overview singleton. `discovered_*` is what Milestone
         # returned; `recording_servers`/`cameras` are what actually linked to the
         # registry — a gap between them means devices need importing (surfaced on
@@ -1079,6 +1229,9 @@ class MilestoneCollector(Collector):
             "camera_groups": len(group_rows),
             "group_memberships": len(member_rows),
             "group_cameras": sum(r["camera_count"] for r in group_rows),
+            # Smart Client views — from the last successful walk, which runs on
+            # its own clock, so it carries its own timestamp.
+            **self._views_stats,
             # Which enrichments failed this cycle. Without this a 0 GB storage
             # roll-up is indistinguishable from "the endpoint 400s", and the UI
             # would render an outright absence of data as "nothing used".

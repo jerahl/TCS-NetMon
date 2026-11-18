@@ -237,9 +237,28 @@ Ported from `reference/zabbix/milestone/*`.
   - *Gotcha:* an unrecognised query param on this API returns `{"array": []}`
     rather than an error — `/hardware?fields=all` reports zero hardware. Treat
     an unexpectedly empty array as a malformed request, not an empty fleet.
+- **Smart Client views** (`/api/rest/v1/viewGroups`, then per group
+  `/viewGroups/{id}/viewGroups` and `/viewGroups/{id}/views`; migration 043,
+  spec 20 S3a) → `camera_views`, `camera_view_members`. Answers "is anyone
+  watching this camera?" for the Cameras page's *not in a view* filter/sort.
+  - *Shape:* `includeChildren` is ignored on `viewGroups`, so the tree is walked
+    level by level — ~409 GETs, ~6 s on this estate (55 top-level groups, 149
+    subgroups, depth 3, 395 views). Each view row carries `viewItem[]` inline;
+    the camera GUID is `cameraid="…"` inside `viewItemDefinitionXml`.
+    `/views/{id}/viewItems` answers HTTP 400 — do not use it.
+  - *Visibility:* only shared (role) view groups and the service account's own
+    Private group are returned. Other users' private views are invisible, so
+    "in no view" means "in no shared view".
+  - *Rate:* its own clock, `views_interval_s` (default 900 s) — views change
+    when someone edits a layout, not every cycle.
+  - *Failure mode:* any failed GET aborts the walk; an empty walk is treated as
+    a failure too. Either adds `views` to the overview's `degraded` list, keeps
+    the previous rows, and retries next cycle. Until the first good walk the
+    API returns `view_count: null` (unknown), never 0.
 - **Config:** `[milestone] enabled, host, user, pass, scheme, client_id,
   verify_ssl, interval_s, identity_batch, identity_concurrency, ess_live,
-  ess_live_flush_s, ess_live_watchdog_s, ess_open_timeout, ess_enabled`.
+  ess_live_flush_s, ess_live_watchdog_s, ess_open_timeout, ess_enabled,
+  views_enabled, views_interval_s`.
   `ess_enabled`, `ess_live` and `ess_open_timeout` are in the settings overlay;
   `ess_live` registers a supervised task at startup, so it is flagged "needs
   service restart" rather than picked up by Apply.

@@ -355,6 +355,43 @@ groups above. The collector also had to be reordered — the group walk now runs
 *after* the camera and recording-server writes, because placed before them a
 tree failure skipped the whole inventory refresh.
 
+### S3a — "not in a Smart Client view" filter and sort — **done 2026-11-18**
+
+**Owner request 2026-11-18:** sort the Cameras page by cameras that are not in
+a view. "View" means a Smart Client *view* (a layout operators open), not a
+camera group — confirmed with the owner, because the tree already shows
+"Not in any group". A camera filed in a group but placed in no view is a camera
+nobody watches; on this estate that is typically a new install added to the VMS
+and never put on a layout.
+
+Checked against the live gateway before the schema was written (read-only GET):
+
+- `GET /api/rest/v1/viewGroups` → **55 top-level groups**: one per role's shared
+  views (`BHS`, `BHS TV`, `CO Dock TV`, `Tech-Kiosk`…) plus the service account's
+  own empty `Private`. **Other users' private views are not visible**, so the
+  feature means "in no *shared* view" and the UI says so.
+- `includeChildren=viewGroups,views` is **ignored** on this resource. The walk is
+  `/viewGroups/{id}/viewGroups` + `/viewGroups/{id}/views` per group: 149
+  subgroups, max depth 3, **395 views, 409 GETs, ~6 s**.
+- Each view row already carries `viewItem[]`; the camera is
+  `cameraid="<guid>"` inside `viewItemDefinitionXml`. `/views/{id}/viewItems`
+  answers HTTP 400 on this version.
+
+**Delivered:** migration 043 (`camera_views`, `camera_view_members`);
+`MilestoneClient.view_groups()`; `flatten_camera_views()` /
+`view_camera_ids()` (explicit `cameraid`, plus any GUID in a tile that is a
+known camera, for carousel-type tiles); the walk runs after the inventory and
+group writes on its own clock (`[milestone] views_interval_s`, default 900 s;
+`views_enabled` to turn it off). `GET /api/surveillance/cameras` gains
+`view_count` and `views_updated_at`. On `#/cameras`: a **"Sort: not in a view
+first"** select (applies within every group and to the wall), a **"Not in any
+Smart Client view (N)"** status-filter option, and a "no view" tag on the row.
+
+**Fail loud (§4.5):** `view_count` is `null` until a walk has succeeded — an
+empty table must never read as "every camera is unwatched". A failed or empty
+walk keeps the previous rows, adds `views` to the overview's `degraded`, and is
+retried on the next cycle. The filter reads "(not collected yet)" while null.
+
 ### S3b — thumbnail wall — **done 2026-09-07, with S4**
 
 Not a Table/Thumbnails toggle in the end. The wall fills the right pane **while

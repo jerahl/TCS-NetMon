@@ -43,12 +43,32 @@ export const STATUS_FILTERS = [
   ["down_network_only", "No ICMP"],
   ["blind", "Blind — no Milestone verdict"],
   ["up", "Up"],
+  ["no_view", "Not in any Smart Client view"],
 ];
+
+// Sort orders for the navigator and the wall. "Not in a view first" puts the
+// cameras nobody is watching (migration 043) at the top of every group, then
+// falls back to name order, so the rest of the list reads as it always has.
+export const SORTS = [
+  ["name", "Sort: name"],
+  ["no_view", "Sort: not in a view first"],
+];
+
+// True only when the view walk has *seen* the camera and found it in no view.
+// `null` is "NetMon does not know yet" and must never count as unwatched.
+export const notInView = (cam) => cam.view_count === 0;
+
+export function camCompare(sort) {
+  const byName = (a, b) => String(a.name).localeCompare(String(b.name));
+  if (sort !== "no_view") return byName;
+  return (a, b) => (notInView(b) - notInView(a)) || byName(a, b);
+}
 
 // Does a camera match one filter value? `problems` is the union of every tier
 // that is not plainly up, plus blind — the question an operator actually asks.
 export function matchesStatus(cam, status) {
   if (!status) return true;
+  if (status === "no_view") return notInView(cam);
   const blind = cam.source_status === "blind";
   if (status === "blind") return blind;
   if (status === "problems") return blind || (cam.reachability && cam.reachability !== "up");
@@ -137,6 +157,12 @@ export function GroupNode({ group, rows, activeId, collapsed, onToggle, depth = 
              title={`${cam.name}${cam.ip ? ` · ${cam.ip}` : ""}${cam.model ? ` · ${cam.model}` : ""}`}>
             <span title={camTitle(cam)}><Dot severity={camSev(cam)} /></span>
             <span className="h-id">{cam.name}</span>
+            {notInView(cam) && (
+              <span className="h-count" style={{ color: sevColor("warn") }}
+                    title="In no shared Smart Client view — nobody is watching this camera">
+                no view
+              </span>
+            )}
             {cam.recording_state === "up" && (
               <span className="h-count" title="recording now">●</span>
             )}
@@ -166,6 +192,7 @@ export function CamerasPage({ id, query = {} }) {
   const [collapsed, setCollapsed] = React.useState(() => loadCollapsed() || new Set());
   const [seeded, setSeeded] = React.useState(false);
   const [status, setStatus] = React.useState(query.status || "");
+  const [sort, setSort] = React.useState(query.sort === "no_view" ? "no_view" : "name");
   const [q, setQ] = React.useState(query.q || "");
   // Only to decide whether the bulk-operations pane may render at all; the API
   // enforces the same floor, so this is about not showing an admin surface to
@@ -233,6 +260,7 @@ export function CamerasPage({ id, query = {} }) {
     <CamerasView groups={groups} cams={cams} activeId={activeId} query={query}
                  collapsed={collapsed} onToggle={toggle} onAllCollapsed={setAllCollapsed}
                  status={status} onStatus={setStatus}
+                 sort={sort} onSort={setSort}
                  q={q} onQ={setQ} role={role} />
   );
 }
@@ -241,7 +269,8 @@ export function CamerasPage({ id, query = {} }) {
 // it with fixed data — a component that only renders after a fetch is never
 // exercised at build time, which is how "usedKnown is not defined" shipped.
 export function CamerasView({ groups, cams, activeId, collapsed, onToggle, onAllCollapsed,
-                              status = "", onStatus, q, onQ, query = {}, role = null }) {
+                              status = "", onStatus, sort = "name", onSort = () => {},
+                              q, onQ, query = {}, role = null }) {
   const n = (v) => Number(v) || 0;
   const needle = (q || "").trim().toLowerCase();
   const isProblem = (c) => c.source_status === "blind"
@@ -251,6 +280,12 @@ export function CamerasView({ groups, cams, activeId, collapsed, onToggle, onAll
     matchesStatus(c, status)
     && (!needle || `${c.name} ${c.site || ""} ${c.model || ""} ${c.ip || ""} ${c.mac || ""}`
         .toLowerCase().includes(needle)));
+  const compare = camCompare(sort);
+  shown.sort(compare);
+  // View data exists once any camera has a known count; until the first walk
+  // lands, the view filter and sort are offered but say why they are empty.
+  const viewsKnown = cams.some((c) => c.view_count !== null && c.view_count !== undefined);
+  const unwatched = cams.filter(notInView).length;
 
   // Bucket by group membership. A camera in two groups appears under both —
   // that is what Smart Client does, and hiding the second membership would
@@ -262,9 +297,7 @@ export function CamerasView({ groups, cams, activeId, collapsed, onToggle, onAll
     if (ids.length === 0) ungrouped.push(c);
     else for (const gid of ids) byGroup.get(gid).push(c);
   }
-  for (const rows of byGroup.values()) {
-    rows.sort((a, b) => String(a.name).localeCompare(String(b.name)));
-  }
+  for (const rows of byGroup.values()) rows.sort(compare);
 
   // Groups with something wrong float to the top — an outage is never a scroll
   // away. Within each band, Milestone's own path order.
@@ -325,6 +358,19 @@ export function CamerasView({ groups, cams, activeId, collapsed, onToggle, onAll
               {STATUS_FILTERS.map(([v, label]) => (
                 <option key={v || "all"} value={v}>
                   {label}{v === "problems" ? ` (${problems})` : ""}
+                  {v === "no_view" ? (viewsKnown ? ` (${unwatched})` : " (not collected yet)") : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="host-nav-tools">
+            <select className="cfb-select" style={{ width: "100%" }} value={sort}
+                    onChange={(e) => onSort(e.target.value)}
+                    title={"order cameras within each group" + (viewsKnown ? ""
+                      : " — Smart Client view data has not been collected yet")}>
+              {SORTS.map(([v, label]) => (
+                <option key={v} value={v}>
+                  {label}{v === "no_view" && viewsKnown ? ` (${unwatched})` : ""}
                 </option>
               ))}
             </select>

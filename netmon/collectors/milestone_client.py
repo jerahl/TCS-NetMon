@@ -317,6 +317,52 @@ class MilestoneClient:
                     log.warning("cameraGroups pagination exceeded 40 pages; stopping")
                     return out
 
+    async def view_groups(self, max_depth: int = 8) -> list[dict]:
+        """Smart Client *views* — the camera layouts operators actually watch
+        (migration 043, spec 20 §S3a).
+
+        Not the same tree as :meth:`camera_groups`: a camera group is where a
+        camera is *filed*; a view is a layout someone *looks at*. A camera can
+        sit in a group and appear in no view, which means nobody is watching it.
+
+        Confirmed live 2026-11-18 (read-only GET):
+
+        * ``/viewGroups`` → 55 top-level groups, one per role's shared views
+          (``BHS``, ``BHS TV``, ``CO Dock TV`` …) plus the service account's own
+          empty ``Private`` group. Other users' *private* views are NOT
+          visible through this API, so "in no view" means "in no shared view".
+        * ``includeChildren`` is ignored on this resource, so the tree is walked
+          one level at a time: ``/viewGroups/{id}/viewGroups`` and
+          ``/viewGroups/{id}/views``. 149 subgroups, max depth 3, 395 views,
+          409 GETs in ~6 s.
+        * Each view row already carries ``viewItem[]`` with the camera GUID
+          inside ``viewItemDefinitionXml`` — no per-view fetch is needed
+          (``/views/{id}/viewItems`` answers HTTP 400 on this version).
+
+        Returns the top-level groups with ``views`` and ``viewGroups`` filled in
+        recursively. Any failed GET raises: a half-walked tree would read as
+        "these cameras are in no view", which is the one wrong answer this
+        exists to avoid (§4.5).
+        """
+        async with await self._mkclient() as client:
+            async def fill(node: dict, depth: int) -> dict:
+                gid = str(node.get("id") or "")
+                if not gid:
+                    return node
+                node["views"] = _items(await self._get(
+                    client, f"/api/rest/v1/viewGroups/{gid}/views"))
+                subs = _items(await self._get(
+                    client, f"/api/rest/v1/viewGroups/{gid}/viewGroups"))
+                if depth >= max_depth and subs:
+                    raise MilestoneError(
+                        f"viewGroups nested deeper than {max_depth} under {gid}")
+                node["viewGroups"] = [await fill(s, depth + 1)
+                                      for s in subs if isinstance(s, dict)]
+                return node
+
+            top = _items(await self._get(client, "/api/rest/v1/viewGroups"))
+            return [await fill(g, 0) for g in top if isinstance(g, dict)]
+
     async def hardware_tasks(self, hardware_id: str) -> list[str]:
         """Task ids this hardware advertises — ``GET /hardware/{id}?tasks``.
 
