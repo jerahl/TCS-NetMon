@@ -266,6 +266,12 @@ identity_concurrency = 6
 # field). Default ON. Turn it off only once `ess_live` below is carrying that
 # state — with both off nothing writes camera status and the rows go stale.
 ess_enabled = true
+# Smart Client views walk (migration 043): which cameras appear in a shared
+# view, for the Cameras page's "not in a view" filter/sort. ~410 GETs per walk,
+# so it runs on its own clock rather than every cycle. Off leaves the last walk
+# in place (stale, never emptied).
+views_enabled = true
+views_interval_s = 900
 # Live Events/State subscription (spec 20 S7). Default OFF.
 #
 # With this false, the cycle above opens the ESS socket once per interval, reads

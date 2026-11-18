@@ -364,6 +364,35 @@ const cases = [
      if (!html.includes("site-prob")) throw new Error("collapsed group hid its problem count");
    }],
 
+  // Smart Client views (migration 043): "not in a view first" puts the
+  // unwatched camera ahead of its group-mates, tags it, and counts it.
+  ["CamerasView · sort not-in-a-view first", C.CamerasView, {
+    groups: [{ id: "g", name: "BHS", path: "BHS", total: 3, milestone_camera_count: 3 }],
+    cams: [{ device_id: 1, name: "a-cam", reachability: "up", group_ids: ["g"], view_count: 2 },
+           { device_id: 2, name: "z-cam", reachability: "up", group_ids: ["g"], view_count: 0 },
+           { device_id: 3, name: "m-cam", reachability: "up", group_ids: ["g"], view_count: 1 }],
+    activeId: null, collapsed: new Set(), onToggle: () => {}, onAllCollapsed: () => {},
+    status: "", onStatus: () => {}, sort: "no_view", onSort: () => {}, q: "", onQ: () => {} },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (!(text.indexOf("z-cam") < text.indexOf("a-cam"))) throw new Error("unwatched camera not sorted first");
+     if (!text.includes("no view")) throw new Error("unwatched camera not tagged");
+     if (!text.includes("Not in any Smart Client view (1)")) throw new Error("unwatched count missing");
+   }],
+
+  // Before the first view walk every view_count is null: nothing may be tagged
+  // or counted as unwatched, and the filter must say why it is empty.
+  ["CamerasView · view data not collected yet", C.CamerasView, {
+    groups: [{ id: "g", name: "BHS", path: "BHS", total: 1, milestone_camera_count: 1 }],
+    cams: [{ device_id: 1, name: "a-cam", reachability: "up", group_ids: ["g"], view_count: null }],
+    activeId: null, collapsed: new Set(), onToggle: () => {}, onAllCollapsed: () => {},
+    status: "", onStatus: () => {}, sort: "no_view", onSort: () => {}, q: "", onQ: () => {} },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (text.includes("no view<")) throw new Error("unknown view data tagged as unwatched");
+     if (!text.includes("(not collected yet)")) throw new Error("missing view data not explained");
+   }],
+
   ["CamerasView · no groups cached", C.CamerasView, {
     groups: [], cams: [], activeId: null, collapsed: new Set(), onToggle: () => {},
     onAllCollapsed: () => {}, status: "", onStatus: () => {}, q: "", onQ: () => {} },

@@ -27,6 +27,14 @@ class FakeMs:
         # Camera groups (migration 026) — the Smart Client tree.
         self.groups_data = []
         self.groups_fail = None
+        # Smart Client views (migration 043).
+        # Default: a healthy walk with one (empty) view. An empty *tree* is
+        # deliberately reported as degraded by the collector, so the default
+        # must not be one or every "healthy cycle" test would read degraded.
+        self.views_data = [{"id": "vg", "displayName": "BHS", "viewGroups": [],
+                            "views": [{"id": "v0", "displayName": "All", "viewItem": []}]}]
+        self.views_fail = None
+        self.views_calls = 0
         # Environment facts (spec 20 S2): /sites and /licenseDetails.
         self.site_data = {}
         self.site_fail = None
@@ -55,6 +63,12 @@ class FakeMs:
         if self.groups_fail:
             raise self.groups_fail
         return self.groups_data
+
+    async def view_groups(self):
+        self.views_calls += 1
+        if self.views_fail:
+            raise self.views_fail
+        return self.views_data
 
     async def site_info(self):
         if self.site_fail:
@@ -102,7 +116,8 @@ def test_milestone_writes_recording_and_source_status(tmp_path):
     fake = FakeMs()
     fake.servers = [{"id": "RS1", "running": True}]
     fake.cameras_data = [{"id": "CAM1", "recordingEnabled": False}]
-    ms = MilestoneCollector(engine, fake, ess_enabled=False)
+    ms = MilestoneCollector(engine, fake, ess_enabled=False,
+                           views_enabled=False)  # inventory count only
     n = asyncio.run(ms.run_once())
     assert n == 4  # 2 state writes (RS source_status + cam recording) + 2 persisted rows
 
@@ -211,7 +226,9 @@ def test_milestone_unlinked_entities_surface_in_overview(tmp_path):
     fake.servers = [{"id": "RS-X", "running": True}]
     fake.cameras_data = [{"id": "CAM-X", "recordingEnabled": True},
                          {"id": "CAM-Y", "recordingEnabled": True}]
-    n = asyncio.run(MilestoneCollector(engine, fake, ess_enabled=False).run_once())
+    # views off: this counts inventory rows, and a view row is not inventory.
+    n = asyncio.run(MilestoneCollector(engine, fake, ess_enabled=False,
+                                       views_enabled=False).run_once())
     assert n == 0  # nothing linked → nothing written
     ov = read_snapshot(engine, "milestone.overview")["payload"]
     assert ov["discovered_servers"] == 1 and ov["discovered_cameras"] == 2
@@ -1525,3 +1542,138 @@ def test_the_snapshot_socket_is_closed_not_dropped(tmp_path):
         mod.MilestoneEss = original
 
     assert closed == [True], "the snapshot must close its socket explicitly"
+
+
+# --- Smart Client views (migration 043) -------------------------------------
+
+def _view_item(cam_guid, item_guid="11111111-2222-3333-4444-555555555555"):
+    """A camera tile exactly as the live gateway returns it (2026-11-18)."""
+    return {"displayName": "Index 0", "id": item_guid, "viewItemPosition": 0,
+            "viewItemDefinitionXml":
+                f'<viewitem id="{item_guid}" displayname="Camera ViewItem" '
+                f'type="VideoOS.RemoteClient.Application.Data.ContentTypes.CameraContentType.'
+                f'CameraViewItem, VideoOS.RemoteClient.Application" '
+                f'smartClientId="0c5dda5b-8ca5-4ffb-8368-9c068fb69273">'
+                f'<iteminfo cameraid="{cam_guid}" lastknowncameradisplayname="X" '
+                f'livestreamid="00000000-0000-0000-0000-000000000000" />'
+                f'<properties><property name="cameraid" value="{cam_guid}" />'
+                f'</properties></viewitem>'}
+
+
+CAM_A = "16dcb8b2-0bee-4b3a-959b-bde35995b4df"
+CAM_B = "b9e9d924-a725-4246-a791-6f378c0b9339"
+CAM_X = "50ba8280-0000-4000-8000-000000000001"   # in a view, never imported
+
+
+def test_flatten_camera_views_nested_and_counts():
+    from netmon.collectors.milestone import flatten_camera_views
+
+    now = datetime(2026, 11, 18, 12, 0, tzinfo=timezone.utc)
+    # Registry ids are compared case-insensitively; one is upper-case here.
+    reg = {CAM_A.upper(): {"id": 11, "device_type": "camera"},
+           CAM_B: {"id": 12, "device_type": "camera"},
+           "RS1": {"id": 1, "device_type": "recording_server"}}
+    roots = [
+        {"id": "g-priv", "displayName": "Private", "views": [], "viewGroups": []},
+        {"id": "g-nhs", "displayName": "NHS TV", "views": [], "viewGroups": [
+            {"id": "g-ath", "displayName": "Athletics", "viewGroups": [], "views": [
+                {"id": "v-gym", "displayName": "Gym",
+                 "viewItem": [_view_item(CAM_A), _view_item(CAM_X), _view_item(CAM_A)]},
+            ]},
+        ]},
+        {"id": "g-bhs", "displayName": "BHS", "viewGroups": [], "views": [
+            {"id": "v-hall", "displayName": "Hall", "viewItem": [_view_item(CAM_A)]},
+            {"id": "v-empty", "displayName": "Empty", "viewItem": []},
+        ]},
+    ]
+    views, members = flatten_camera_views(roots, reg, now)
+    by = {v["id"]: v for v in views}
+    assert set(by) == {"v-gym", "v-hall", "v-empty"}
+    assert by["v-gym"]["path"] == "NHS TV/Athletics/Gym"
+    assert by["v-gym"]["top_group"] == "NHS TV"
+    # Every camera the view shows, imported or not; the duplicate tile counts once.
+    assert by["v-gym"]["camera_count"] == 2
+    assert by["v-empty"]["camera_count"] == 0
+    # Membership covers registry cameras only; CAM_B is in no view at all.
+    pairs = {(m["view_id"], m["device_id"]) for m in members}
+    assert pairs == {("v-gym", 11), ("v-hall", 11)}
+    assert len(members) == len(pairs)
+
+
+def test_view_camera_ids_ignores_item_and_client_guids():
+    """The tile's own id, smartClientId and the zero livestreamid are GUIDs too;
+    only camera ids may come out."""
+    from netmon.collectors.milestone import view_camera_ids
+
+    ids = view_camera_ids({"viewItem": [_view_item(CAM_A), None, {"x": 1}]}, set())
+    assert ids == {CAM_A}
+    # A non-camera tile that names a known camera some other way still counts.
+    other = {"viewItem": [{"viewItemDefinitionXml":
+                           f'<viewitem type="Carousel"><camera id="{CAM_B}"/></viewitem>'}]}
+    assert view_camera_ids(other, {CAM_B}) == {CAM_B}
+    assert view_camera_ids(other, set()) == set()
+
+
+def _views_engine(tmp_path):
+    e = _engine(tmp_path)
+    with e.begin() as conn:
+        conn.execute(text("UPDATE devices SET milestone_hardware_id = :g WHERE name = 'CAM-Hall'"),
+                     {"g": CAM_A})
+        conn.execute(text("INSERT INTO devices (name, site, device_type, enabled, "
+                          "milestone_hardware_id) VALUES ('CAM-Gym','BHS','camera',1,:g)"),
+                     {"g": CAM_B})
+    return e
+
+
+def test_view_walk_writes_and_throttles(tmp_path):
+    e = _views_engine(tmp_path)
+    ms = FakeMs()
+    ms.cameras_data = [{"id": CAM_A}, {"id": CAM_B}]
+    ms.views_data = [{"id": "g", "displayName": "BHS", "viewGroups": [],
+                      "views": [{"id": "v1", "displayName": "Hall",
+                                 "viewItem": [_view_item(CAM_A)]}]}]
+    c = MilestoneCollector(e, ms, ess_enabled=False, views_interval_s=900)
+    asyncio.run(c.run_once())
+    rows = db.fetch_all(e, "SELECT view_id, device_id FROM camera_view_members")
+    assert len(rows) == 1
+    ov = read_snapshot(e, "milestone.overview")["payload"]
+    assert ov["camera_views"] == 1 and ov["cameras_in_views"] == 1
+
+    # Not due again for 900 s: the next cycle must not walk.
+    asyncio.run(c.run_once())
+    assert ms.views_calls == 1
+    # The snapshot still reports the last walk rather than dropping it.
+    assert read_snapshot(e, "milestone.overview")["payload"]["camera_views"] == 1
+
+
+def test_view_walk_failure_and_empty_keep_previous_rows(tmp_path):
+    """A failed or empty walk must never read as 'no camera is in any view'."""
+    e = _views_engine(tmp_path)
+    ms = FakeMs()
+    ms.cameras_data = [{"id": CAM_A}]
+    ms.views_data = [{"id": "g", "displayName": "BHS", "viewGroups": [],
+                      "views": [{"id": "v1", "displayName": "Hall",
+                                 "viewItem": [_view_item(CAM_A)]}]}]
+    c = MilestoneCollector(e, ms, ess_enabled=False, views_interval_s=0)
+    asyncio.run(c.run_once())
+    assert db.fetch_one(e, "SELECT COUNT(*) n FROM camera_view_members")["n"] == 1
+
+    ms.views_fail = MilestoneError("viewGroups HTTP 500")
+    asyncio.run(c.run_once())
+    assert db.fetch_one(e, "SELECT COUNT(*) n FROM camera_view_members")["n"] == 1
+    assert "views" in read_snapshot(e, "milestone.overview")["payload"]["degraded"]
+
+    ms.views_fail = None
+    ms.views_data = []
+    asyncio.run(c.run_once())
+    assert db.fetch_one(e, "SELECT COUNT(*) n FROM camera_view_members")["n"] == 1
+    assert db.fetch_one(e, "SELECT COUNT(*) n FROM camera_views")["n"] == 1
+
+
+def test_view_walk_can_be_disabled(tmp_path):
+    e = _views_engine(tmp_path)
+    ms = FakeMs()
+    ms.cameras_data = [{"id": CAM_A}]
+    c = MilestoneCollector(e, ms, ess_enabled=False, views_enabled=False)
+    asyncio.run(c.run_once())
+    assert ms.views_calls == 0

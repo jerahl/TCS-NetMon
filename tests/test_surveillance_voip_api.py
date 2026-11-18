@@ -589,3 +589,31 @@ def test_camera_detail_still_returns_firmware_once(tmp_path):
         row = client.get("/api/surveillance/cameras/2").json()
     assert row["firmware"] == "7.93.0024"
     assert row["serial"] is None and "vendor" in row
+
+
+def test_cameras_view_count(tmp_path):
+    """`view_count` (migration 043): null until a view walk has landed, then the
+    number of Smart Client views showing each camera — 0 meaning nobody is."""
+    url = f"sqlite:///{tmp_path / 'cv.db'}"
+    _seed(url)
+    with _client(tmp_path, url) as client:
+        # No camera_views rows yet → unknown, never "unwatched".
+        cams = client.get("/api/surveillance/cameras").json()
+        assert all(c["view_count"] is None for c in cams)
+
+    engine = db.make_engine(url)
+    now = datetime.now(timezone.utc)
+    with engine.begin() as c:
+        c.execute(text(
+            "INSERT INTO camera_views (id, name, top_group, path, camera_count, updated_at) "
+            "VALUES ('v1','Hall','BHS','BHS/Hall',1,:t),('v2','Lobby','BHS TV','BHS TV/Lobby',1,:t)"),
+            {"t": now})
+        c.execute(text(
+            "INSERT INTO camera_view_members (view_id, device_id, updated_at) "
+            "VALUES ('v1',2,:t),('v2',2,:t)"), {"t": now})
+    engine.dispose()
+    with _client(tmp_path, url) as client:
+        by = {c["name"]: c for c in client.get("/api/surveillance/cameras").json()}
+        assert by["CAM-Hall"]["view_count"] == 2
+        assert by["CAM-Gym"]["view_count"] == 0
+        assert by["CAM-Gym"]["views_updated_at"] is not None

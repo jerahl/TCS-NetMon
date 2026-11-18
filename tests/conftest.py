@@ -519,6 +519,27 @@ CREATE TABLE camera_group_members (
 )
 """
 
+# Milestone Smart Client views + membership (migration 043).
+CAMERA_VIEWS_DDL_SQLITE = """
+CREATE TABLE camera_views (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    top_group TEXT,
+    path TEXT,
+    camera_count INTEGER NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP
+)
+"""
+
+CAMERA_VIEW_MEMBERS_DDL_SQLITE = """
+CREATE TABLE camera_view_members (
+    view_id TEXT NOT NULL,
+    device_id INTEGER NOT NULL,
+    updated_at TIMESTAMP,
+    PRIMARY KEY (view_id, device_id)
+)
+"""
+
 
 TRUNKS_DDL_SQLITE = """
 CREATE TABLE trunks (
@@ -751,6 +772,8 @@ def create_core_tables(engine) -> None:
             CAMERAS_DDL_SQLITE,
             CAMERA_GROUPS_DDL_SQLITE,
             CAMERA_GROUP_MEMBERS_DDL_SQLITE,
+            CAMERA_VIEWS_DDL_SQLITE,
+            CAMERA_VIEW_MEMBERS_DDL_SQLITE,
             TRUNKS_DDL_SQLITE,
             EXTENSIONS_DDL_SQLITE,
             APP_SETTINGS_DDL_SQLITE,

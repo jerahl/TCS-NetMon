@@ -487,7 +487,30 @@ def cameras(
             members.setdefault(int(m["device_id"]), []).append(m["group_id"])
         for r in rows:
             r["group_ids"] = members.get(int(r["device_id"]), [])
+        _attach_view_counts(engine, rows)
     return rows
+
+
+def _attach_view_counts(engine: Engine, rows: list[dict]) -> None:
+    """``view_count`` — how many Smart Client views show each camera (migration 043).
+
+    ``0`` means the last view walk found the camera in no shared view, so
+    nobody is watching it. ``None`` means NetMon does not know: the walk has
+    never succeeded (no `camera_views` rows). Never 0 by default — an empty
+    table must not read as "every camera is unwatched" (§4.5).
+    ``views_updated_at`` carries the walk's age so the page can badge staleness.
+    """
+    meta = db.fetch_one(engine, "SELECT COUNT(*) AS n, MAX(updated_at) AS at FROM camera_views")
+    if not meta or not int(meta["n"] or 0):
+        for r in rows:
+            r["view_count"] = None
+            r["views_updated_at"] = None
+        return
+    counts = {int(m["device_id"]): int(m["n"]) for m in db.fetch_all(
+        engine, "SELECT device_id, COUNT(*) AS n FROM camera_view_members GROUP BY device_id")}
+    for r in rows:
+        r["view_count"] = counts.get(int(r["device_id"]), 0)
+        r["views_updated_at"] = meta["at"]
 
 
 @router.get("/cameras/{device_id}")
