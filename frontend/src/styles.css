@@ -2093,6 +2093,10 @@ table.grid.kv td:first-child { color: var(--muted); width: 160px; }
   border-left-color: var(--zbx);
   color: var(--fg);
 }
+.cam-auto-list { max-height: 420px; overflow-y: auto; }
+.cam-auto-list tr.clickable { cursor: pointer; }
+.cam-auto-list tr.clickable:hover { background: var(--bg-2); }
+.cam-auto-detail { font-size: 11px; max-width: 520px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .host-nav-host .h-id { flex: 1; }
 .host-nav-host .h-prob {
   font-family: var(--mono); font-size: 9.5px;
