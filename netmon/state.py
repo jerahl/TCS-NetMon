@@ -229,8 +229,16 @@ def mark_stale(engine: Engine, dimension: str, source: str, cutoff: datetime,
     with engine.begin() as conn:
         # `value = :old` guards the race with a writer that refreshed the row
         # between the SELECT above and this UPDATE.
+        #
+        # `updated_at = updated_at` is load-bearing: on MariaDB the column is
+        # `ON UPDATE CURRENT_TIMESTAMP`, so leaving it out restamps the row with
+        # the server's *local* time — which erased the "last confirmed
+        # 2026-09-18" the stale badge exists to show, and read back as a reading
+        # six hours old. Naming the column with its own value suppresses the
+        # auto-update. SQLite has no such clause, which is why no test caught it.
         conn.execute(text(
-            "UPDATE device_state SET value = :value, severity = :severity "
+            "UPDATE device_state SET value = :value, severity = :severity, "
+            "updated_at = updated_at "
             "WHERE device_id = :d AND dimension = :dim AND source = :source AND value = :old"),
             lapsed)
         conn.execute(text(
