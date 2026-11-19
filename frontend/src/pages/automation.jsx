@@ -583,12 +583,12 @@ function Editor({ workflow, meta, role, onSaved }) {
 
 // ───────────────────────── runs & proposals ─────────────────────────
 
-const DECISION_COLOR = {
+export const DECISION_COLOR = {
   taken: "var(--ok)", would_run: "var(--info)", refused: "var(--warn)",
   failed: "var(--err)", skipped: "var(--muted)", awaiting_approval: "var(--accent)",
 };
 
-function RunTrail({ runId }) {
+export function RunTrail({ runId }) {
   const [run, setRun] = React.useState(null);
   React.useEffect(() => {
     if (!runId) return;

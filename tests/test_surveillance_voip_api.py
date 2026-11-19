@@ -622,3 +622,47 @@ def test_cameras_view_count(tmp_path):
         assert by["CAM-Gym"]["view_names"] == []
         detail = client.get(f"/api/surveillance/cameras/{by['CAM-Hall']['device_id']}").json()
         assert detail["view_names"] == ["BHS TV/Lobby", "BHS/Hall"]
+
+
+def test_cameras_automation_latest_run(tmp_path):
+    """`/cameras/automation`: the newest workflow run per camera, its decisive
+    step, and pending approvals — non-camera devices left out."""
+    url = f"sqlite:///{tmp_path / 'ca.db'}"
+    _seed(url)
+    with _client(tmp_path, url) as client:
+        assert client.get("/api/surveillance/cameras/automation").json() == []
+
+    engine = db.make_engine(url)
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO workflows (id, name, title, graph, enabled, shadow) "
+                       "VALUES (1,'camera_down_remediation','Camera down','{}',1,0)"))
+        c.execute(text(
+            "INSERT INTO workflow_runs (id, workflow_id, device_id, trigger_reason, status, shadow, message) VALUES "
+            "(10,1,3,'source_status=down held 15m','done',0,'completed'),"
+            "(11,1,3,'source_status=down held 15m','refused',0,'[G2] reading is stale'),"
+            "(12,1,2,'source_status=down held 15m','done',0,'completed'),"
+            "(13,1,4,'switch','done',0,'completed')"))
+        c.execute(text(
+            "INSERT INTO workflow_run_steps (run_id, seq, node_id, node_kind, label, decision, detail) VALUES "
+            "(11,1,'t','trigger','Camera down','taken','CAM-Gym down'),"
+            "(11,2,'b','branch','Does it answer ping?','taken','no'),"
+            "(11,3,'a','action','Cycle PoE on the remembered port','refused','[G2] stale'),"
+            "(12,1,'t','trigger','Camera down','taken','CAM-Hall down'),"
+            "(12,2,'b','branch','Confirmed port remembered?','taken','no'),"
+            "(12,3,'e','alert','Escalate: no confirmed port','taken','alert #7 already open'),"
+            "(12,4,'s','stop','Done','taken','workflow ends here')"))
+        c.execute(text("INSERT INTO action_proposals (device_id, action, status) "
+                       "VALUES (2,'poe_cycle','pending'),(2,'poe_cycle','dismissed')"))
+    engine.dispose()
+    with _client(tmp_path, url) as client:
+        rows = {r["device_id"]: r for r in client.get("/api/surveillance/cameras/automation").json()}
+    assert set(rows) == {2, 3}                      # the switch's run is not a camera's
+    assert rows[3]["run_id"] == 11                  # newest run, whatever its status
+    assert rows[3]["status"] == "refused"
+    assert rows[3]["result"] == "Cycle PoE on the remembered port"
+    assert rows[3]["result_decision"] == "refused"
+    assert rows[3]["pending_proposals"] == 0
+    assert rows[2]["result"] == "Escalate: no confirmed port"
+    assert rows[2]["result_detail"] == "alert #7 already open"
+    assert rows[2]["workflow"] == "camera_down_remediation"
+    assert rows[2]["pending_proposals"] == 1

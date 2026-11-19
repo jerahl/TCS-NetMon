@@ -4,6 +4,8 @@ import { Card, Loading, ErrorMsg, Dot, SourceBadge, sevColor, PageHeader } from 
 import { CameraDetailPage } from "./camera_detail.jsx";
 import { CamThumb } from "./camera_snapshot.jsx";
 import { CameraOpsTab } from "./camera_ops.jsx";
+import { RunTrail, DECISION_COLOR } from "./automation.jsx";
+import { ageOf } from "../format.js";
 
 // Cameras — the camera fleet as its own page, navigated by Milestone's own
 // group tree (spec 20 S3, owner-directed 2026-09-07).
@@ -240,6 +242,21 @@ export function CamerasPage({ id, query = {} }) {
     return () => { live = false; clearInterval(t); };
   }, []);
 
+  // Automation results only feed the problems view, so they are fetched only
+  // while it is open — and refreshed on the same cycle as the fleet.
+  // null = loading, {error} = failed, else device_id → latest run.
+  const [automation, setAutomation] = React.useState(null);
+  React.useEffect(() => {
+    if (status !== "problems") return undefined;
+    let live = true;
+    const load = () => getJSON("/api/surveillance/cameras/automation")
+      .then((r) => { if (live) setAutomation(Object.fromEntries(r.map((x) => [x.device_id, x]))); })
+      .catch((e) => { if (live) setAutomation({ error: e }); });
+    load();
+    const t = setInterval(load, REFRESH_MS);
+    return () => { live = false; clearInterval(t); };
+  }, [status]);
+
   const activeId = id || null;
 
   // First visit with no saved preference: collapse everything except the group
@@ -276,7 +293,7 @@ export function CamerasPage({ id, query = {} }) {
     <CamerasView groups={groups} cams={cams} activeId={activeId} query={query}
                  collapsed={collapsed} onToggle={toggle} onAllCollapsed={setAllCollapsed}
                  status={status} onStatus={setStatus}
-                 sort={sort} onSort={setSort}
+                 sort={sort} onSort={setSort} automation={automation}
                  q={q} onQ={setQ} role={role} />
   );
 }
@@ -286,7 +303,7 @@ export function CamerasPage({ id, query = {} }) {
 // exercised at build time, which is how "usedKnown is not defined" shipped.
 export function CamerasView({ groups, cams, activeId, collapsed, onToggle, onAllCollapsed,
                               status = "", onStatus, sort = "name", onSort = () => {},
-                              q, onQ, query = {}, role = null }) {
+                              q, onQ, query = {}, role = null, automation = null }) {
   const n = (v) => Number(v) || 0;
   const needle = (q || "").trim().toLowerCase();
   const isProblem = (c) => c.source_status === "blind"
@@ -433,13 +450,98 @@ export function CamerasView({ groups, cams, activeId, collapsed, onToggle, onAll
           ) : activeId ? (
             <CameraDetailPage id={activeId} embedded query={query} />
           ) : (
+            <React.Fragment>
+            {status === "problems" && <AutomationResults rows={shown} runs={automation} />}
             <ThumbnailWall rows={shown} total={cams.length} problems={problems}
                            onProblems={() => onStatus("problems")}
                            resetKey={`${status}|${q || ""}`} />
+            </React.Fragment>
           )}
         </div>
       </div>
     </div>
+  );
+}
+
+
+// What the remediation workflow last did about each problem camera: the
+// newest run, its decisive step (escalated, cycled PoE, refused by a guard)
+// and any action waiting for approval. Click a row for the full step trail.
+export function AutomationResults({ rows, runs }) {
+  const [open, setOpen] = React.useState(null);
+  if (runs && runs.error) return <ErrorMsg error={runs.error} />;
+  const withRun = runs ? rows.filter((c) => runs[c.device_id]).length : 0;
+  const pending = runs ? rows.reduce((t, c) => t + (runs[c.device_id]?.pending_proposals || 0), 0) : 0;
+  return (
+    <Card title="Automation results"
+          kicker={runs ? `${withRun.toLocaleString()} of ${rows.length.toLocaleString()} have a run`
+                         + (pending ? ` · ${pending} awaiting approval` : "") : ""}
+          link={{ href: "#/automation", label: "Automation" }} tight>
+      {!runs ? <Loading what="automation results" /> : rows.length === 0 ? (
+        <div className="msg" style={{ padding: 14 }}>No problem cameras match the filter.</div>
+      ) : (
+        <div className="cam-auto-list">
+          <table className="grid">
+            <thead><tr><th>Camera</th><th>State</th><th>Last run</th><th>Result</th></tr></thead>
+            <tbody>
+              {rows.map((c) => {
+                const r = runs[c.device_id];
+                const isOpen = r && open === r.run_id;
+                return (
+                  <React.Fragment key={c.device_id}>
+                    <tr className={r ? "clickable" : undefined}
+                        onClick={r ? () => setOpen(isOpen ? null : r.run_id) : undefined}
+                        title={r ? "show this run's step trail" : undefined}>
+                      <td><a href={`#/cameras/${c.device_id}`} onClick={(e) => e.stopPropagation()}>
+                        {c.name}</a>
+                        {c.site && <span className="dim" style={{ marginLeft: 6, fontSize: 11 }}>{c.site}</span>}
+                      </td>
+                      <td title={camTitle(c)}><Dot severity={camSev(c)} />{" "}
+                        <span style={{ fontSize: 11 }}>
+                          {c.source_status === "blind" ? "blind" : (c.reachability || "unknown").replace(/_/g, " ")}
+                        </span></td>
+                      <td className="mono" style={{ fontSize: 11 }}
+                          title={r ? `run #${r.run_id} · ${r.started_at}` : undefined}>
+                        {r ? `${ageOf(r.started_at) || "—"} ago` : <span className="dim">—</span>}
+                      </td>
+                      <td style={{ fontSize: 12 }}>
+                        {!r ? <span className="dim">no automation run</span> : (
+                          <>
+                            <span style={{ color: DECISION_COLOR[r.result_decision || r.status]
+                                                  || "var(--fg-2)" }}>
+                              {r.result || r.status}
+                            </span>
+                            {r.shadow ? <span className="dim" style={{ marginLeft: 6, fontSize: 10 }}>SHADOW</span> : null}
+                            {r.pending_proposals > 0 && (
+                              <span style={{ marginLeft: 6, fontSize: 10, color: "var(--accent)" }}>
+                                {r.pending_proposals} awaiting approval</span>
+                            )}
+                            {(r.result_detail || r.message) && (
+                              <div className="dim cam-auto-detail" title={r.result_detail || r.message}>
+                                {r.result_detail || r.message}
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                    {isOpen && (
+                      <tr><td colSpan={4} style={{ paddingLeft: 20 }}>
+                        <div className="dim" style={{ fontSize: 11, marginBottom: 4 }}>
+                          #{r.run_id} · {r.workflow_title || r.workflow} · {r.trigger_reason}
+                          {r.message ? ` — ${r.message}` : ""}
+                        </div>
+                        <RunTrail runId={r.run_id} />
+                      </td></tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
   );
 }
 

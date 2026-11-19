@@ -522,6 +522,73 @@ def _attach_view_counts(engine: Engine, rows: list[dict]) -> None:
         r["views_updated_at"] = meta["at"]
 
 
+@router.get("/cameras/automation")
+def cameras_automation(
+    engine: Engine = Depends(get_engine),
+    _user=Depends(require_role(Role.viewer)),
+) -> list[dict]:
+    """The latest automation workflow run for every camera that has one.
+
+    Feeds the Cameras page's problems view: next to "this camera is down" it
+    shows what the remediation workflow last did about it — escalated, cycled
+    PoE, refused by a guard and why. One row per camera, the newest run only.
+
+    ``result`` / ``result_detail`` / ``result_decision`` come from the run's
+    decisive step: the last action or alert step, else the last step that is not
+    the trigger or the closing stop. ``pending_proposals`` counts actions
+    waiting in the approval queue for the camera.
+
+    Declared before ``/cameras/{device_id}`` so "automation" is not read as an id.
+    The newest run per device is found by grouping on (device_id, status), which
+    the ``idx_wf_runs_device`` index answers as a loose scan (~40 ms over 1.9M
+    runs); grouping on device_id alone scans every run (~2 s).
+    """
+    latest: dict[int, int] = {}
+    for r in db.fetch_all(
+            engine,
+            "SELECT device_id, status, MAX(id) AS id FROM workflow_runs "
+            "WHERE device_id IS NOT NULL GROUP BY device_id, status"):
+        d = int(r["device_id"])
+        latest[d] = max(latest.get(d, 0), int(r["id"]))
+    cams = {int(r["device_id"]) for r in db.fetch_all(engine, "SELECT device_id FROM cameras")}
+    run_ids = [rid for dev, rid in latest.items() if dev in cams]
+    if not run_ids:
+        return []
+
+    keys = {f"r{i}": rid for i, rid in enumerate(run_ids)}
+    ph = ", ".join(":" + k for k in keys)
+    runs = db.fetch_all(
+        engine,
+        "SELECT r.id AS run_id, r.device_id, r.workflow_id, w.name AS workflow, "
+        "       w.title AS workflow_title, r.status, r.shadow, r.trigger_reason, "
+        "       r.message, r.started_at, r.finished_at, r.resume_at "
+        "FROM workflow_runs r LEFT JOIN workflows w ON w.id = r.workflow_id "
+        f"WHERE r.id IN ({ph})", keys)
+    steps: dict[int, list[dict]] = {}
+    for st in db.fetch_all(
+            engine,
+            "SELECT run_id, seq, node_kind, label, decision, detail "
+            f"FROM workflow_run_steps WHERE run_id IN ({ph}) ORDER BY run_id, seq", keys):
+        steps.setdefault(int(st["run_id"]), []).append(st)
+    pending = {int(p["device_id"]): int(p["n"]) for p in db.fetch_all(
+        engine,
+        "SELECT device_id, COUNT(*) AS n FROM action_proposals "
+        "WHERE status = 'pending' AND device_id IS NOT NULL GROUP BY device_id")}
+
+    out = []
+    for r in runs:
+        trail = steps.get(int(r["run_id"]), [])
+        decisive = ([s for s in trail if s["node_kind"] in ("action", "alert")]
+                    or [s for s in trail if s["node_kind"] not in ("trigger", "stop")])
+        last = decisive[-1] if decisive else None
+        r["result"] = last["label"] if last else None
+        r["result_decision"] = last["decision"] if last else None
+        r["result_detail"] = last["detail"] if last else None
+        r["pending_proposals"] = pending.get(int(r["device_id"]), 0)
+        out.append(r)
+    return out
+
+
 @router.get("/cameras/{device_id}")
 def camera_detail(
     device_id: int,

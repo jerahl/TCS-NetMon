@@ -395,6 +395,25 @@ const cases = [
      if (!text.includes("(not collected yet)")) throw new Error("missing view data not explained");
    }],
 
+  // Problems view: each problem camera gets its latest automation run's
+  // decisive step; a camera the workflow never ran on says so.
+  ["CamerasView · problems view shows automation results", C.CamerasView, {
+    groups: [{ id: "g", name: "BHS", path: "BHS", total: 2, milestone_camera_count: 2 }],
+    cams: [{ device_id: 1, name: "a-cam", reachability: "down_confirmed", group_ids: ["g"] },
+           { device_id: 2, name: "b-cam", reachability: "down_source_only", group_ids: ["g"] }],
+    automation: { 1: { device_id: 1, run_id: 9, status: "done", result: "Escalate: no confirmed port",
+                       result_decision: "taken", result_detail: "alert #79 already open",
+                       started_at: new Date().toISOString(), pending_proposals: 1 } },
+    activeId: null, collapsed: new Set(), onToggle: () => {}, onAllCollapsed: () => {},
+    status: "problems", onStatus: () => {}, q: "", onQ: () => {} },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (!text.includes("Automation results")) throw new Error("automation card missing");
+     if (!text.includes("Escalate: no confirmed port")) throw new Error("run result missing");
+     if (!text.includes("1 awaiting approval")) throw new Error("pending approval missing");
+     if (!text.includes("no automation run")) throw new Error("camera without a run not explained");
+   }],
+
   ["CamerasView · no groups cached", C.CamerasView, {
     groups: [], cams: [], activeId: null, collapsed: new Set(), onToggle: () => {},
     onAllCollapsed: () => {}, status: "", onStatus: () => {}, q: "", onQ: () => {} },
