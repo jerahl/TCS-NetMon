@@ -1677,3 +1677,132 @@ def test_view_walk_can_be_disabled(tmp_path):
     c = MilestoneCollector(e, ms, ess_enabled=False, views_enabled=False)
     asyncio.run(c.run_once())
     assert ms.views_calls == 0
+
+
+def _age_ess_row(engine, hw_id, value, minutes):
+    """Plant a `milestone-ess` source_status row last confirmed `minutes` ago."""
+    from datetime import timedelta
+    dev = db.fetch_one(engine, "SELECT id FROM devices WHERE milestone_hardware_id = :h", {"h": hw_id})
+    at = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+    with engine.begin() as c:
+        c.execute(text("DELETE FROM device_state WHERE device_id = :d AND dimension = 'source_status'"),
+                  {"d": dev["id"]})
+        c.execute(text("INSERT INTO device_state (device_id, dimension, value, severity, source, updated_at) "
+                       "VALUES (:d, 'source_status', :v, 'crit', 'milestone-ess', :t)"),
+                  {"d": dev["id"], "v": value, "t": at})
+    return int(dev["id"]), at
+
+
+def test_a_dead_ess_ages_camera_verdicts_to_stale(tmp_path):
+    """The 2026-09-29 failure: the ESS endpoint hung, every cycle left camera
+    status "as-is", and 95 cameras read Milestone-down for seven weeks on
+    readings nobody re-confirmed. Past `ess_stale_after_s` the verdict must
+    read `stale` — and keep the time Milestone last vouched for it."""
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.servers = [{"id": "RS1", "running": True}]
+    fake.cameras_data = [{"id": "CAM1", "recordingEnabled": True}]
+    col = MilestoneCollector(engine, fake, ess_enabled=True, views_enabled=False,
+                             ess_stale_after_s=1800)
+
+    async def no_ess():
+        return None
+    col._ess_state = no_ess
+    asyncio.run(col.run_once())                    # persists the camera row
+    dev, at = _age_ess_row(engine, "CAM1", "down", minutes=60)
+    asyncio.run(col.run_once())
+
+    row = db.fetch_one(engine, "SELECT value, severity, updated_at FROM device_state "
+                               "WHERE device_id = :d AND dimension = 'source_status'", {"d": dev})
+    assert row["value"] == "stale" and row["severity"] == "unknown"
+    kept = datetime.fromisoformat(str(row["updated_at"]))
+    kept = kept if kept.tzinfo else kept.replace(tzinfo=timezone.utc)
+    assert abs((kept - at).total_seconds()) < 1     # last confirmation, not "now"
+    ev = db.fetch_one(engine, "SELECT old_value, new_value FROM state_events "
+                              "WHERE device_id = :d AND dimension = 'source_status' "
+                              "ORDER BY id DESC LIMIT 1", {"d": dev})
+    assert (ev["old_value"], ev["new_value"]) == ("down", "stale")
+    # Recorders fall back to the Config API flag and are never swept.
+    assert _state(engine, "source_status")["RS1"]["value"] == "up"
+
+
+def test_a_fresh_verdict_is_not_marked_stale(tmp_path):
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.cameras_data = [{"id": "CAM1", "recordingEnabled": True}]
+    col = MilestoneCollector(engine, fake, ess_enabled=True, views_enabled=False,
+                             ess_stale_after_s=1800)
+
+    async def no_ess():
+        return None
+    col._ess_state = no_ess
+    asyncio.run(col.run_once())
+    _age_ess_row(engine, "CAM1", "down", minutes=5)
+    asyncio.run(col.run_once())
+    assert _state(engine, "source_status")["CAM1"]["value"] == "down"
+
+
+def test_the_ess_recovering_replaces_stale_with_a_verdict(tmp_path):
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.cameras_data = [{"id": "CAM1", "recordingEnabled": True}]
+    col = MilestoneCollector(engine, fake, ess_enabled=True, views_enabled=False)
+    verdicts = {"now": None}
+
+    async def ess():
+        return verdicts["now"]
+    col._ess_state = ess
+    asyncio.run(col.run_once())
+    _age_ess_row(engine, "CAM1", "down", minutes=600)
+    asyncio.run(col.run_once())
+    assert _state(engine, "source_status")["CAM1"]["value"] == "stale"
+    verdicts["now"] = ({"CAM1": ("up", "ok")}, {})
+    asyncio.run(col.run_once())
+    assert _state(engine, "source_status")["CAM1"]["value"] == "up"
+
+
+def test_stale_sweep_can_be_disabled(tmp_path):
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.cameras_data = [{"id": "CAM1", "recordingEnabled": True}]
+    col = MilestoneCollector(engine, fake, ess_enabled=True, views_enabled=False,
+                             ess_stale_after_s=0)
+
+    async def no_ess():
+        return None
+    col._ess_state = no_ess
+    asyncio.run(col.run_once())
+    _age_ess_row(engine, "CAM1", "down", minutes=600)
+    asyncio.run(col.run_once())
+    assert _state(engine, "source_status")["CAM1"]["value"] == "down"
+
+
+def test_a_failed_config_cycle_still_ages_verdicts(tmp_path):
+    """A cycle that cannot read /cameras re-confirms nothing either."""
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.cameras_data = [{"id": "CAM1", "recordingEnabled": True}]
+    col = MilestoneCollector(engine, fake, ess_enabled=True, views_enabled=False)
+
+    async def no_ess():
+        return None
+    col._ess_state = no_ess
+    asyncio.run(col.run_once())
+    _age_ess_row(engine, "CAM1", "down", minutes=600)
+    fake.fail = MilestoneError("boom")
+    with pytest.raises(MilestoneError):
+        asyncio.run(col.run_once())
+    assert _state(engine, "source_status")["CAM1"]["value"] == "stale"
+
+
+def test_no_stale_sweep_without_the_per_cycle_snapshot(tmp_path):
+    """With the snapshot off, `ess_live` writes only changes, so a camera that
+    stays up is never re-confirmed — sweeping would age healthy cameras."""
+    engine = _engine(tmp_path)
+    fake = FakeMs()
+    fake.cameras_data = [{"id": "CAM1", "recordingEnabled": True}]
+    col = MilestoneCollector(engine, fake, ess_enabled=False, views_enabled=False)
+    asyncio.run(col.run_once())
+    _age_ess_row(engine, "CAM1", "up", minutes=600)
+    asyncio.run(col.run_once())
+    assert _state(engine, "source_status")["CAM1"]["value"] == "up"

@@ -312,6 +312,10 @@ ess_live_watchdog_s = 180
 # it buys latency, never a fabricated value — a connect that never completes
 # still degrades honestly.
 ess_open_timeout = 30
+# A camera's ESS verdict not re-confirmed for this long, seconds, reads `stale`
+# (neither up nor down) and stops driving alerts and automation. Keeps a dead
+# event feed from freezing every camera at its last verdict. 0 disables.
+ess_stale_after_s = 1800
 
 [threecx]
 # 3CX v20 REST API (voice). Read-only. OAuth2 client-credentials.

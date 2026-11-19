@@ -123,6 +123,11 @@ export function CameraDetailView({ cam, meta, alerts, embedded = false,
   const st = cam.state || {};
   const blind = st.source_status?.value === "blind";
   const tier = st.reachability?.value;
+  // Milestone's verdict lapsed (state.mark_stale). Only overrides the headline
+  // when ping says up — a ping-down tier is current evidence and stays.
+  const stale = st.source_status?.value === "stale" && tier === "up";
+  const staleTitle = `Milestone last confirmed this camera's status ${
+    ageOf(st.source_status?.updated_at) || "?"} ago; it answers ping`;
   const s = STATUS[tier] || STATUS.unknown;
   const sp = cam.switch_port;
   const url = liveUrl(cam);
@@ -140,6 +145,7 @@ export function CameraDetailView({ cam, meta, alerts, embedded = false,
           blind
             ? { label: "state", value: "Blind", severity: "warn",
                 title: "Milestone has no verdict for this camera" }
+            : stale ? { label: "state", value: "Milestone stale", title: staleTitle }
             : { label: "state", value: s.label, title: s.hint,
                 severity: s.tone === "ok" ? "ok" : s.tone === "err" ? "crit"
                           : s.tone === "warn" ? "warn" : undefined },
@@ -172,12 +178,13 @@ export function CameraDetailView({ cam, meta, alerts, embedded = false,
           <Card tight>
             <div className="device-hero" style={{ padding: 14 }}>
               <div className="status-line">
-                <Dot severity={blind ? "warn" : s.tone === "ok" ? "ok"
+                <Dot severity={blind ? "warn" : stale ? "unknown" : s.tone === "ok" ? "ok"
                                : s.tone === "err" ? "crit" : "warn"} />
-                <span style={{ color: blind ? sevColor("warn")
+                <span title={stale ? staleTitle : undefined}
+                      style={{ color: blind ? sevColor("warn") : stale ? sevColor("unknown")
                                : s.tone === "ok" ? sevColor("ok")
                                : s.tone === "err" ? sevColor("crit") : sevColor("warn") }}>
-                  {blind ? "Blind" : s.label}
+                  {blind ? "Blind" : stale ? "Milestone status stale" : s.label}
                 </span>
               </div>
               <CameraPreview cam={cam} url={url} />

@@ -601,6 +601,8 @@ def test_cameras_view_count(tmp_path):
         cams = client.get("/api/surveillance/cameras").json()
         assert all(c["view_count"] is None for c in cams)
         assert all(c["view_names"] is None for c in cams)
+        # When Milestone last confirmed the verdict, for the stale badge.
+        assert all("source_updated_at" in c for c in cams)
 
     engine = db.make_engine(url)
     now = datetime.now(timezone.utc)

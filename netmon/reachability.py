@@ -67,8 +67,8 @@ _SOURCE_UP = {"up"}
 def classify(source_status: str | None, ping: str | None) -> str:
     """Tier for one device from its two probe verdicts.
 
-    Deliberately not symmetric with a simple truth table: `blind` and `unknown`
-    are *absence* of a verdict, not a negative one, so a blind source plus a
+    Deliberately not symmetric with a simple truth table: `blind`, `stale` and
+    `unknown` are *absence* of a verdict, not a negative one, so a blind source plus a
     silent ICMP is `down_network_only` (one probe has an opinion) rather than
     `down_confirmed` (two probes agreeing).
     """

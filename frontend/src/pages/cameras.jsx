@@ -44,6 +44,7 @@ export const STATUS_FILTERS = [
   ["down_source_only", "Milestone down — network reaches it"],
   ["down_network_only", "No ICMP"],
   ["blind", "Blind — no Milestone verdict"],
+  ["stale", "Milestone status stale"],
   ["up", "Up"],
   ["no_view", "Not in any Smart Client view"],
 ];
@@ -82,8 +83,11 @@ export function matchesStatus(cam, status) {
   if (status === "no_view") return notInView(cam);
   const blind = cam.source_status === "blind";
   if (status === "blind") return blind;
+  if (status === "stale") return isStale(cam);
   if (status === "problems") return blind || (cam.reachability && cam.reachability !== "up");
-  if (status === "up") return !blind && cam.reachability === "up";
+  // "Up" means every probe says so — a stale Milestone verdict plus a ping is
+  // only half of that.
+  if (status === "up") return !blind && !isStale(cam) && cam.reachability === "up";
   return cam.reachability === status;
 }
 
@@ -94,13 +98,26 @@ const TIER_LABEL = {
   down_network_only: "No ICMP — never answers ping; most camera models never do",
 };
 
+// Milestone's verdict for this camera has not been re-confirmed within the
+// collector's window (milestone.ess_stale_after_s): neither up nor down.
+export const isStale = (cam) => cam.source_status === "stale";
+
 function camSev(cam) {
   if (cam.source_status === "blind") return "warn";
+  // Ping alone says up: not enough to paint it green. A ping-down tier still
+  // shows, because that half of the evidence is current.
+  if (isStale(cam) && cam.reachability === "up") return "unknown";
   return TIER_SEV[cam.reachability] || "unknown";
 }
 
 function camTitle(cam) {
   if (cam.source_status === "blind") return "Blind — Milestone has no verdict for this camera";
+  if (isStale(cam)) {
+    const age = ageOf(cam.source_updated_at);
+    return `Stale — Milestone last confirmed this camera's status ${age ? `${age} ago` : "long ago"}`
+      + (cam.reachability === "up" ? "; it answers ping"
+         : cam.reachability === "down_network_only" ? "; it does not answer ping" : "");
+  }
   return TIER_LABEL[cam.reachability] || "Unknown — no probe has an opinion";
 }
 
@@ -175,6 +192,9 @@ export function GroupNode({ group, rows, activeId, collapsed, onToggle, depth = 
                 </span>
               )}
             </span>
+            {isStale(cam) && (
+              <span className="h-count" title={camTitle(cam)}>stale</span>
+            )}
             {notInView(cam) && (
               <span className="h-count" style={{ color: sevColor("warn") }}
                     title="In no shared Smart Client view — nobody is watching this camera">
@@ -318,6 +338,11 @@ export function CamerasView({ groups, cams, activeId, collapsed, onToggle, onAll
   // View data exists once any camera has a known count; until the first walk
   // lands, the view filter and sort are offered but say why they are empty.
   const viewsKnown = cams.some((c) => c.view_count !== null && c.view_count !== undefined);
+  const staleCams = cams.filter(isStale);
+  // The newest confirmation among the stale rows: how long since Milestone's
+  // event feed said anything about any of them.
+  const staleSince = staleCams.reduce((t, c) =>
+    (c.source_updated_at && (!t || c.source_updated_at > t) ? c.source_updated_at : t), null);
   const unwatched = cams.filter(notInView).length;
 
   // Bucket by group membership. A camera in two groups appears under both —
@@ -366,6 +391,20 @@ export function CamerasView({ groups, cams, activeId, collapsed, onToggle, onAll
         {" · "}<a href="#/surveillance">surveillance overview →</a>
       </div>
 
+      {staleCams.length > 0 && (
+        <div className="set-banner" role="status">
+          <b>Milestone camera status is stale for {staleCams.length.toLocaleString()} camera(s).</b>{" "}
+          Milestone's event feed (ESS) last confirmed them{" "}
+          {ageOf(staleSince) ? `${ageOf(staleSince)} ago` : "at an unknown time"}, so they show
+          as <i>stale</i> rather than up or down until it answers again — check NetMon Status
+          for the Milestone collector.{" "}
+          {status !== "stale" && (
+            <button type="button" className="linkish" onClick={() => onStatus("stale")}>
+              show them</button>
+          )}
+        </div>
+      )}
+
       <div className="switch-layout">
         <div className="card host-nav cam-nav-card">
           <div className="host-nav-tools">
@@ -391,6 +430,7 @@ export function CamerasView({ groups, cams, activeId, collapsed, onToggle, onAll
               {STATUS_FILTERS.map(([v, label]) => (
                 <option key={v || "all"} value={v}>
                   {label}{v === "problems" ? ` (${problems})` : ""}
+                  {v === "stale" ? ` (${staleCams.length})` : ""}
                   {v === "no_view" ? (viewsKnown ? ` (${unwatched})` : " (not collected yet)") : ""}
                 </option>
               ))}
@@ -498,7 +538,8 @@ export function AutomationResults({ rows, runs }) {
                       </td>
                       <td title={camTitle(c)}><Dot severity={camSev(c)} />{" "}
                         <span style={{ fontSize: 11 }}>
-                          {c.source_status === "blind" ? "blind" : (c.reachability || "unknown").replace(/_/g, " ")}
+                          {c.source_status === "blind" ? "blind"
+                            : (c.reachability || "unknown").replace(/_/g, " ") + (isStale(c) ? " · stale" : "")}
                         </span></td>
                       <td className="mono" style={{ fontSize: 11 }}
                           title={r ? `run #${r.run_id} · ${r.started_at}` : undefined}>

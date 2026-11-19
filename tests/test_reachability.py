@@ -77,3 +77,12 @@ def test_recompute_writes_a_tier_per_device(tmp_path):
         engine, "SELECT device_id, value FROM device_state WHERE dimension='reachability'")}
     assert got == {1: DOWN_CONFIRMED, 2: DOWN_SOURCE_ONLY,
                    3: DOWN_NETWORK_ONLY, 4: UP}
+
+
+def test_a_stale_source_is_absence_of_a_verdict():
+    """`stale` (state.mark_stale) is a verdict Milestone stopped re-confirming:
+    it must count for neither side — never `down_source_only` on a reading
+    seven weeks old."""
+    assert classify("stale", "up") == UP
+    assert classify("stale", "down") == DOWN_NETWORK_ONLY
+    assert classify("stale", None) == UNKNOWN

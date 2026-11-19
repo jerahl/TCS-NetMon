@@ -190,6 +190,23 @@ Ported from `reference/zabbix/milestone/*`.
     structural fix is `ess_live`, which makes one handshake instead of 720 a day.
     Registered in the settings overlay, so it is editable from `#/settings` and
     takes effect on Apply — no restart, no edit to `netmon.conf`.
+  - *Stale verdicts:* `ess_stale_after_s` (default 1800s, 0 disables). A failed
+    ESS read leaves camera status as-is rather than guessing — but from
+    2026-09-29 the ESS upgrade hung outright (any request to `/api/ws/*`, even
+    unauthenticated, until timeout) and 2,512 cameras kept their last verdict for
+    seven weeks; 95 read Milestone-down the whole time and drove alerts and
+    automation. Every cycle now flips a camera's `milestone-ess` up/down row not
+    re-confirmed within the window to `stale` (`state.mark_stale`), keeping
+    `updated_at` as the time Milestone last vouched for it. `stale` is absence of
+    a verdict to the reachability tier, the alert rules and the automation
+    trigger; the Cameras page bannering it is the loud part. The next good
+    snapshot overwrites it. Recorders are not swept: without the ESS their status
+    falls back to the Config API `running` flag, so it never freezes. The sweep
+    runs only while `ess_enabled` (the per-cycle snapshot) is on — `ess_live`
+    alone writes changes, so a steady camera would never be re-confirmed. Even
+    with the ESS healthy it matters: a camera missing from the snapshot (no
+    Communication state published) otherwise keeps its last verdict forever —
+    on 2026-11-19, four cameras still read down from September.
 - **Live Events/State subscription** (`ess_live.py`, spec 20 S7) — **default
   off**, `[milestone] ess_live = true` to enable. Holds the same subscription
   open and applies camera `source_status` as events arrive, instead of once a
@@ -258,8 +275,9 @@ Ported from `reference/zabbix/milestone/*`.
 - **Config:** `[milestone] enabled, host, user, pass, scheme, client_id,
   verify_ssl, interval_s, identity_batch, identity_concurrency, ess_live,
   ess_live_flush_s, ess_live_watchdog_s, ess_open_timeout, ess_enabled,
-  views_enabled, views_interval_s`.
-  `ess_enabled`, `ess_live` and `ess_open_timeout` are in the settings overlay;
+  ess_stale_after_s, views_enabled, views_interval_s`.
+  `ess_enabled`, `ess_live`, `ess_open_timeout` and `ess_stale_after_s` are in
+  the settings overlay;
   `ess_live` registers a supervised task at startup, so it is flagged "needs
   service restart" rather than picked up by Apply.
 

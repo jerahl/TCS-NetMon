@@ -37,7 +37,7 @@ from netmon.collectors.milestone_client import MilestoneClient, MilestoneError
 from netmon.config import Config
 from netmon.seed import canon_mac
 from netmon.snapshots import write_snapshot
-from netmon.state import write_state, write_states
+from netmon.state import mark_stale, write_state, write_states
 from netmon.collectors.ws_milestone import MilestoneEss
 
 # ESS event-type names → camera source_status. Resolved authoritatively from
@@ -555,9 +555,15 @@ class MilestoneCollector(Collector):
                  ess_enabled: bool = True, blind_after_failures: int = 3,
                  identity_batch: int = 150, identity_concurrency: int = 6,
                  ess_open_timeout: float = 30.0, views_enabled: bool = True,
-                 views_interval_s: float = 900.0) -> None:
+                 views_interval_s: float = 900.0, ess_stale_after_s: float = 1800.0) -> None:
         super().__init__(engine)
         self.client = client
+        # How long a camera's ESS verdict stays believable without being
+        # re-confirmed. Past it the row reads `stale`, not up or down: when the
+        # ESS endpoint hung on 2026-09-29, 2,512 cameras kept their last verdict
+        # for seven weeks and 95 of them read Milestone-down the whole time.
+        # 0 disables the sweep.
+        self.ess_stale_after_s = max(0.0, float(ess_stale_after_s))
         # Smart Client views (migration 043). ~410 GETs per walk, and views
         # change when someone edits a layout, not every two minutes — so the
         # walk runs on its own slower clock. Disableable without a deploy (§4.3);
@@ -625,7 +631,8 @@ class MilestoneCollector(Collector):
                    in ("1", "true", "yes", "on"),
                    views_enabled=str(s.get("views_enabled", "true")).strip().lower()
                    in ("1", "true", "yes", "on"),
-                   views_interval_s=float(s.get("views_interval_s") or 900))
+                   views_interval_s=float(s.get("views_interval_s") or 900),
+                   ess_stale_after_s=float(s.get("ess_stale_after_s", 1800) or 0))
 
     def _by_milestone_id(self) -> dict[str, dict]:
         rows = db.fetch_all(
@@ -936,6 +943,30 @@ class MilestoneCollector(Collector):
         }
         return written
 
+    def _sweep_stale(self, now: datetime) -> int:
+        """Camera ESS verdicts nobody has re-confirmed within the window → `stale`.
+
+        Runs every successful cycle, not only when the snapshot failed: a camera
+        absent from an otherwise good snapshot, or a live subscription that died
+        with the per-cycle snapshot turned off, ages exactly the same way.
+        Recorders are left out — their status falls back to the Config API's
+        `running` flag when the ESS is down, so it never freezes.
+
+        Only while the per-cycle snapshot is on: it is what re-confirms *every*
+        camera each cycle. `ess_live` alone writes changes, so a camera that
+        stays up would never be re-confirmed and would wrongly age to `stale`.
+        """
+        if not self.ess_stale_after_s or not self.ess_enabled:
+            return 0
+        cams = {int(r["device_id"]) for r in db.fetch_all(self.engine, "SELECT device_id FROM cameras")}
+        cutoff = now - timedelta(seconds=self.ess_stale_after_s)
+        flipped = mark_stale(self.engine, "source_status", "milestone-ess", cutoff, cams)
+        if flipped:
+            log.warning("milestone: %d camera status reading(s) not re-confirmed by the ESS "
+                        "in %ds — marked stale rather than left showing as current",
+                        len(flipped), int(self.ess_stale_after_s))
+        return len(flipped)
+
     async def run_once(self) -> int:
         registry = self._by_milestone_id()
         try:
@@ -956,6 +987,9 @@ class MilestoneCollector(Collector):
             # read as healthy. The threshold distinguishes a blip from an
             # outage; collector_health records the failure either way.
             self._consecutive_failures += 1
+            # Ageing does not wait for the Config API: a cycle that cannot read
+            # /cameras re-confirms nothing either.
+            self._sweep_stale(datetime.now(timezone.utc))
             if self._consecutive_failures >= self.blind_after_failures:
                 # One more question before declaring the estate blind: is the
                 # gateway actually unreachable, or was a bulk endpoint merely
@@ -1086,6 +1120,7 @@ class MilestoneCollector(Collector):
                                        verdict[0], verdict[1], "milestone-ess"))
         write_states(self.engine, cam_states)
         written += len(cam_states)
+        written += self._sweep_stale(now)
 
         # Fail loud on the silent-empty trap: Milestone answered, but none of its
         # entities are linked to a registry device (nothing seeded
