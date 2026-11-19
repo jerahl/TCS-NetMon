@@ -600,6 +600,7 @@ def test_cameras_view_count(tmp_path):
         # No camera_views rows yet → unknown, never "unwatched".
         cams = client.get("/api/surveillance/cameras").json()
         assert all(c["view_count"] is None for c in cams)
+        assert all(c["view_names"] is None for c in cams)
 
     engine = db.make_engine(url)
     now = datetime.now(timezone.utc)
@@ -617,6 +618,10 @@ def test_cameras_view_count(tmp_path):
         assert by["CAM-Hall"]["view_count"] == 2
         assert by["CAM-Gym"]["view_count"] == 0
         assert by["CAM-Gym"]["views_updated_at"] is not None
+        assert by["CAM-Hall"]["view_names"] == ["BHS TV/Lobby", "BHS/Hall"]
+        assert by["CAM-Gym"]["view_names"] == []
+        detail = client.get(f"/api/surveillance/cameras/{by['CAM-Hall']['device_id']}").json()
+        assert detail["view_names"] == ["BHS TV/Lobby", "BHS/Hall"]
 
 
 def test_cameras_automation_latest_run(tmp_path):
