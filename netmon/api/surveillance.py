@@ -499,17 +499,26 @@ def _attach_view_counts(engine: Engine, rows: list[dict]) -> None:
     never succeeded (no `camera_views` rows). Never 0 by default — an empty
     table must not read as "every camera is unwatched" (§4.5).
     ``views_updated_at`` carries the walk's age so the page can badge staleness.
+    ``view_names`` lists each view's path ('NHS/Athletics/Gym', falling back to
+    the bare name), sorted; ``None`` alongside an unknown ``view_count``.
     """
     meta = db.fetch_one(engine, "SELECT COUNT(*) AS n, MAX(updated_at) AS at FROM camera_views")
     if not meta or not int(meta["n"] or 0):
         for r in rows:
             r["view_count"] = None
+            r["view_names"] = None
             r["views_updated_at"] = None
         return
-    counts = {int(m["device_id"]): int(m["n"]) for m in db.fetch_all(
-        engine, "SELECT device_id, COUNT(*) AS n FROM camera_view_members GROUP BY device_id")}
+    names: dict[int, list[str]] = {}
+    for m in db.fetch_all(
+            engine,
+            "SELECT m.device_id, v.name, v.path FROM camera_view_members m "
+            "JOIN camera_views v ON v.id = m.view_id"):
+        names.setdefault(int(m["device_id"]), []).append(m["path"] or m["name"] or "?")
     for r in rows:
-        r["view_count"] = counts.get(int(r["device_id"]), 0)
+        mine = sorted(names.get(int(r["device_id"]), []), key=str.lower)
+        r["view_count"] = len(mine)
+        r["view_names"] = mine
         r["views_updated_at"] = meta["at"]
 
 
@@ -533,6 +542,7 @@ def camera_detail(
     if row is None:
         raise HTTPException(status_code=404, detail="camera not found")
     out = dict(row)
+    _attach_view_counts(engine, [out])
 
     # Every state dimension this camera carries, so the page can show which
     # probe said what rather than one collapsed verdict.

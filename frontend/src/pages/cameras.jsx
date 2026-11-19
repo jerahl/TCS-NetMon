@@ -58,6 +58,15 @@ export const SORTS = [
 // `null` is "NetMon does not know yet" and must never count as unwatched.
 export const notInView = (cam) => cam.view_count === 0;
 
+// One line naming the views a camera is in: the first two paths, then "+N".
+// Empty when the walk has not run (view_names null) or found none — the
+// "no view" tag covers that case.
+export function viewLine(cam) {
+  const v = cam.view_names;
+  if (!v || !v.length) return "";
+  return v.slice(0, 2).join(", ") + (v.length > 2 ? ` +${v.length - 2} more` : "");
+}
+
 export function camCompare(sort) {
   const byName = (a, b) => String(a.name).localeCompare(String(b.name));
   if (sort !== "no_view") return byName;
@@ -156,7 +165,14 @@ export function GroupNode({ group, rows, activeId, collapsed, onToggle, depth = 
              href={`#/cameras/${cam.device_id}`}
              title={`${cam.name}${cam.ip ? ` · ${cam.ip}` : ""}${cam.model ? ` · ${cam.model}` : ""}`}>
             <span title={camTitle(cam)}><Dot severity={camSev(cam)} /></span>
-            <span className="h-id">{cam.name}</span>
+            <span className="h-id">
+              {cam.name}
+              {viewLine(cam) && (
+                <span className="h-views" title={cam.view_names.join("\n")}>
+                  {viewLine(cam)}
+                </span>
+              )}
+            </span>
             {notInView(cam) && (
               <span className="h-count" style={{ color: sevColor("warn") }}
                     title="In no shared Smart Client view — nobody is watching this camera">
