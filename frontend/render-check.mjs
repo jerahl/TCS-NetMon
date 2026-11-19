@@ -370,12 +370,14 @@ const cases = [
     groups: [{ id: "g", name: "BHS", path: "BHS", total: 3, milestone_camera_count: 3 }],
     cams: [{ device_id: 1, name: "a-cam", reachability: "up", group_ids: ["g"], view_count: 2 },
            { device_id: 2, name: "z-cam", reachability: "up", group_ids: ["g"], view_count: 0 },
-           { device_id: 3, name: "m-cam", reachability: "up", group_ids: ["g"], view_count: 1 }],
+           { device_id: 3, name: "m-cam", reachability: "up", group_ids: ["g"], view_count: 3,
+             view_names: ["BHS/Gym", "BHS/Hall", "BHS TV/Lobby"] }],
     activeId: null, collapsed: new Set(), onToggle: () => {}, onAllCollapsed: () => {},
     status: "", onStatus: () => {}, sort: "no_view", onSort: () => {}, q: "", onQ: () => {} },
    (html) => {
      const text = html.replace(/<!-- -->/g, "");
      if (!(text.indexOf("z-cam") < text.indexOf("a-cam"))) throw new Error("unwatched camera not sorted first");
+     if (!text.includes("BHS/Gym, BHS/Hall +1 more")) throw new Error("view line missing on camera row");
      if (!text.includes("no view")) throw new Error("unwatched camera not tagged");
      if (!text.includes("Not in any Smart Client view (1)")) throw new Error("unwatched count missing");
    }],

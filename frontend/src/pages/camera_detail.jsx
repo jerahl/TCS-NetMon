@@ -294,6 +294,13 @@ export function CameraDetailView({ cam, meta, alerts, embedded = false,
                   <tr><td>Firmware</td><td className="mono">{cam.firmware || "—"}</td></tr>
                   <tr><td>Serial</td><td className="mono">{cam.serial || "—"}</td></tr>
                   <tr><td>Recording server</td><td>{cam.recording_server || "—"}</td></tr>
+                  <tr><td>Smart Client views</td><td>
+                    {cam.view_names == null
+                      ? <span className="dim">not collected yet</span>
+                      : cam.view_names.length
+                        ? cam.view_names.map((v) => <div key={v}>{v}</div>)
+                        : <span style={{ color: sevColor("warn") }}>none — nobody is watching this camera</span>}
+                  </td></tr>
                   <tr><td>Milestone group</td><td>
                     {cam.groups?.length
                       ? cam.groups.map((g) => g.name).join(", ")
