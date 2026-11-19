@@ -65,6 +65,7 @@ export function useSnapshot(deviceId, size = "M", { skip = false } = {}) {
 
 function tierTone(cam) {
   if (cam.source_status === "blind") return "warn";
+  if (cam.source_status === "stale" && cam.reachability === "up") return "unknown";
   if (cam.reachability === "down_confirmed" || cam.reachability === "down_source_only") return "crit";
   if (cam.reachability === "down_network_only") return "warn";
   if (cam.reachability === "up") return "ok";

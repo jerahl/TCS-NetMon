@@ -140,6 +140,10 @@ _CAMERA_COLS = ("c.device_id, d.name, d.site, c.model, c.resolution, c.fps_targe
                 # agrees (§13). Both are needed: "down" alone cannot distinguish
                 # a dead camera from one the platform simply cannot reach.
                 "src.value AS source_status, "
+                # When Milestone last confirmed that verdict. A `stale` row keeps
+                # the time of its last confirmation (state.mark_stale), so the
+                # page can say how old the last word from Milestone is.
+                "src.updated_at AS source_updated_at, "
                 "reach.value AS reachability")
 
 _CAMERA_FROM = ("FROM cameras c JOIN devices d ON d.id = c.device_id "

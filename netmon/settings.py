@@ -220,6 +220,10 @@ REGISTRY: list[SettingDef] = [
        "gateway — raise it when 'timed out during opening handshake' is in the "
        "log and the Config API is answering normally. Costs latency on a dead "
        "socket, never a fabricated value.", min=5, max=120),
+    _d("milestone.ess_stale_after_s", "int", 1800, "Camera status goes stale after (s)",
+       "A camera's ESS up/down verdict that has not been re-confirmed for this "
+       "long is shown as 'stale' instead — not up, not down — and stops driving "
+       "alerts and automation. 0 disables.", min=0),
 
     _d("threecx.enabled", "bool", False, "Enable 3CX collector"),
     _d("threecx.url", "str", "", "Base URL"),

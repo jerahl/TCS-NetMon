@@ -414,6 +414,24 @@ const cases = [
      if (!text.includes("no automation run")) throw new Error("camera without a run not explained");
    }],
 
+  // A dead Milestone event feed: the collector marks lapsed verdicts `stale`.
+  // The page must say so loudly, tag the cameras, and never call them up.
+  ["CamerasView · stale Milestone status is announced, not shown as up", C.CamerasView, {
+    groups: [{ id: "g", name: "BHS", path: "BHS", total: 2, milestone_camera_count: 2 }],
+    cams: [{ device_id: 1, name: "a-cam", reachability: "up", group_ids: ["g"],
+             source_status: "stale", source_updated_at: "2026-09-29T01:17:33" },
+           { device_id: 2, name: "b-cam", reachability: "up", group_ids: ["g"],
+             source_status: "up", source_updated_at: new Date().toISOString() }],
+    activeId: null, collapsed: new Set(), onToggle: () => {}, onAllCollapsed: () => {},
+    status: "up", onStatus: () => {}, q: "", onQ: () => {} },
+   (html) => {
+     const text = html.replace(/<!-- -->/g, "");
+     if (!text.includes("Milestone camera status is stale for 1 camera(s)")) throw new Error("stale banner missing");
+     if (!text.includes("Milestone status stale (1)")) throw new Error("stale filter count missing");
+     if (text.includes(">a-cam<")) throw new Error("stale camera listed under the Up filter");
+     if (!text.includes(">b-cam<")) throw new Error("fresh up camera missing from the Up filter");
+   }],
+
   ["CamerasView · no groups cached", C.CamerasView, {
     groups: [], cams: [], activeId: null, collapsed: new Set(), onToggle: () => {},
     onAllCollapsed: () => {}, status: "", onStatus: () => {}, q: "", onQ: () => {} },

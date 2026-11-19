@@ -174,6 +174,72 @@ def write_states(
     return len(events)
 
 
+#: A verdict its source has stopped confirming. Not up, not down: the honest
+#: answer is "we last knew X at updated_at" (§4.5). `classify` and every alert
+#: rule treat it as absence of a verdict, exactly like `blind`.
+STALE = "stale"
+
+
+def _as_utc(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        dt = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def mark_stale(engine: Engine, dimension: str, source: str, cutoff: datetime,
+               device_ids: set[int] | None = None) -> list[int]:
+    """Flip ``up``/``down`` rows ``source`` last confirmed before ``cutoff`` to ``stale``.
+
+    Unlike :func:`write_states`, ``updated_at`` is **kept**: it is the moment the
+    source last vouched for the value, which is exactly what a stale badge has
+    to say ("Milestone last confirmed this 51 days ago"). The transition is still
+    recorded in ``state_events`` so history shows when the verdict lapsed.
+
+    Without this a reading frozen when its feed died went on rendering as live:
+    on 2026-11-19 the Milestone ESS had not answered since 2026-09-29, and 95
+    cameras still showed Milestone-down — and drove alerts and automation runs —
+    on readings up to two months old.
+
+    ``device_ids`` narrows the sweep (e.g. to cameras). Returns the device ids
+    flipped.
+    """
+    rows = db.fetch_all(
+        engine,
+        "SELECT device_id, value, updated_at FROM device_state "
+        "WHERE dimension = :dim AND source = :src AND value IN ('up', 'down')",
+        {"dim": dimension, "src": source})
+    now = datetime.now(timezone.utc)
+    lapsed = []
+    for r in rows:
+        dev = int(r["device_id"])
+        if device_ids is not None and dev not in device_ids:
+            continue
+        at = _as_utc(r["updated_at"])
+        if at is None or at < cutoff:
+            lapsed.append({"d": dev, "dim": dimension, "old": r["value"], "value": STALE,
+                           "severity": "unknown", "source": source, "at": now})
+    if not lapsed:
+        return []
+    with engine.begin() as conn:
+        # `value = :old` guards the race with a writer that refreshed the row
+        # between the SELECT above and this UPDATE.
+        conn.execute(text(
+            "UPDATE device_state SET value = :value, severity = :severity "
+            "WHERE device_id = :d AND dimension = :dim AND source = :source AND value = :old"),
+            lapsed)
+        conn.execute(text(
+            "INSERT INTO state_events (device_id, dimension, old_value, new_value, "
+            "severity, source, occurred_at) "
+            "VALUES (:d, :dim, :old, :value, :severity, :source, :at)"), lapsed)
+    return [x["d"] for x in lapsed]
+
+
 def write_state(
     engine: Engine,
     device_id: int,
